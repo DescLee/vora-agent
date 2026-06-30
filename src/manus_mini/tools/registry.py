@@ -25,5 +25,8 @@ class ToolRegistry:
     def all(self) -> list[ToolProtocol]:
         return list(self._tools.values())
 
+    def names(self) -> list[str]:
+        return list(self._tools)
+
     def __contains__(self, name: str) -> bool:
         return name in self._tools
