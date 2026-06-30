@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from manus_mini.context import validate_tool_call_pairs
-from manus_mini.llm import MockLLMClient
+from manus_mini.llm import LLMClient, get_default_llm_client
 from manus_mini.models import Message, Observation, SessionState, TaskState
 from manus_mini.scheduler import ToolScheduler
 from manus_mini.tools.registry import ToolRegistry
 
 
 class ReActLoop:
-    def __init__(self, llm: MockLLMClient | None = None, registry: ToolRegistry | None = None) -> None:
-        self.llm = llm or MockLLMClient()
+    def __init__(self, llm: LLMClient | None = None, registry: ToolRegistry | None = None) -> None:
+        self.llm = llm or get_default_llm_client()
         self.registry = registry or ToolRegistry()
         self.scheduler = ToolScheduler(self.registry)
 
