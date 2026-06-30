@@ -12,6 +12,10 @@ dependencies = [
   "pydantic",
   "rich",
   "textual",
+]
+
+[project.optional-dependencies]
+dev = [
   "pytest",
   "ruff",
 ]

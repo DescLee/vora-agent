@@ -1,13 +1,24 @@
 from __future__ import annotations
 
-from manus_mini.models import LoopLimits, Message, PlanStep, SessionState, TaskState
+from pathlib import Path
+
+from manus_mini.logging import EventLogger
+from manus_mini.models import Artifact, LoopLimits, Message, PlanStep, SessionState, TaskState
 from manus_mini.reflection import ReflectionLoop
+from manus_mini.reporter import Reporter
 
 
 class AgentRuntime:
-    def __init__(self, default_limits: LoopLimits | None = None) -> None:
+    def __init__(
+        self,
+        default_limits: LoopLimits | None = None,
+        logger: EventLogger | None = None,
+        reporter: Reporter | None = None,
+    ) -> None:
         self.default_limits = default_limits or LoopLimits()
         self.reflection_loop = ReflectionLoop()
+        self.logger = logger or EventLogger(Path("runs"))
+        self.reporter = reporter or Reporter(Path("outputs"))
 
     def on_user_message(self, content: str, session: SessionState) -> SessionState:
         session.messages.append(Message.user(content))
@@ -17,6 +28,14 @@ class AgentRuntime:
 
         for _ in range(task.limits.max_engineering_steps):
             task.step_count += 1
+            self.logger.record(
+                task.run_id,
+                {
+                    "type": "engineering_step",
+                    "step_count": task.step_count,
+                    "goal": task.goal,
+                },
+            )
             reflection = self.reflection_loop.run(task, session)
             task.result = reflection.content
             task.status = "done"
@@ -25,6 +44,20 @@ class AgentRuntime:
             task.result = "已达到外层执行上限，当前没有足够结果。"
             task.status = "failed"
 
+        artifact_path = self.reporter.write_markdown(
+            f"{task.run_id}.md",
+            f"# 结果\n\n{task.result}\n",
+        )
+        artifact = Artifact(path=artifact_path, kind="markdown", summary="runtime result")
+        task.artifacts.append(artifact)
+        self.logger.record(
+            task.run_id,
+            {
+                "type": "result",
+                "status": task.status,
+                "artifact": artifact.path.as_posix(),
+            },
+        )
         session.messages.append(Message.agent(task.result))
         session.active_task = task
         return session
