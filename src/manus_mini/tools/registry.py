@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from manus_mini.tools.base import ToolProtocol
 from manus_mini.tools.file_tools import ListFilesTool, ReadFileTool, WriteFileTool
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
-        self._tools = {
-            "list_files": ListFilesTool(),
-            "read_file": ReadFileTool(),
-            "write_file": WriteFileTool(),
-        }
+    def __init__(self, tools: Iterable[ToolProtocol] | None = None) -> None:
+        self._tools: dict[str, ToolProtocol] = {}
+        default_tools = tools if tools is not None else (ListFilesTool(), ReadFileTool(), WriteFileTool())
+        for tool in default_tools:
+            self.register(tool)
 
-    def get(self, name: str):
-        return self._tools[name]
+    def register(self, tool: ToolProtocol) -> None:
+        self._tools[tool.name] = tool
 
-    def names(self) -> list[str]:
-        return list(self._tools)
+    def get(self, name: str) -> ToolProtocol:
+        try:
+            return self._tools[name]
+        except KeyError as exc:
+            raise KeyError(f"unknown tool: {name}") from exc
+
+    def all(self) -> list[ToolProtocol]:
+        return list(self._tools.values())
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._tools
