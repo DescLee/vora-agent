@@ -36,6 +36,8 @@ pnpm-debug.log*
 runs/
 outputs/
 .manus/
+.manus-mini/
+context-*/
 *.log
 logs/
 
