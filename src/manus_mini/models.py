@@ -16,6 +16,9 @@ class LoopLimits(BaseModel):
     max_engineering_steps: int = 3
     max_react_iterations: int = 10
     max_reflection_rounds: int = 3
+    max_tool_calls_per_iteration: int = 5
+    max_read_files_per_iteration: int = 3
+    max_list_files_per_iteration: int = 1
     max_tool_retries: int = 3
     max_tool_timeout_seconds: int = 30
     max_runtime_seconds: int = 180

@@ -72,6 +72,8 @@ USER_MESSAGE_BORDER = "───────────────────
 def format_message_block(message: Message) -> str:
     speaker = "你" if message.role == "user" else "Agent"
     if message.role != "user":
+        if message.role == "tool":
+            return f"工具: {format_tool_message_summary(message.content)}"
         return f"{speaker}: {message.content}"
 
     lines = [f"┌─ {speaker} ───────────────────────────────────"]
@@ -79,6 +81,33 @@ def format_message_block(message: Message) -> str:
         lines.append(f"│  {line}")
     lines.append(f"└{USER_MESSAGE_BORDER}")
     return "\n".join(lines)
+
+
+def format_tool_message_summary(content: str) -> str:
+    paragraphs = [paragraph.strip() for paragraph in content.split("\n\n") if paragraph.strip()]
+    summary = paragraphs[0] if paragraphs else "[工具结果]"
+    if _tool_message_has_file_content(paragraphs):
+        label = _extract_tool_content_label(summary)
+        if label:
+            return f"[{label} 文件内容获取成功]"
+        return "[文件内容获取成功]"
+    return summary
+
+
+def _tool_message_has_file_content(paragraphs: list[str]) -> bool:
+    return any(
+        paragraph.startswith("content:\n") and "[empty]" not in paragraph
+        for paragraph in paragraphs[1:]
+    )
+
+
+def _extract_tool_content_label(summary: str) -> str:
+    text = summary.strip()
+    if text.startswith("read "):
+        return text.removeprefix("read ").strip()
+    if text.startswith("read_file "):
+        return text.removeprefix("read_file ").strip()
+    return ""
 
 
 def format_section(title: str, body: str) -> str:

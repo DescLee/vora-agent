@@ -8,7 +8,7 @@ import pytest
 
 from manus_mini.llm import LLMResult, MockLLMClient
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
-from manus_mini.react import ReActLoop
+from manus_mini.react import ReActLoop, format_tool_result_message
 from manus_mini.reflection import ReflectionLoop, ReflectionResult
 from manus_mini.logging import EventLogger
 from manus_mini.reporter import Reporter
@@ -95,6 +95,40 @@ def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
     assert runtime.memory_manager.search("manus-mini", limit=5)
 
 
+def test_runtime_injects_project_code_overview_before_project_requests(tmp_path: Path) -> None:
+    class OverviewAwareLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                system_messages = [message for message in messages if message.role == "system"]
+                assert any("项目代码目录结构" in message.content for message in system_messages)
+                assert any("src/：核心实现代码" in message.content for message in system_messages)
+                return LLMResult(content="已了解目录结构，先看 README。")
+            return LLMResult(content="done")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
+    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_runtime.py").write_text("def test_x(): pass", encoding="utf-8")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.react_loop.llm = OverviewAwareLLM()
+
+    result = runtime.on_user_message("请你看下当前项目代码结构，先帮我判断应该看哪些文件", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.messages[-1].content == "已了解目录结构，先看 README。"
+
+
 def test_runtime_output_file_records_input_process_observations_and_result_in_chunks(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
@@ -117,7 +151,7 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     assert "hello world" in content
     assert "## 4. 最终产物" in content
     assert result.messages[-1].content in content
-    summary_dir = tmp_path / "runs" / result.active_task.run_id
+    summary_dir = tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}"
     summary_files = list(summary_dir.glob("summary-*.md"))
     assert len(summary_files) == 1
     assert re.match(r"^summary-\d{8}-\d{6}\.md$", summary_files[0].name)
@@ -147,12 +181,17 @@ def test_runtime_defaults_to_temp_reporter_output_dir_under_pytest(tmp_path: Pat
     assert not (tmp_path / "outputs").exists()
 
 
-def test_react_loop_raises_when_budget_is_zero(tmp_path: Path) -> None:
+def test_react_loop_forces_final_answer_when_budget_is_zero(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="循环测试", cwd=tmp_path, limits=LoopLimits(max_react_iterations=0))
 
-    with pytest.raises(RuntimeError, match="MAX_REACT_ITERATIONS_REACHED"):
-        ReActLoop(MockLLMClient(), ToolRegistry()).run(task, session)
+    result = ReActLoop(MockLLMClient(), ToolRegistry()).run(task, session)
+
+    assert result == "报告草稿：循环测试"
+    assert any(
+        event.phase == "react" and "forcing final answer" in event.message
+        for event in task.trace_events
+    )
 
 
 def test_react_loop_preserves_assistant_reasoning_content_between_tool_rounds(tmp_path: Path) -> None:
@@ -290,6 +329,94 @@ def test_react_loop_converts_unknown_tool_call_to_tool_observation(tmp_path: Pat
     assert result == "已处理未知工具"
     assert task.observations[-1].ok is False
     assert task.trace_events[-1].phase == "llm"
+
+
+def test_react_loop_rejects_tool_calls_beyond_iteration_budget(tmp_path: Path) -> None:
+    class CountingTool:
+        name = "counting"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return ToolResult(tool_name=self.name, ok=True, summary="counted")
+
+    class TooManyToolsLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id="call-1", name="counting"),
+                        ToolCall(id="call-2", name="counting"),
+                        ToolCall(id="call-3", name="counting"),
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert len(tool_messages) == 3
+            assert "TOOL_CALL_BUDGET_EXCEEDED" in tool_messages[-1].content
+            return LLMResult(content="budget handled")
+
+    tool = CountingTool()
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(
+        goal="预算测试",
+        cwd=tmp_path,
+        limits=LoopLimits(max_tool_calls_per_iteration=2),
+    )
+
+    result = ReActLoop(TooManyToolsLLM(), ToolRegistry(tools=[tool])).run(task, session)
+
+    assert result == "budget handled"
+    assert tool.calls == 2
+    assert task.observations[-1].summary == "tool call rejected by iteration budget"
+
+
+def test_react_loop_limits_overview_task_to_project_entry_files(tmp_path: Path) -> None:
+    class OverviewLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id="call-read-readme", name="read_file", args={"path": "README.md"}),
+                        ToolCall(id="call-read-deep", name="read_file", args={"path": "src/feature/deep.py"}),
+                    ]
+                )
+            tool_messages = {message.tool_call_id: message.content for message in messages if message.role == "tool"}
+            assert "# demo" in tool_messages["call-read-readme"]
+            assert "PROJECT_SCOPE_RESTRICTED" in tool_messages["call-read-deep"]
+            return LLMResult(content="overview handled")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "src" / "feature").mkdir(parents=True)
+    (tmp_path / "src" / "feature" / "deep.py").write_text("SECRET = 'should not be read'", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请你看下这个项目提一些优化建议", cwd=tmp_path)
+
+    result = ReActLoop(OverviewLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "overview handled"
+    blocked = [observation for observation in task.observations if observation.tool_call_id == "call-read-deep"]
+    assert blocked
+    assert blocked[0].ok is False
+    assert "SECRET" not in blocked[0].content
 
 
 def test_react_loop_includes_recent_conversation_context_for_follow_up(tmp_path: Path) -> None:
@@ -621,16 +748,16 @@ def test_runtime_converts_agent_exception_to_failed_message(tmp_path: Path) -> N
     assert "LLM HTTP 400" in result.messages[-1].content
 
 
-def test_runtime_marks_react_iteration_limit_error_code(tmp_path: Path) -> None:
+def test_runtime_forces_final_answer_after_react_iteration_limit(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     runtime = AgentRuntime(default_limits=LoopLimits(max_react_iterations=0))
 
     result = runtime.on_user_message("读取 a.md", session)
 
     assert result.active_task is not None
-    assert result.active_task.status == "failed"
-    assert result.active_task.errors[0].code == "MAX_REACT_ITERATIONS_REACHED"
-    assert any(event.message == "Runtime caught execution error" for event in result.active_task.trace_events)
+    assert result.active_task.status == "done"
+    assert not result.active_task.errors
+    assert any("forcing final answer" in event.message for event in result.active_task.trace_events)
 
 
 def test_runtime_marks_token_budget_exceeded_error_code(tmp_path: Path) -> None:
@@ -800,6 +927,35 @@ def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     )
 
 
+def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, task: TaskState, session: SessionState) -> str:  # noqa: ARG002
+            self.calls += 1
+            return (
+                "以下是按 P0-P3 划分的优化建议：\n"
+                "P0：补齐测试和异常处理。\n"
+                "P1：收敛上下文压缩策略。\n"
+                "P2：优化 TUI 呈现。\n"
+                "P3：补充文档。\n"
+                "风险：如果外部模型不可用，流程会退回规则草稿，但结果仍然可读。"
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=3))
+    fake_react = FakeReactLoop()
+    runtime.reflection_loop.react_loop = fake_react
+
+    result = runtime.on_user_message("请你看下这个项目提一些优化建议，并给出P0-P3的优先级进行划分", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert fake_react.calls == 1
+    assert "P0：补齐测试和异常处理" in result.messages[-1].content
+
+
 def test_runtime_fallback_summary_includes_recent_tool_observations(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# project\n", encoding="utf-8")
 
@@ -848,6 +1004,69 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     assert "decision" in reflection_rows[0]
     assert "reason" in reflection_rows[0]
     assert "draft_preview" in reflection_rows[0]
+
+
+def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
+    from manus_mini.tools.base import ToolResult
+
+    result = ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary="read big.md",
+        paths=[f"file-{index}.md" for index in range(50)],
+        content="x" * 5000,
+    )
+
+    message = format_tool_result_message(result)
+
+    assert "read big.md" in message
+    assert "file-0.md" in message
+    assert "file-49.md" not in message
+    assert "x" * 5000 not in message
+    assert "truncated" in message
+
+
+def test_react_loop_finishes_when_large_tool_results_are_summarized(tmp_path: Path) -> None:
+    from manus_mini.tools.base import ToolResult
+
+    class HugeListTool:
+        name = "list_files"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary="found many files",
+                paths=[f"file-{index}.md" for index in range(100)],
+            )
+
+    class SizeSensitiveLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-list", name="list_files", args={"path": "."})])
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "truncated" in tool_messages[-1].content
+            return LLMResult(content="已获得足够信息，开始总结。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="分析项目并给建议", cwd=tmp_path)
+    result = ReActLoop(SizeSensitiveLLM(), ToolRegistry(tools=[HugeListTool()])).run(task, session)
+
+    assert result == "已获得足够信息，开始总结。"
 
 
 def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path: Path) -> None:

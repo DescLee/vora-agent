@@ -41,6 +41,22 @@ def test_format_messages_renders_chinese_user_content(tmp_path: Path) -> None:
     assert "Agent: 可以，我先整理结构。" in rendered
 
 
+def test_format_messages_collapses_tool_file_content_into_summary(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(
+        Message.tool(
+            "read README.md\n\ncontent:\n# manus-mini\n\nmore text",
+            tool_call_id="call-read",
+        )
+    )
+
+    rendered = format_messages(session)
+
+    assert "工具: [README.md 文件内容获取成功]" in rendered
+    assert "# manus-mini" not in rendered
+    assert "content:" not in rendered
+
+
 def test_format_messages_adds_padding_and_background_marker_for_user_message(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("帮我写一份 AI 调研报告。"))

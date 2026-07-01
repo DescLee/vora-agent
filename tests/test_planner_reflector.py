@@ -99,3 +99,21 @@ def test_reflector_covers_accept_update_regenerate_and_replan(tmp_path: Path) ->
     assert update.decision == "local_update"
     assert regenerate.decision == "regenerate"
     assert replan.decision == "replan"
+
+
+def test_reflector_accepts_complete_risk_discussion(tmp_path: Path) -> None:
+    reflector = Reflector()
+    task = TaskState.create(goal="给出优化建议", cwd=tmp_path, limits=LoopLimits())
+
+    draft = (
+        "以下是按 P0-P3 划分的优化建议：\n"
+        "P0：补齐测试和异常处理。\n"
+        "P1：收敛上下文压缩策略。\n"
+        "P2：优化 TUI 呈现。\n"
+        "P3：补充文档。\n"
+        "风险：如果外部模型不可用，流程会退回规则草稿，但结果仍然可读。"
+    )
+
+    decision = reflector.decide(task, draft)
+
+    assert decision.decision == "accept"

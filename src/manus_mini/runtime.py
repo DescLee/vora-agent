@@ -7,7 +7,13 @@ from pathlib import Path
 from time import monotonic
 
 from manus_mini.logging import EventLogger
-from manus_mini.context import build_context_bundle, estimate_session_context_usage
+from manus_mini.context import (
+    build_context_bundle,
+    build_project_code_overview,
+    estimate_session_context_usage,
+    PROJECT_OVERVIEW_HINT,
+    should_include_project_code_overview,
+)
 from manus_mini.models import AgentError, Artifact, LoopLimits, Message, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.planner import Planner
@@ -54,6 +60,8 @@ class AgentRuntime:
         session: SessionState,
         append_user_message: bool = True,
     ) -> SessionState:
+        if append_user_message and should_include_project_code_overview(content):
+            self._refresh_project_code_overview(session)
         if append_user_message:
             session.messages.append(Message.user(content))
         if session.active_task is not None and session.active_task.result:
@@ -367,6 +375,17 @@ class AgentRuntime:
                 "recent_observations": len(bundle.recent_observations),
             },
         )
+
+    def _refresh_project_code_overview(self, session: SessionState) -> None:
+        overview = build_project_code_overview(session.cwd)
+        session.messages = [
+            message
+            for message in session.messages
+            if message.metadata.get("context_hint") != PROJECT_OVERVIEW_HINT
+        ]
+        overview_message = Message.system(overview)
+        overview_message.metadata["context_hint"] = PROJECT_OVERVIEW_HINT
+        session.messages.append(overview_message)
 
     def _runtime_exceeded(self, started_at: float, max_runtime_seconds: int) -> bool:
         return monotonic() - started_at > max_runtime_seconds

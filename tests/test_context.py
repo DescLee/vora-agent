@@ -1,8 +1,12 @@
+from pathlib import Path
+
 from manus_mini.context import (
     ContextIntegrityError,
+    build_project_code_overview,
     build_segments,
     compact_messages,
     estimate_tokens,
+    should_include_project_code_overview,
     validate_tool_call_pairs,
 )
 from manus_mini.models import Message
@@ -89,3 +93,32 @@ def test_compact_messages_redacts_sensitive_content_in_summary() -> None:
     assert "sk-live-secret" not in compacted[0].content
     assert "password=abc123" not in compacted[0].content
     assert "[REDACTED]" in compacted[0].content
+
+
+def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
+    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_runtime.py").write_text("def test_x(): pass", encoding="utf-8")
+
+    overview = build_project_code_overview(tmp_path)
+
+    assert "项目代码目录结构" in overview
+    assert "README.md：项目说明、安装方式和使用入口" in overview
+    assert "src/：核心实现代码" in overview
+    assert "manus_mini/：主应用包，包含运行链路和工具逻辑" in overview
+    assert "runtime.py：运行编排、外层循环和中断兜底" in overview
+    assert "docs/：设计文档、问题记录和优化说明" in overview
+    assert "tests/：自动化测试" in overview
+    assert "建议优先查看" in overview
+
+
+def test_should_include_project_code_overview_matches_code_related_requests() -> None:
+    assert should_include_project_code_overview("请看下当前项目代码结构")
+    assert should_include_project_code_overview("帮我分析一下这个工程")
+    assert not should_include_project_code_overview("你好，今天怎么样")

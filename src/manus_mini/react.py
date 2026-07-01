@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from time import monotonic
 
 from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, validate_tool_call_pairs
@@ -13,17 +14,75 @@ from manus_mini.tools.base import ToolResult
 from manus_mini.tools.registry import ToolRegistry
 
 
+MAX_TOOL_RESULT_PATHS = 20
+MAX_TOOL_RESULT_CONTENT_CHARS = 4000
+OVERVIEW_GOAL_KEYWORDS = (
+    "优化建议",
+    "建议",
+    "想法",
+    "看下",
+    "看看",
+    "分析一下",
+    "了解",
+    "说明",
+    "总结",
+)
+OVERVIEW_ALLOWED_EXACT_FILES = {
+    "README.md",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "package.json",
+    "pnpm-lock.yaml",
+    "uv.lock",
+    "requirements.txt",
+}
+OVERVIEW_ALLOWED_SRC_FILES = {
+    "src/manus_mini/runtime.py",
+    "src/manus_mini/react.py",
+    "src/manus_mini/reflection.py",
+    "src/manus_mini/planner.py",
+    "src/manus_mini/llm.py",
+}
+
+
 def format_tool_result_message(tool_result) -> str:
     parts = [tool_result.summary]
     if tool_result.paths:
-        parts.append("paths:\n" + "\n".join(tool_result.paths))
+        parts.append(_format_paths(tool_result.paths))
     if tool_result.written_path:
         parts.append(f"written_path: {tool_result.written_path}")
     if tool_result.content:
-        parts.append("content:\n" + tool_result.content)
+        parts.append(_format_content(tool_result.content))
+    elif tool_result.ok:
+        parts.append("content:\n[empty]")
     if tool_result.error_code:
         parts.append(f"error_code: {tool_result.error_code}")
     return "\n\n".join(parts)
+
+
+def _format_paths(paths: list[str]) -> str:
+    visible_paths = paths[:MAX_TOOL_RESULT_PATHS]
+    lines = ["paths:"]
+    lines.extend(visible_paths)
+    extra = len(paths) - len(visible_paths)
+    if extra > 0:
+        lines.append(f"... [truncated {extra} more path(s)]")
+    return "\n".join(lines)
+
+
+def _format_content(content: str) -> str:
+    if len(content) <= MAX_TOOL_RESULT_CONTENT_CHARS:
+        return "content:\n" + content
+    truncated = content[:MAX_TOOL_RESULT_CONTENT_CHARS]
+    remaining = len(content) - MAX_TOOL_RESULT_CONTENT_CHARS
+    return "\n".join(
+        [
+            "content:",
+            truncated,
+            f"... [truncated {remaining} more char(s)]",
+        ]
+    )
 
 
 def assistant_message_from_llm_result(llm_result) -> Message:
@@ -151,14 +210,7 @@ class ReActLoop:
                     return pending.prompt or pending.summary or "需要用户确认写入"
                 return "需要用户确认写入"
 
-        task.trace_events.append(
-            TraceEvent(
-                phase="react",
-                message="ReAct iteration limit reached",
-                data={"max_react_iterations": task.limits.max_react_iterations},
-            )
-        )
-        raise RuntimeError("MAX_REACT_ITERATIONS_REACHED")
+        return self._force_final_answer(messages, task, session)
 
     def _record_llm_usage(self, task: TaskState, llm_result: LLMResult) -> None:
         usage = extract_usage(llm_result.source_response)
@@ -221,6 +273,42 @@ class ReActLoop:
 
     def _estimated_context_tokens(self, messages: list[Message]) -> int:
         return estimate_message_tokens(messages)
+
+    def _force_final_answer(self, messages: list[Message], task: TaskState, session: SessionState) -> str:
+        task.trace_events.append(
+            TraceEvent(
+                phase="react",
+                message="ReAct iteration limit reached; forcing final answer",
+                data={"max_react_iterations": task.limits.max_react_iterations},
+            )
+        )
+        final_messages = [
+            *messages,
+            Message.system("已达到工具循环上限。请基于现有上下文直接输出最终答案，不要再请求任何工具。"),
+        ]
+        llm_result = self._complete_with_rule_fallback(final_messages, task, session.session_id)
+        llm_result = self._normalize_tool_call_ids(llm_result, task.limits.max_react_iterations + 1)
+        task.trace_events.append(
+            TraceEvent(
+                phase="llm",
+                message="LLM forced final answer after ReAct limit",
+                data={
+                    "iteration": task.limits.max_react_iterations + 1,
+                    "content_preview": llm_result.content[:500],
+                    "tool_calls": [],
+                },
+            )
+        )
+        self._record_llm_usage(task, llm_result)
+        if llm_result.tool_calls:
+            task.trace_events.append(
+                TraceEvent(
+                    phase="runtime",
+                    message="Forced final answer ignored tool calls",
+                    data={"tool_call_count": len(llm_result.tool_calls)},
+                )
+            )
+        return llm_result.content or "已达到工具循环上限，保留当前最佳结果。"
 
     def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState, session_id: str) -> LLMResult:
         try:
@@ -327,7 +415,27 @@ class ReActLoop:
     ) -> tuple[list, dict[str, ToolResult]]:
         known_tool_calls = []
         tool_results: dict[str, ToolResult] = {}
+        tool_call_count = 0
+        read_file_count = 0
+        list_files_count = 0
         for call in tool_calls:
+            budget_error = self._tool_budget_error(call, task, tool_call_count, read_file_count, list_files_count)
+            if budget_error is not None:
+                tool_results[call.id] = budget_error
+                self._record_tool_rejection(task, call, budget_error)
+                continue
+            scope_error = self._project_scope_error(call, task)
+            if scope_error is not None:
+                tool_results[call.id] = scope_error
+                self._record_tool_rejection(task, call, scope_error)
+                continue
+
+            tool_call_count += 1
+            if call.name == "read_file":
+                read_file_count += 1
+            elif call.name == "list_files":
+                list_files_count += 1
+
             if call.name in self.registry:
                 known_tool_calls.append(self._with_runtime_tool_args(call, session))
                 continue
@@ -337,14 +445,78 @@ class ReActLoop:
                 summary=f"unknown tool: {call.name}",
                 error_code="UNKNOWN_TOOL",
             )
-            task.trace_events.append(
-                TraceEvent(
-                    phase="tool",
-                    message="Tool call rejected: unknown tool",
-                    data={"tool_call_id": call.id, "tool_name": call.name},
-                )
-            )
+            self._record_tool_rejection(task, call, tool_results[call.id])
         return known_tool_calls, tool_results
+
+    def _tool_budget_error(
+        self,
+        call,
+        task: TaskState,
+        tool_call_count: int,
+        read_file_count: int,
+        list_files_count: int,
+    ) -> ToolResult | None:
+        if tool_call_count >= task.limits.max_tool_calls_per_iteration:
+            return ToolResult(
+                tool_name=call.name,
+                ok=False,
+                summary="tool call rejected by iteration budget",
+                error_code="TOOL_CALL_BUDGET_EXCEEDED",
+                data={"limit": task.limits.max_tool_calls_per_iteration},
+            )
+        if call.name == "read_file" and read_file_count >= task.limits.max_read_files_per_iteration:
+            return ToolResult(
+                tool_name=call.name,
+                ok=False,
+                summary="read_file rejected by iteration budget",
+                error_code="TOOL_CALL_BUDGET_EXCEEDED",
+                data={"limit": task.limits.max_read_files_per_iteration},
+            )
+        if call.name == "list_files" and list_files_count >= task.limits.max_list_files_per_iteration:
+            return ToolResult(
+                tool_name=call.name,
+                ok=False,
+                summary="list_files rejected by iteration budget",
+                error_code="TOOL_CALL_BUDGET_EXCEEDED",
+                data={"limit": task.limits.max_list_files_per_iteration},
+            )
+        return None
+
+    def _project_scope_error(self, call, task: TaskState) -> ToolResult | None:
+        if call.name != "read_file" or not self._is_overview_goal(task.goal):
+            return None
+        path = _normalize_relative_path(str(call.args.get("path", "")))
+        if _is_overview_allowed_file(path):
+            return None
+        return ToolResult(
+            tool_name=call.name,
+            ok=False,
+            summary="read_file rejected by project overview scope",
+            error_code="PROJECT_SCOPE_RESTRICTED",
+            data={
+                "path": path,
+                "reason": "overview tasks may read docs, metadata, and selected entry files first",
+            },
+        )
+
+    def _is_overview_goal(self, goal: str) -> bool:
+        if any(keyword in goal for keyword in ["修改", "实现", "修复", "新增", "删除", "写入", "创建文件"]):
+            return False
+        return "项目" in goal and any(keyword in goal for keyword in OVERVIEW_GOAL_KEYWORDS)
+
+    def _record_tool_rejection(self, task: TaskState, call, tool_result: ToolResult) -> None:
+        task.trace_events.append(
+            TraceEvent(
+                phase="tool",
+                message="Tool call rejected",
+                data={
+                    "tool_call_id": call.id,
+                    "tool_name": call.name,
+                    "summary": tool_result.summary,
+                    "error_code": tool_result.error_code,
+                },
+            )
+        )
 
     def _with_runtime_tool_args(self, call, session: SessionState):
         return self.executor.prepare_tool_call(call, session)
@@ -368,3 +540,18 @@ class ReActLoop:
                 },
             )
         )
+
+
+def _normalize_relative_path(path: str) -> str:
+    normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _is_overview_allowed_file(path: str) -> bool:
+    if path in OVERVIEW_ALLOWED_EXACT_FILES or path in OVERVIEW_ALLOWED_SRC_FILES:
+        return True
+    if path.startswith("docs/") and path.endswith(".md"):
+        return True
+    return False

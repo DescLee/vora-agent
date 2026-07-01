@@ -493,7 +493,14 @@ def run_react_loop(task: TaskState, session: SessionState, context: ContextBundl
         if not llm_result.tool_calls:
             return StepDraft(content=llm_result.content, observations=task.observations)
 
-        batches = tool_scheduler.plan_batches(llm_result.tool_calls, context)
+        scoped_tool_calls, rejected_results = tool_policy.apply_iteration_budget_and_scope(
+            llm_result.tool_calls,
+            task,
+            session,
+        )
+        task.observations.extend(observer.from_tool_result(result) for result in rejected_results)
+
+        batches = tool_scheduler.plan_batches(scoped_tool_calls, context)
 
         for batch in batches:
             results = executor.execute_batch_with_policy(batch, session, context)
@@ -503,7 +510,11 @@ def run_react_loop(task: TaskState, session: SessionState, context: ContextBundl
 
         react_iterations += 1
 
-    raise RetryableAgentError("MAX_REACT_ITERATIONS_REACHED")
+    messages.append(
+        Message.system("已达到工具循环上限，请基于现有上下文直接输出最终答案，不要再请求任何工具。")
+    )
+    final_draft = llm.complete_with_tools(messages, [])
+    return StepDraft(content=final_draft.content or "已达到工具循环上限，保留当前最佳结果。", observations=task.observations)
 ```
 
 ReAct Loop 的边界：
@@ -511,6 +522,9 @@ ReAct Loop 的边界：
 - 只负责完成当前计划步骤，不负责判断最终质量。
 - 不直接写文件，写入动作仍要走工具风险策略和用户确认。
 - 不处理全局重试策略，工具异常向外抛给工程兜底循环。
+- 达到 `max_react_iterations` 后不再报错，而是强制进行一次无工具的最终收口，让模型基于已有上下文输出结果。
+- 每轮执行工具前必须先应用预算和范围策略：默认最多执行 5 个 tool calls，其中 `read_file` 最多 3 个、`list_files` 最多 1 个；超出部分转成 `TOOL_CALL_BUDGET_EXCEEDED` observation。
+- 对“项目概览/优化建议/想法总结”类任务，`read_file` 第一阶段只允许读取 README、项目元数据、docs 文档和核心入口文件；越界读取转成 `PROJECT_SCOPE_RESTRICTED` observation，不直接读取任意源码全文。
 
 ### 6.5 工具并行调度
 
