@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from manus_mini.app import _build_app_class, build_chat_input_bindings, key_to_chat_text
 
@@ -30,3 +31,25 @@ def test_chat_input_accepts_sentence_characters() -> None:
             assert pilot.app.query_one("#input").value == "h ,你"
 
     asyncio.run(run())
+
+
+def test_textual_app_can_be_parameterized(tmp_path: Path) -> None:
+    app_class = _build_app_class()
+    app = app_class(cwd=tmp_path, max_steps=3, max_react=4, max_reflect=2, max_tool_timeout=11, dry_run=True)
+
+    assert app.manager.current.cwd == tmp_path
+    assert app.manager.runtime.default_limits.max_engineering_steps == 3
+    assert app.manager.runtime.default_limits.max_react_iterations == 4
+    assert app.manager.runtime.default_limits.max_reflection_rounds == 2
+    assert app.manager.runtime.default_limits.max_tool_timeout_seconds == 11
+    assert app.manager.runtime.dry_run is True
+
+
+def test_textual_app_uses_wider_default_limits() -> None:
+    app_class = _build_app_class()
+    app = app_class()
+
+    assert app.manager.runtime.default_limits.max_engineering_steps == 99
+    assert app.manager.runtime.default_limits.max_react_iterations == 99
+    assert app.manager.runtime.default_limits.max_reflection_rounds == 99
+    assert app.manager.runtime.default_limits.max_tool_retries == 99

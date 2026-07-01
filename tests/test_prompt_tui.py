@@ -12,6 +12,7 @@ from manus_mini.prompt_tui import (
     build_line_starts,
     format_artifact,
     format_current_action,
+    format_context_usage,
     format_inline_args,
     format_message_block,
     line_number_for_position,
@@ -24,6 +25,8 @@ from manus_mini.prompt_tui import (
     format_welcome,
     install_shift_enter_mapping,
     insert_newline,
+    render_markdown_result,
+    style_output_fragments,
 )
 
 
@@ -65,9 +68,11 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     welcome = format_welcome(task.limits)
 
     assert "欢迎使用 Manus Mini" in welcome
-    assert "外层工程循环上限：12 轮" in welcome
-    assert "ReAct 上限：8 轮" in welcome
-    assert "Reflection 上限：5 轮" in welcome
+    assert "外层工程循环上限：99 轮" in welcome
+    assert "ReAct 上限：99 轮" in welcome
+    assert "Reflection 上限：99 轮" in welcome
+    assert "压缩上下文" in welcome
+    assert "/compact" in welcome
     assert "Enter 发送" in welcome
     assert "Shift+Enter 换行" in welcome
 
@@ -82,6 +87,47 @@ def test_format_artifact_renders_active_task_result(tmp_path: Path) -> None:
     assert "完成摘要" in artifact
     assert "结果正文" in artifact
     assert "报告正文" in artifact
+
+
+def test_render_markdown_result_displays_terminal_friendly_markdown() -> None:
+    rendered = render_markdown_result("# 标题\n\n- **重点** 内容\n\n```python\nprint(1)\n```")
+
+    assert "# 标题" not in rendered
+    assert "**重点**" not in rendered
+    assert "标题" in rendered
+    assert "• 重点 内容" in rendered
+    assert "print(1)" in rendered
+
+
+def test_format_artifact_renders_result_markdown(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="写报告", cwd=tmp_path)
+    task.result = "# 报告\n\n- **结论**：可行"
+    session.active_task = task
+
+    artifact = format_artifact(session)
+
+    assert "# 报告" not in artifact
+    assert "**结论**" not in artifact
+    assert "报告" in artifact
+    assert "• 结论：可行" in artifact
+
+
+def test_output_fragments_style_process_section_with_dim_text() -> None:
+    text = "\n\n".join(
+        [
+            "────────────────────────────────────────\n用户问题\n总结项目",
+            "────────────────────────────────────────\n执行过程\n当前步骤\n- 调用工具",
+            "────────────────────────────────────────\n最终产物\n结果正文\n报告",
+        ]
+    )
+
+    fragments = style_output_fragments(text)
+    process_fragment = next(fragment for fragment in fragments if "当前步骤" in fragment[1])
+    artifact_fragment = next(fragment for fragment in fragments if "报告" in fragment[1])
+
+    assert "class:process" in process_fragment[0]
+    assert "class:process" not in artifact_fragment[0]
 
 
 def test_format_process_renders_trace_events(tmp_path: Path) -> None:
@@ -441,8 +487,22 @@ def test_format_status_keeps_send_hint(tmp_path: Path) -> None:
 
     status = format_status(session)
 
+    assert "上下文 --" in status
     assert "Enter 发送" in status
     assert "Shift+Enter 换行" in status
+
+
+def test_format_status_shows_context_usage(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.limits.max_estimated_tokens = 100
+    session.active_task = task
+    session.messages.append(Message.user("x" * 50))
+
+    status = format_status(session)
+
+    assert "上下文 25%" in status
+    assert format_context_usage(session) == "上下文 25%"
 
 
 def test_format_status_describes_current_step_while_running(tmp_path: Path) -> None:

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import re
 from time import perf_counter, sleep
@@ -8,8 +9,10 @@ from manus_mini.llm import LLMResult, MockLLMClient
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop
 from manus_mini.reflection import ReflectionLoop, ReflectionResult
+from manus_mini.logging import EventLogger
 from manus_mini.reporter import Reporter
 from manus_mini.runtime import AgentRuntime
+from manus_mini.session import SessionManager
 from manus_mini.tools.base import ToolResult
 from manus_mini.tools.registry import ToolRegistry
 
@@ -46,6 +49,7 @@ def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
     tool_events = [event for event in result.active_task.trace_events if event.phase == "tool"]
     assert any(event.data.get("tool_name") == "list_files" for event in tool_events)
     assert any(event.data.get("tool_name") == "read_file" for event in tool_events)
+    assert runtime.memory_manager.search("manus-mini", limit=5)
 
 
 def test_runtime_output_file_records_input_process_observations_and_result_in_chunks(tmp_path: Path) -> None:
@@ -70,6 +74,9 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     assert "hello world" in content
     assert "## 4. 最终产物" in content
     assert result.messages[-1].content in content
+    summary_path = tmp_path / "runs" / result.active_task.run_id / "summary.md"
+    assert summary_path.exists()
+    assert "Manus Mini Run Summary" in summary_path.read_text(encoding="utf-8")
 
 
 def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path) -> None:
@@ -291,6 +298,43 @@ def test_react_loop_retries_transient_tool_failure(tmp_path: Path) -> None:
     assert task.observations[-1].ok is True
 
 
+def test_react_loop_marks_tool_timeout(tmp_path: Path) -> None:
+    class SlowTool:
+        name = "slow"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            sleep(0.2)
+            return ToolResult(tool_name=self.name, ok=True, summary="done")
+
+    class TimeoutLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-slow", name="slow")])
+            return LLMResult(content="timeout handled")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="工具超时", cwd=tmp_path, limits=LoopLimits(max_tool_timeout_seconds=0))
+
+    result = ReActLoop(TimeoutLLM(), ToolRegistry(tools=[SlowTool()])).run(task, session)
+
+    assert result == "timeout handled"
+    assert task.observations[-1].ok is False
+    assert task.observations[-1].summary == "tool execution timed out"
+
+
 def test_react_loop_marks_tool_retry_exhausted(tmp_path: Path) -> None:
     class AlwaysFailTool:
         name = "always_fail"
@@ -375,37 +419,36 @@ def test_react_loop_sanitizes_llm_supplied_workspace_argument(tmp_path: Path) ->
     assert "workspace" not in llm_events[0].data["tool_calls"][0]["args"]
 
 
-def test_react_loop_injects_workspace_before_scheduling_write_file(tmp_path: Path) -> None:
-    class WriteFileLLM:
-        def __init__(self) -> None:
-            self.calls = 0
+def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path, runtime=AgentRuntime())
 
-        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
-            self.calls += 1
-            if self.calls == 1:
-                return LLMResult(
-                    tool_calls=[
-                        ToolCall(
-                            id="call-write",
-                            name="write_file",
-                            args={
-                                "path": "helloworld.py",
-                                "content": "print('hello world')\n",
-                            },
-                        )
-                    ]
-                )
-            return LLMResult(content="已创建 helloworld.py")
+    first_turn = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
 
-    session = SessionState.create(cwd=tmp_path)
-    task = TaskState.create(goal="在工作目录下新建 helloworld.py 文件", cwd=tmp_path)
+    assert first_turn.pending_confirmation is not None
+    assert first_turn.active_task is not None
+    assert first_turn.active_task.status == "waiting_confirmation"
+    assert not (tmp_path / "helloworld.py").exists()
 
-    result = ReActLoop(WriteFileLLM(), ToolRegistry()).run(task, session)
+    second_turn = manager.handle_user_message("确认")
 
-    assert result == "已创建 helloworld.py"
+    assert second_turn.active_task is not None
+    assert second_turn.active_task.status == "done"
     assert (tmp_path / "helloworld.py").read_text(encoding="utf-8") == "print('hello world')\n"
-    assert task.observations[-1].ok is True
-    assert task.observations[-1].summary == "wrote helloworld.py"
+    assert second_turn.active_task.observations[-1].ok is True
+    assert second_turn.active_task.observations[-1].summary == "wrote helloworld.py"
+
+
+def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(dry_run=True))
+
+    session = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
+
+    assert session.pending_confirmation is not None
+    assert session.active_task is not None
+    assert session.active_task.status == "waiting_confirmation"
+    assert not (tmp_path / "helloworld.py").exists()
+    assert session.active_task.observations[-1].summary.startswith("dry-run preview")
+    assert any(event.data.get("dry_run") is True for event in session.active_task.trace_events)
 
 
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:
@@ -421,7 +464,7 @@ def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: P
 
     assert result.accepted is True
     assert result.content == "当前最佳结果"
-    assert result.reason in {"accepted", "max reflection rounds reached"}
+    assert result.reason == "draft is sufficient"
 
 
 def test_runtime_respects_engineering_step_limit(tmp_path: Path) -> None:
@@ -463,6 +506,40 @@ def test_runtime_marks_react_iteration_limit_error_code(tmp_path: Path) -> None:
     assert any(event.message == "Runtime caught execution error" for event in result.active_task.trace_events)
 
 
+def test_runtime_marks_token_budget_exceeded_error_code(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("x" * 500))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_estimated_tokens=1))
+
+    result = runtime.on_user_message("再补充一点", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "failed"
+    assert result.active_task.errors[0].code == "TOKEN_BUDGET_EXCEEDED"
+
+
+def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.extend(Message.user("x" * 120) for _ in range(4))
+    runtime = AgentRuntime(
+        default_limits=LoopLimits(max_estimated_tokens=100),
+        logger=EventLogger(tmp_path / "runs", enabled=True),
+    )
+
+    result = runtime.on_user_message("继续", session)
+
+    assert result.active_task is not None
+    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    budget_rows = [row for row in rows if row.get("type") == "context_budget"]
+    assert budget_rows
+    row = budget_rows[0]
+    assert row["estimated_tokens"] > 0
+    assert row["model_context_limit"] == 100
+    assert row["context_usage"] >= 0.70
+    assert row["compression_triggered"] is True
+
+
 def test_runtime_exposes_active_task_before_reflection_runs(tmp_path: Path) -> None:
     class InspectingReflectionLoop:
         def run(self, task: TaskState, session: SessionState) -> ReflectionResult:
@@ -477,6 +554,71 @@ def test_runtime_exposes_active_task_before_reflection_runs(tmp_path: Path) -> N
 
     assert result.active_task is not None
     assert result.active_task.result == "ok"
+
+
+def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("malformed output")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message("写报告", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.messages[-1].content.startswith("已使用规则兜底生成草稿")
+    assert any(
+        event.phase == "llm" and "falling back to rule-based draft" in event.message
+        for event in result.active_task.trace_events
+    )
+
+
+def test_runtime_fallback_summary_includes_recent_tool_observations(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# project\n", encoding="utf-8")
+
+    class BrokenLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[ToolCall(id="call-read-readme", name="read_file", args={"path": "README.md"})]
+                )
+            raise ValueError("malformed output")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message("请检查项目", session)
+
+    assert result.active_task is not None
+    assert "最近工具结果" in result.messages[-1].content
+    assert "read README.md" in result.messages[-1].content
+
+
+def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    session = SessionState.create(cwd=tmp_path)
+
+    result = runtime.on_user_message("写一个报告", session)
+
+    assert result.active_task is not None
+    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    request_rows = [row for row in rows if row.get("type") == "llm_request"]
+    response_rows = [row for row in rows if row.get("type") == "llm_response"]
+    assert request_rows
+    assert response_rows
+    assert request_rows[0]["request"]["messages"]
+    assert request_rows[0]["request"]["tool_names"]
+    assert response_rows[0]["request"]["messages"]
+    assert "response" in response_rows[0]
 
 
 def test_runtime_stops_when_total_runtime_limit_is_exceeded(tmp_path: Path) -> None:

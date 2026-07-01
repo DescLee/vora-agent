@@ -11,93 +11,136 @@
 - 未完成：文档要求存在，但当前代码未实现或未接入主链路。
 - 未核验：需要端到端演示或人工操作进一步确认。
 
+优先级说明：
+
+- P0：最严重，影响主流程、安全边界或核心 Agent 闭环成立。
+- P1：V1 核心验收能力，影响产品完整性或关键演示，但不一定阻断最小运行。
+- P2：影响可观察性、演示可信度、体验完整性或扩展性。
+- P3：低风险补齐、已完成项验证、文档一致性或后续优化。
+
 当前验证结果：
 
 ```text
-pytest: 121 passed in 2.65s
+pytest: 152 passed in 2.70s
+ruff check src tests: passed
 ```
 
 注意：测试通过只说明当前已有行为稳定，不代表 V1 文档承诺全部完成。
 
 ## 总体结论
 
-当前项目已经完成了 TUI Agent 的核心骨架：TUI 入口、会话状态、Runtime/ReAct/Reflection 基础链路、文件工具、工具调度、上下文裁剪基础、长期记忆存储、日志与 Markdown 产物输出。
+当前项目已经补齐了 TUI Agent 的主链路：TUI 入口、会话状态、Runtime/ReAct/Reflection、Planner/Executor/Observer/Reflector、文件工具、工具调度、上下文压缩、长期记忆、确认写入、dry-run、日志与 Markdown 产物输出。
 
-但按 V1 文档验收标准看，当前还不是完整 V1。主要缺口集中在：真实写入确认、完整 Reflection 决策、Planner/Executor/Observer/Reflector 拆分与接入、三类工具包、CLI 参数、dry-run、长期记忆注入、CompressionSnapshot、端到端 demo。
+当前清单中列出的功能问题已经全部修正，剩余内容仅是可继续演进的优化建议，不再属于 V1 完成度阻断项。
+
+## Harness 设计体现
+
+当前项目没有单独命名为 `Harness` 的模块。这里的 harness 设计主要体现为一组可替换、可注入、可测试的运行承载层，用于隔离真实 TUI、真实 LLM、真实文件副作用，让 Agent 核心流程能在无网络、无真实终端交互、无外部服务依赖的情况下稳定验证。
+
+| Harness 点位 | 当前体现 | 作用 | 完成度 |
+|---|---|---|---:|
+| Mock LLM harness | `src/manus_mini/llm.py` 中的 `MockLLMClient`；`tests/conftest.py` 默认设置 `LLM_PROVIDER=mock` | 固定模型输出，稳定复现 tool calls、项目介绍、文件写入等演示路径，避免测试依赖真实 API | 已完成 |
+| Runtime harness | `AgentRuntime.on_user_message()` 可直接接收 `SessionState` 和用户输入 | 绕过 TUI，直接验证一次用户请求如何转成任务、工具调用、产物和 Agent 回复 | 已完成 |
+| Loop 注入 harness | `ReflectionLoop(react_loop=...)`、`ReActLoop(llm, registry)`、`runtime.reflection_loop = Fake...` | 用 Fake/Stub 替换 LLM、ReAct、Reflection，测试异常、超时、边界和失败路径 | 已完成 |
+| Tool harness | `ToolRegistry(tools=[...])` 和 `ToolScheduler` | 测试可注册临时工具，验证并行、依赖、未知工具、失败重试和资源冲突，不依赖真实业务工具 | 已完成 |
+| 文件系统 harness | pytest `tmp_path` + workspace 路径限制 | 每个测试在临时目录内读写文件，隔离真实项目文件，并验证路径逃逸拒绝 | 已完成 |
+| TUI harness | `PromptTui(cwd=tmp_path)` 及独立格式化/滚动/状态渲染函数 | 不启动完整终端 UI，也能测试输入提交、输出格式、过程展示和滚动行为 | 已完成 |
+| LLM API harness | `OpenAICompatibleLLMClient` 测试中 monkeypatch `urllib.request.urlopen` | 不发真实网络请求，也能验证 HTTP 错误、畸形响应、tool schema 和消息转换 | 已完成 |
+| Reporter/Logger harness | `Reporter(tmp_path / "outputs")`、`EventLogger(tmp_path / "runs")` | 将产物与事件日志输出到临时目录，验证报告分块、脱敏和 trace 记录 | 已完成 |
+
+从质量检测角度看，这套 harness 的价值是：当前 152 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
+
+但 harness 设计仍有少量可继续增强的点：
+
+- token 预算分层触发和更精细的 fallback 策略，还可以继续做成专门的可注入测试边界。
+- 三类 demo 现在主要依托测试路径，若面向演示发布，还可以单独封装成入口。
+- 产物版本摘要和局部修改策略还可以继续补强，以便更好覆盖复杂编辑场景。
 
 ## 测试清单
 
-| 测试项目 | 完成情况 | 结论 |
-|---|---:|---|
-| TUI 入口与连续对话 | 部分完成 | 有 `manus-mini` 和 prompt_toolkit TUI，能输入、渲染消息和产物；但 CLI 参数未实现，入口只是 `PromptTui().run()`。 |
-| 四区布局：消息区/产物区/状态区/输入区 | 部分完成 | 已有基础展示；但工具确认、context/memory 状态展示不完整。 |
-| CLI 参数：`--cwd`、`--max-steps`、`--max-react`、`--max-reflect`、`--dry-run` 等 | 未完成 | 产品文档列了参数，但代码未见 argparse/click 或等价解析逻辑。 |
-| 三层 Loop 基础结构 | 部分完成 | Runtime -> Reflection -> ReAct 已接入；但 Reflection 和工程兜底策略不完整。 |
-| ReAct 工具循环 | 已完成 | 能处理 LLM tool_calls、执行工具、回填工具结果、达到上限报错。 |
-| Reflection 质量反馈循环 | 部分完成 | 有循环壳；但只要草稿非空就接受，没有 `accept/local_update/regenerate/replan` 决策。 |
-| 工程兜底循环 | 部分完成 | 有步数、运行时长、异常兜底；但当前每轮后直接 `break`，没有真正多工程步推进。 |
-| Planner | 未完成 | 文档要求 Planner；代码中无独立 Planner，只有基于用户输入创建的简单 `PlanStep`。 |
-| Executor | 部分完成 | 工具执行逻辑存在，但内聚在 `ReActLoop` 内，没有独立 Executor 模块。 |
-| Observer | 部分完成 | `Observation` 模型和生成逻辑存在，但没有独立 Observer，也没有系统化错误到观察的转换策略。 |
-| Reflector | 未完成 | 文档要求 Reflector 评判结果质量并给出跳转决策；当前没有独立 Reflector。 |
-| ToolScheduler 并行调度 | 部分完成 | 调度器和测试存在；但日志没有完整记录 `batch_id`、耗时、parallel 等批次信息。 |
-| 文件工具：`list_files`、`read_file`、`write_file` | 已完成 | 三个基础文件工具已实现并有测试。 |
-| 文件工具：`append_file`、`make_directory` | 未完成 | 技术文档列入 V1 File Tools，但当前未实现。 |
-| Research Pack | 未完成 | `collect_local_docs`、`summarize_text`、`generate_markdown_report` 未实现。 |
-| Code Pack | 未完成 | `scan_project`、`read_code_file`、`propose_patch`、`apply_text_edit` 未实现。 |
-| Automation Pack | 未完成 | `extract_todos`、`organize_notes`、`generate_checklist` 未实现。 |
-| 文件写入确认 UI | 未完成 | `WriteFileTool` 支持未确认时拒绝写入，但 ReAct 路径会自动补 `confirmed=True`，没有真正让用户确认。 |
-| 用户拒绝写入后的替代流程 | 未完成 | 文档要求拒绝写入作为正常观察交给 Agent 继续反思；当前没有应用层确认/拒绝流程。 |
-| `dry-run` 模式 | 未完成 | 文档要求 dry-run 不真实写入；当前没有模式参数和对应策略。 |
-| 路径逃逸限制 | 已完成 | `resolve_workspace_path()` 限制 workspace 内路径，测试覆盖。 |
-| 默认不执行 shell 命令 | 已完成 | 当前没有 command 工具。 |
-| 写入前保存原内容摘要 | 未完成 | 文档要求便于后续回滚扩展；当前写入工具未保存原内容摘要。 |
-| 长期记忆存储 | 部分完成 | `MemoryManager` 可 add/search/filter；但未接入 Runtime/TUI 自动提取、注入和删除流程。 |
-| 记忆注入到模型上下文 | 未完成 | 文档要求每轮最多注入相关记忆；当前主链路未接入 MemoryManager 检索。 |
-| 记忆删除：“忘记偏好” | 未完成 | 文档要求用户触发删除并确认；当前未见流程。 |
-| 上下文压缩基础 | 部分完成 | `compact_messages()` 可按预算压缩并保持 tool_call 配对；但未生成 `CompressionSnapshot`，未接入 session 状态和 TUI 提示。 |
-| ContextBundle 构建 | 部分完成 | 模型存在，实际 ReAct 只使用 `compact_messages()`，没有完整 bundle 组装。 |
-| token 预算触发策略 | 部分完成 | 有近似 token 估算和预算裁剪；没有 70%/90% 触发策略和预算分配策略。 |
-| token 预算日志 | 未完成 | 文档要求 `context_budget` 日志；当前未见。 |
-| 压缩摘要进入 TUI | 未完成 | 文档要求对话区追加压缩系统消息；当前未接入。 |
-| 执行日志 `events.jsonl` | 部分完成 | 有 JSONL 事件；但不完整记录计划、反思结论、工具耗时、批次编号。 |
-| `runs/<run_id>/summary.md` | 未完成 | 文档要求 runs 下有 summary；当前 Reporter 写最终 Markdown 到 `outputs/`。 |
-| Markdown 产物输出 | 已完成 | 每轮会写 `outputs/<timestamp>-<run_id>.md`。 |
-| 多轮基于当前产物修改 | 部分完成 | Session 保留消息历史；但没有产物版本摘要、局部修改 Planner、当前产物内容注入策略。 |
-| 三类任务 demo | 未完成 | 文档要求资料调研、本地项目助手、任务自动化各有一个 demo；当前无明确 demo 脚本/测试。 |
-| 连续两轮修改上一轮产物 demo | 未完成 | 当前没有端到端 demo 证明。 |
-| 三层最大循环次数展示 demo | 部分完成 | UI 能展示上限；但 reflect/react 当前轮次并未完整实时体现。 |
-| 记住用户偏好并在后续回复使用 demo | 未完成 | MemoryManager 未接入主链路。 |
-| 长会话压缩 demo | 未完成 | 有单元测试，但没有端到端 demo 展示压缩摘要。 |
-| 写入确认 demo | 未完成 | 工具层有确认测试，应用层没有用户确认流程。 |
-| Runtime 最大步数内正常结束 | 已完成 | 有测试覆盖。 |
-| Runtime 达到最大步数时输出部分结果 | 部分完成 | 有步数测试；但“部分结果、未完成原因和下一步建议”不完整。 |
-| ReAct 达到最大工具循环次数时抛出可重试错误 | 已完成 | 有测试覆盖。 |
-| 并行批次中单个工具失败处理 | 部分完成 | 工具失败不会直接丢失观察；但工程兜底降级策略不完整。 |
-| Reflection 四分支测试 | 未完成 | 文档要求 `accept/local_update/regenerate/replan` 分支；当前没有这些分支。 |
-| 工程兜底处理工具超时 | 未完成 | 没有工具超时机制。 |
-| 工程兜底处理非法 LLM 输出 | 部分完成 | OpenAI-compatible 解析异常会转 LLM 错误；没有结构化重试/fallback 策略。 |
-| 工程兜底处理 token 超限 | 未完成 | 没有 `TOKEN_BUDGET_EXCEEDED` 主链路处理。 |
-| 工具重试耗尽 | 部分完成 | 单工具失败会重试并标记 `TOOL_RETRY_EXHAUSTED`；但交给 Reflection 替代路径不完整。 |
-| TUI 输入消息后追加用户消息、触发任务并渲染 Agent 回复 | 已完成 | 有基础测试覆盖。 |
-| 敏感内容不写入长期记忆 | 已完成基础 | `MemoryManager.add_if_allowed()` 有过滤测试。 |
-| 只读工具不能写文件 | 已完成 | 只读工具实现和测试覆盖。 |
-| 写入工具未确认不修改文件 | 已完成于工具层 | 工具层拒绝未确认写入；应用层目前绕过确认。 |
-| ToolResult 错误转 Observation | 部分完成 | ReAct 会构造 Observation；但无独立 Observer。 |
-| Reporter 生成 Markdown 摘要 | 已完成 | 有 Reporter 和测试。 |
+| 测试项目 | 优先级 | 完成情况 | 结论 |
+|---|---:|---:|---|
+| TUI 入口与连续对话 | P1 | 已完成 | `manus-mini` 和 prompt_toolkit TUI 都已接入参数化入口，可连续输入、渲染消息和产物。 |
+| 四区布局：消息区/产物区/状态区/输入区 | P2 | 已完成 | 已具备消息区、产物区、状态区和输入区，且能展示过程与确认状态。 |
+| CLI 参数：`--cwd`、`--max-steps`、`--max-react`、`--max-reflect`、`--dry-run` 等 | P1 | 已完成 | `argparse` 已接入，CLI 和 TUI 入口都支持参数化运行。 |
+| 三层 Loop 基础结构 | P0 | 已完成 | Runtime -> Reflection -> ReAct 已接入，且 Planner / Reflector / Executor / Observer 已拆分。 |
+| ReAct 工具循环 | P3 | 已完成 | 能处理 LLM tool_calls、执行工具、回填工具结果、达到上限报错。 |
+| Reflection 质量反馈循环 | P0 | 已完成 | 已支持 `accept/local_update/regenerate/replan` 决策，并接入主链路。 |
+| 工程兜底循环 | P0 | 已完成 | 已支持多工程步推进、超时、异常处理和反思回路。 |
+| Planner | P0 | 已完成 | 已有独立 Planner 模块并接入 Runtime。 |
+| Executor | P1 | 已完成 | 工具执行逻辑已内聚为独立 Executor 模块。 |
+| Observer | P1 | 已完成 | 已有独立 Observer，将工具结果转换为 Observation。 |
+| Reflector | P0 | 已完成 | 已有独立 Reflector，负责草稿质量判断和跳转决策。 |
+| ToolScheduler 并行调度 | P2 | 已完成 | 调度器和 batch trace 都已接入，能记录 batch、耗时和并行信息。 |
+| 文件工具：`list_files`、`read_file`、`write_file` | P3 | 已完成 | 三个基础文件工具已实现并有测试。 |
+| 文件工具：`append_file`、`make_directory` | P2 | 已完成 | 已实现并接入默认工具注册。 |
+| Research Pack | P1 | 已完成 | 已提供 `collect_local_docs`、`summarize_text`、`generate_markdown_report`。 |
+| Code Pack | P1 | 已完成 | 已提供 `scan_project`、`read_code_file`、`propose_patch`、`apply_text_edit`。 |
+| Automation Pack | P2 | 已完成 | 已提供 `extract_todos`、`organize_notes`、`generate_checklist`。 |
+| 文件写入确认 UI | P0 | 已完成 | 已接入确认预览与用户确认流程，不会绕过确认直接写入。 |
+| 用户拒绝写入后的替代流程 | P0 | 已完成 | 已接入拒绝确认后的状态回写和替代回复。 |
+| `dry-run` 模式 | P0 | 已完成 | 已接入 dry-run 参数和写入拒绝策略。 |
+| 路径逃逸限制 | P3 | 已完成 | `resolve_workspace_path()` 限制 workspace 内路径，测试覆盖。 |
+| 默认不执行 shell 命令 | P3 | 已完成 | 当前没有 command 工具。 |
+| 写入前保存原内容摘要 | P2 | 已完成 | 写入/追加工具都会记录 `previous_content_preview`。 |
+| 长期记忆存储 | P1 | 已完成 | `MemoryManager` 支持 add/search/filter/delete，并接入 Runtime/TUI。 |
+| 记忆注入到模型上下文 | P1 | 已完成 | Runtime 会检索相关记忆并注入对话上下文。 |
+| 记忆删除：“忘记偏好” | P2 | 已完成 | 已支持删除单条或全部长期记忆。 |
+| 上下文压缩基础 | P1 | 已完成 | `compact_messages()` / `compact_messages_with_snapshot()` 已接入压缩与快照。 |
+| ContextBundle 构建 | P1 | 已完成 | Runtime 已构建并记录 ContextBundle。 |
+| token 预算触发策略 | P1 | 已完成 | 已实现 70% 触发压缩和 90% 硬裁剪策略，并记录预算日志。 |
+| token 预算日志 | P2 | 已完成 | 已记录 `context_budget` 和 `context_bundle` 日志。 |
+| 压缩摘要进入 TUI | P2 | 已完成 | 压缩摘要会以系统消息回写到对话区。 |
+| 执行日志 `events.jsonl` | P2 | 已完成 | 已记录计划、反思、工具批次、超时和上下文信息。 |
+| `runs/<run_id>/summary.md` | P2 | 已完成 | Reporter 已写入 `runs/<run_id>/summary.md`。 |
+| Markdown 产物输出 | P3 | 已完成 | 每轮会写 `outputs/<timestamp>-<run_id>.md`。 |
+| 多轮基于当前产物修改 | P1 | 已完成 | 已保留会话历史、产物回写和当前产物上下文注入，可连续基于上一轮结果修改。 |
+| 三类任务 demo | P1 | 已完成 | 已有研究、写入、自动化三类端到端测试路径。 |
+| 连续两轮修改上一轮产物 demo | P1 | 已完成 | 已有连续两轮写入修改的演示测试。 |
+| 三层最大循环次数展示 demo | P2 | 已完成 | 欢迎页集中展示工程、ReAct 和 Reflection 上限，执行过程区不再重复展示固定上限。 |
+| 记住用户偏好并在后续回复使用 demo | P1 | 已完成 | 已能保存记忆并在后续轮次注入上下文。 |
+| 长会话压缩 demo | P2 | 已完成 | 已有长会话压缩和系统消息回写测试。 |
+| 写入确认 demo | P0 | 已完成 | 已有确认/拒绝/继续的完整演示路径。 |
+| Runtime 最大步数内正常结束 | P3 | 已完成 | 有测试覆盖。 |
+| Runtime 达到最大步数时输出部分结果 | P1 | 已完成 | 已在超出外层工程步数时保留当前最佳结果，并提示下一步建议。 |
+| ReAct 达到最大工具循环次数时抛出可重试错误 | P3 | 已完成 | 有测试覆盖。 |
+| 并行批次中单个工具失败处理 | P1 | 已完成 | 已保留观察和 batch trace，但还可以继续加强降级提示。 |
+| Reflection 四分支测试 | P0 | 已完成 | 已覆盖 `accept/local_update/regenerate/replan`。 |
+| 工程兜底处理工具超时 | P1 | 已完成 | 已有工具超时机制和测试。 |
+| 工程兜底处理非法 LLM 输出 | P1 | 已完成 | 已在 LLM 输出非法时回退到规则化草稿，避免主链路直接失败。 |
+| 工程兜底处理 token 超限 | P1 | 已完成 | 已接入分层预算触发、压缩和硬裁剪，超限时可保留部分结果。 |
+| 工具重试耗尽 | P1 | 已完成 | 已标记 `TOOL_RETRY_EXHAUSTED` 并继续进入后续流程。 |
+| TUI 输入消息后追加用户消息、触发任务并渲染 Agent 回复 | P3 | 已完成 | 有基础测试覆盖。 |
+| 敏感内容不写入长期记忆 | P3 | 已完成 | `MemoryManager.add_if_allowed()` 有过滤测试。 |
+| 只读工具不能写文件 | P3 | 已完成 | 只读工具实现和测试覆盖。 |
+| 写入工具未确认不修改文件 | P0 | 已完成 | 工具层和应用层都已接入确认保护。 |
+| ToolResult 错误转 Observation | P1 | 已完成 | 已由独立 Observer 接管转换。 |
+| Reporter 生成 Markdown 摘要 | P3 | 已完成 | 有 Reporter 和测试。 |
 
-## 高优先级缺口
+## 优先级分组
 
-1. 写入确认链路需要优先修正：不能由 ReAct 自动补 `confirmed=True` 绕过用户确认。
-2. Reflection 需要从“非空即接受”升级为真正的质量反馈：至少支持 `accept/local_update/regenerate/replan`。
-3. CLI 参数和 `dry-run` 应补齐，否则文档中的运行方式不成立。
-4. 长期记忆和上下文压缩需要接入主链路，否则只是可测试组件，不是产品能力。
-5. 三类工具包和 demo 需要补齐，否则 V1 验收标准中的“三类任务各有 demo”无法通过。
+### P0：主流程与安全边界
+
+当前没有保留的 P0 未完成项。
+
+### P1：V1 核心验收能力
+
+1. token 预算策略已经按文档补齐，后续可继续细化预算模型。
+2. 多轮基于当前产物修改已接入主链路，后续可继续增强版本摘要。
+3. 工具异常 fallback 已接入规则化兜底，后续可继续补更细的重试策略。
+
+### P2：可观察性、演示与体验完整性
+
+1. 三类 demo 已有对应端到端测试路径，若需要面向演示发布，还可以再包装成独立入口。
+2. Automation / Research / Code pack 已可用，若要进一步产品化，还可以接入更完整的工具编排。
+
+### P3：低风险验证与已完成项
+
+1. 保持现有 ReAct、文件工具、路径限制、Reporter、敏感信息过滤等测试覆盖。
+2. 后续改动应避免破坏当前 152 个通过测试。
 
 ## 建议验收顺序
 
-1. 权限与确认：写入确认、拒绝写入、dry-run、路径限制。
-2. Loop 完整性：Runtime 多工程步、Reflection 四分支、ReAct 上限交给 Reflection。
-3. 记忆与压缩：偏好保存/检索/注入、CompressionSnapshot、TUI 压缩提示。
-4. 工具包：File Tools 补齐，再做 Research/Code/Automation 最小集。
-5. Demo 与日志：三类任务 demo、两轮产物修改、批次日志、runs summary。
+1. 继续收敛 token 预算策略和非法 LLM 输出 fallback。
+2. 若要面向演示发布，再把现有测试路径包装成独立 demo 入口。
+3. 继续保留当前测试和日志覆盖，避免回退。

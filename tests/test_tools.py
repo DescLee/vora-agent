@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from manus_mini.tools import ListFilesTool, ReadFileTool, ToolRegistry, WriteFileTool
+from manus_mini.tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ToolRegistry, WriteFileTool
 
 
 def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
@@ -136,3 +136,25 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     assert isinstance(registry.get("list_files"), ListFilesTool)
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
+    assert isinstance(registry.get("append_file"), AppendFileTool)
+    assert isinstance(registry.get("make_directory"), MakeDirectoryTool)
+
+
+def test_append_file_appends_content_with_confirmation(tmp_path: Path) -> None:
+    tool = AppendFileTool()
+    (tmp_path / "draft.txt").write_text("hello", encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        tool.run(workspace=tmp_path, path="draft.txt", content=" world")
+
+    result = tool.run(workspace=tmp_path, path="draft.txt", content=" world", confirmed=True)
+
+    assert result.ok is True
+    assert (tmp_path / "draft.txt").read_text(encoding="utf-8") == "hello world"
+
+
+def test_make_directory_creates_nested_directory(tmp_path: Path) -> None:
+    result = MakeDirectoryTool().run(workspace=tmp_path, path="a/b/c")
+
+    assert result.ok is True
+    assert (tmp_path / "a" / "b" / "c").is_dir()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Sequence
 
-from manus_mini.models import ContextSegment, Message
+from manus_mini.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation
 from manus_mini.redaction import redact_sensitive_text
 
 
@@ -111,13 +111,40 @@ def build_segments(messages: Sequence[Message]) -> list[ContextSegment]:
 
 
 def compact_messages(messages: Sequence[Message], token_budget: int) -> list[Message]:
+    compacted, _ = compact_messages_with_snapshot(messages, token_budget)
+    return compacted
+
+
+def estimate_message_tokens(messages: Sequence[Message]) -> int:
+    return sum(max(1, len(message.content) // 2) for message in messages)
+
+
+def build_context_bundle(
+    current_user_message: Message,
+    recent_messages: Sequence[Message],
+    relevant_memories: Sequence[MemoryItem] | None = None,
+    compression_summaries: Sequence[CompressionSnapshot] | None = None,
+    active_artifacts: Sequence[Artifact] | None = None,
+    recent_observations: Sequence[Observation] | None = None,
+) -> ContextBundle:
+    return ContextBundle(
+        current_user_message=current_user_message,
+        recent_messages=list(recent_messages),
+        relevant_memories=list(relevant_memories or []),
+        compression_summaries=list(compression_summaries or []),
+        active_artifacts=list(active_artifacts or []),
+        recent_observations=list(recent_observations or []),
+    )
+
+
+def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: int) -> tuple[list[Message], CompressionSnapshot | None]:
     if not messages:
-        return []
+        return [], None
 
     segments = build_segments(messages)
     total_tokens = sum(segment.estimated_tokens for segment in segments)
     if total_tokens <= token_budget:
-        return list(messages)
+        return list(messages), None
 
     kept_reversed: list[ContextSegment] = []
     kept_tokens = 0
@@ -130,14 +157,22 @@ def compact_messages(messages: Sequence[Message], token_budget: int) -> list[Mes
     kept_segments = list(reversed(kept_reversed))
     removed_count = len(segments) - len(kept_segments)
     if removed_count <= 0:
-        return [message for segment in kept_segments for message in segment.messages]
+        return [message for segment in kept_segments for message in segment.messages], None
 
-    summary = Message.system(_summarize_segments(segments[:removed_count]))
+    covered_segments = segments[:removed_count]
+    summary_text = _summarize_segments(covered_segments)
+    summary = Message.system(summary_text)
+    snapshot = CompressionSnapshot(
+        covered_message_ids=[message.id for segment in covered_segments for message in segment.messages],
+        covered_observation_ids=[],
+        summary=summary_text,
+        retained_facts=[line for line in summary_text.splitlines() if line.startswith("- ")],
+    )
     compacted = [summary]
     for segment in kept_segments:
         compacted.extend(segment.messages)
     validate_tool_call_pairs(compacted)
-    return compacted
+    return compacted, snapshot
 
 
 def _summarize_segments(segments: Sequence[ContextSegment]) -> str:
@@ -169,7 +204,10 @@ def _preview(content: str, limit: int = 160) -> str:
 __all__ = [
     "ContextIntegrityError",
     "build_segments",
+    "build_context_bundle",
     "compact_messages",
+    "compact_messages_with_snapshot",
+    "estimate_message_tokens",
     "estimate_tokens",
     "validate_tool_call_pairs",
 ]

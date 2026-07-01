@@ -90,6 +90,29 @@ def test_openai_compatible_client_rejects_non_object_tool_arguments(monkeypatch)
         client.complete_with_tools([Message.user("hi")], ["read_file"])
 
 
+def test_openai_compatible_client_exposes_source_request_and_response(monkeypatch) -> None:
+    def fake_urlopen(*args, **kwargs):  # noqa: ARG001
+        return io.BytesIO(
+            b'{"choices":[{"message":{"content":"done","tool_calls":[]}}]}'
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost/v1",
+            llm_api_key="test-key",
+            llm_model="test-model",
+        )
+    )
+
+    result = client.complete_with_tools([Message.user("hi")], ["read_file"])
+
+    assert result.source_request["messages"][0]["content"] == "hi"
+    assert result.source_request["tool_names"] == ["read_file"]
+    assert result.source_response["choices"][0]["message"]["content"] == "done"
+
+
 def test_openai_messages_maps_agent_role_to_assistant() -> None:
     assistant_message = Message.agent("tool executed", tool_call_ids=["call-1"])
     assistant_message.metadata["tool_call_names"] = {"call-1": "read_file"}

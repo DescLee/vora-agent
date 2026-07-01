@@ -8,7 +8,7 @@ from manus_mini.reporter import render_task_report
 
 
 def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs")
+    logger = EventLogger(tmp_path / "runs", enabled=True)
     path = logger.record("run-1", {"type": "context_budget", "estimated_tokens": 10})
 
     assert path.exists()
@@ -20,7 +20,7 @@ def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
 
 
 def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs")
+    logger = EventLogger(tmp_path / "runs", enabled=True)
     path = logger.record(
         "run-1",
         {
@@ -39,6 +39,14 @@ def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
     assert "[REDACTED]" in row["message"]
     assert "[REDACTED]" in row["nested"]["password"]
     assert "[REDACTED]" in row["nested"]["items"][0]
+
+
+def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "runs")
+    path = logger.record("run-1", {"type": "context_budget", "estimated_tokens": 10})
+
+    assert path.name == "events.jsonl"
+    assert not path.exists()
 
 
 def test_reporter_writes_markdown_output(tmp_path: Path) -> None:

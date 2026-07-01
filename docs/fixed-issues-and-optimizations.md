@@ -39,7 +39,7 @@
 
 - 现象：执行过程中用户不知道当前处于规划、调用工具、反思还是产物整理阶段。
 - 优化：状态栏和过程区展示当前步骤、阶段、动作、进度和状态。
-- 示例：`正在执行 | 第 1/12 步 | ReAct 上限 8 | Reflection 上限 5 | 当前 准备调用工具 read_file(call-read)`
+- 示例：`正在执行 | 当前 准备调用工具 read_file(call-read)`
 - 验证：测试覆盖状态栏包含当前步骤、阶段和当前动作。
 
 ### 2.3 工具调用和工具返回不可见
@@ -107,6 +107,18 @@
 - 优化：新增欢迎文案，将外层工程循环上限、ReAct 上限、Reflection 上限、工具重试上限和快捷键集中展示。
 - 验证：测试覆盖状态栏不再展示 ReAct/Reflection 上限和 `第 n/12 步`，初始输出展示欢迎文案与运行设置。
 
+### 2.11 过程区重复展示“最多 99 步”
+
+- 现象：欢迎页已经提示最大步数后，执行过程区仍展示“最多 99 步”，信息重复。
+- 修复：过程区只展示当前阶段和当前第几步，不再重复展示固定上限。
+- 验证：测试覆盖任务概览不包含 `最多 99 步`。
+
+### 2.12 界面缺少上下文占比
+
+- 现象：长会话执行时，用户不知道当前上下文是否接近预算上限。
+- 优化：TUI 状态区增加上下文占比展示，基于当前 session 消息估算 token 使用比例。
+- 验证：测试覆盖状态栏显示上下文使用比例。
+
 ## 3. TUI 滚动与可读性
 
 ### 3.1 输出区可视窗口太小，历史内容不好查看
@@ -169,7 +181,7 @@
 - 验证：
   - 单元测试覆盖 `MouseEventType.SCROLL_UP / SCROLL_DOWN` 会改变展示区 `scroll_top`。
   - PTY 实跑当前 TUI：使用 mock 任务生成完整输出后，发送真实 xterm SGR 滚轮上滑事件 `\x1b[<64;40;10M`，展示区从“最终产物”滚回“执行过程”；再发送 `\x1b[<65;40;10M`，展示区回到底部“最终产物”。
-  - 全量测试：`121 passed`；静态检查：`ruff check src tests` 通过。
+  - 全量测试：`152 passed`；静态检查：`ruff check src tests` 通过。
 
 ### 3.4 过程内容视觉噪声偏重
 
@@ -203,6 +215,21 @@
 - 现象：任务 done 或 failed 后，状态栏仍可能显示正在执行。
 - 修复：状态栏根据 task status 显示“已完成 / 执行失败 / 已结束 / 正在执行”。
 - 验证：测试覆盖 done 和 failed 状态不会显示“正在执行”。
+
+### 4.5 SQLite 连接跨线程访问报错
+
+- 现象：TUI 后台执行消息时出现 `SQLite objects created in a thread can only be used in that same thread`。
+- 根因：`PromptTui` 使用 `asyncio.to_thread()` 将 `handle_user_message()` 放到工作线程执行，而 `MemoryManager` 的 SQLite 连接可能在 UI 线程创建。
+- 修复：
+  - SQLite 连接启用 `check_same_thread=False`。
+  - `MemoryManager` 的数据库操作统一加 `threading.RLock`。
+- 验证：测试覆盖 `MemoryManager` 跨线程读写访问。
+
+### 4.6 工具失败后 fallback 结果过弱
+
+- 现象：大文件读取可能返回 `FILE_TOO_LARGE`，重试后进入 `TOOL_RETRY_EXHAUSTED`；如果后续 LLM 超时，fallback 结果只回显原始问题，缺少可用信息。
+- 修复：规则化 fallback 会优先汇总近期成功的工具观察，尽量保留已有部分结果。
+- 验证：测试覆盖 runtime fallback 会包含近期工具观察摘要。
 
 ## 5. 工具调用与 ReAct 循环
 
@@ -240,6 +267,12 @@
 - 风险：硬切割上下文时，如果留下孤儿 `tool_call_id`，LLM API 会报错。
 - 修复：context segment 将 assistant tool call 和对应 tool result 作为一个 `tool_exchange` 保留或一起压缩。
 - 验证：测试覆盖 tool exchange 不会被拆开，孤儿 tool result 会被校验拒绝。
+
+### 5.7 循环次数上限偏低
+
+- 现象：复杂任务容易提前触发 `MAX_REACT_ITERATIONS_REACHED`。
+- 修复：各阶段默认循环/重试上限提升，`MAX_REACT_ITERATIONS_REACHED` 对应的 ReAct 上限设置为 99。
+- 验证：测试覆盖 CLI 默认参数和欢迎页运行设置。
 
 ## 6. 文件工具与 workspace 安全
 
@@ -318,6 +351,12 @@
 - 优化：输出文件名以时间戳开头，例如 `YYYYMMDD-HHMMSS-run-xxxx.md`。
 - 验证：测试覆盖文件名正则。
 
+### 8.5 手动压缩上下文
+
+- 优化：新增手动压缩上下文指令：`压缩上下文`、`手动压缩上下文`、`/compact`、`compact context`。
+- 行为：触发后压缩当前会话历史，并把压缩摘要作为系统消息回写到对话区。
+- 验证：测试覆盖手动压缩命令识别、压缩摘要生成和 session 消息更新。
+
 ## 9. 日志与脱敏
 
 ### 9.1 运行日志
@@ -330,15 +369,27 @@
 - 优化：对日志、报告、trace data、工具观察、最终产物中的 key、password、token 等敏感内容进行脱敏。
 - 验证：测试覆盖日志脱敏、报告脱敏、TUI 过程脱敏。
 
+### 9.3 自动测试默认不落日志
+
+- 现象：自动测试会在项目目录产生运行日志，污染工作区。
+- 修复：pytest 默认设置 `MANUS_DISABLE_LOGGING=1`；`EventLogger` 在 pytest 或禁用环境变量下默认不写文件，只有显式 `enabled=True` 的日志测试才写入临时目录。
+- 验证：测试覆盖日志禁用时不创建日志文件，日志专项测试仍可显式启用。
+
+### 9.4 LLM 原始入参和返回结果日志
+
+- 优化：`LLMResult` 增加 `source_request` 和 `source_response`，OpenAI-compatible client 保留请求 payload 与原始响应结构。
+- 日志：ReAct 流程写入 `llm_request` 和 `llm_response` 事件，便于排查真实模型调用问题。
+- 验证：测试覆盖 OpenAI-compatible client 暴露源数据，以及 runtime 日志记录 LLM 入参与返回。
+
 ## 10. 当前验证基线
 
 最近一次完整验证：
 
 ```bash
 pytest -q
-# 117 passed
+# 152 passed
 
-ruff check .
+ruff check src tests
 # All checks passed!
 ```
 

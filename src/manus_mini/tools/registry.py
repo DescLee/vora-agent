@@ -3,13 +3,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from manus_mini.tools.base import ToolProtocol
-from manus_mini.tools.file_tools import ListFilesTool, ReadFileTool, WriteFileTool
+from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, WriteFileTool
 
 
 class ToolRegistry:
     def __init__(self, tools: Iterable[ToolProtocol] | None = None) -> None:
         self._tools: dict[str, ToolProtocol] = {}
-        default_tools = tools if tools is not None else (ListFilesTool(), ReadFileTool(), WriteFileTool())
+        default_tools = tools if tools is not None else (
+            ListFilesTool(),
+            ReadFileTool(),
+            WriteFileTool(),
+            AppendFileTool(),
+            MakeDirectoryTool(),
+        )
         for tool in default_tools:
             self.register(tool)
 

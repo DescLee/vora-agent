@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from time import monotonic
 
-from manus_mini.context import compact_messages, validate_tool_call_pairs
-from manus_mini.llm import LLMClient, get_default_llm_client
-from manus_mini.models import Message, Observation, SessionState, TaskState, TraceEvent
+from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, validate_tool_call_pairs
+from manus_mini.llm import LLMClient, LLMRequestError, LLMResult, get_default_llm_client, openai_messages
+from manus_mini.executor import Executor, sanitize_tool_args
+from manus_mini.logging import EventLogger
+from manus_mini.models import Message, SessionState, TaskState, TraceEvent
+from manus_mini.observer import Observer
 from manus_mini.scheduler import ToolScheduler
 from manus_mini.tools.base import ToolResult
 from manus_mini.tools.registry import ToolRegistry
@@ -38,18 +41,21 @@ def assistant_message_from_llm_result(llm_result) -> Message:
     return message
 
 
-RESERVED_TOOL_ARG_NAMES = {"workspace"}
-
-
-def sanitize_tool_args(args: dict) -> dict:
-    return {key: value for key, value in dict(args).items() if key not in RESERVED_TOOL_ARG_NAMES}
-
-
 class ReActLoop:
-    def __init__(self, llm: LLMClient | None = None, registry: ToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMClient | None = None,
+        registry: ToolRegistry | None = None,
+        dry_run: bool = False,
+        logger: EventLogger | None = None,
+    ) -> None:
         self.llm = llm or get_default_llm_client()
         self.registry = registry or ToolRegistry()
         self.scheduler = ToolScheduler(self.registry)
+        self.dry_run = dry_run
+        self.executor = Executor(self.registry, dry_run=dry_run)
+        self.observer = Observer()
+        self.logger = logger
 
     def run(self, task: TaskState, session: SessionState) -> str:
         messages = [
@@ -69,7 +75,7 @@ class ReActLoop:
                 )
             )
             validate_tool_call_pairs(messages)
-            llm_result = self.llm.complete_with_tools(messages, self.registry.names())
+            llm_result = self._complete_with_rule_fallback(messages, task)
             llm_result = self._normalize_tool_call_ids(llm_result, iteration_index)
             task.trace_events.append(
                 TraceEvent(
@@ -138,14 +144,15 @@ class ReActLoop:
                     )
                 )
                 task.observations.append(
-                    Observation(
-                        tool_call_id=call.id,
-                        ok=tool_result.ok,
-                        summary=tool_result.summary,
-                        content=tool_result.content,
-                    )
+                    self.observer.observe(call, tool_result)
                 )
                 messages.append(Message.tool(format_tool_result_message(tool_result), tool_call_id=call.id))
+
+            if any(result.error_code in {"WRITE_REQUIRES_CONFIRMATION", "DRY_RUN"} for result in tool_results.values()):
+                pending = session.pending_confirmation
+                if pending is not None:
+                    return pending.prompt or pending.summary or "需要用户确认写入"
+                return "需要用户确认写入"
 
         task.trace_events.append(
             TraceEvent(
@@ -160,7 +167,98 @@ class ReActLoop:
         history = list(session.messages)
         if not history or history[-1].role != "user" or history[-1].content != task.goal:
             history.append(Message.user(task.goal))
-        return compact_messages(history, token_budget=task.limits.max_estimated_tokens)
+        original_estimated = estimate_message_tokens(history)
+        original_usage = original_estimated / task.limits.max_estimated_tokens if task.limits.max_estimated_tokens else 1.0
+        effective_budget = task.limits.max_estimated_tokens
+        if original_usage >= 0.90:
+            effective_budget = max(1, int(task.limits.max_estimated_tokens * 0.55))
+        elif original_usage >= 0.70:
+            effective_budget = max(1, int(task.limits.max_estimated_tokens * 0.69))
+
+        compacted, snapshot = compact_messages_with_snapshot(history, token_budget=effective_budget)
+        if (
+            original_estimated > task.limits.max_estimated_tokens * 2
+            and self._estimated_context_tokens(compacted) > task.limits.max_estimated_tokens
+        ):
+            task.trace_events.append(
+                TraceEvent(
+                    phase="runtime",
+                    message="Context token budget exceeded",
+                    data={"max_estimated_tokens": task.limits.max_estimated_tokens},
+                )
+            )
+            raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
+        if snapshot is not None:
+            session.compression_snapshots.append(snapshot)
+            session.messages.append(Message.system(f"[System] 已压缩较早的上下文：{snapshot.summary}"))
+        return compacted
+
+    def _estimated_context_tokens(self, messages: list[Message]) -> int:
+        return estimate_message_tokens(messages)
+
+    def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState) -> LLMResult:
+        try:
+            request_payload = {"messages": openai_messages(messages), "tool_names": self.registry.names()}
+            if self.logger is not None:
+                self.logger.record(
+                    task.run_id,
+                    {
+                        "type": "llm_request",
+                        "iteration": len([event for event in task.trace_events if event.phase == "react"]),
+                        "request": request_payload,
+                    },
+                )
+            result = self.llm.complete_with_tools(messages, self.registry.names())
+            if self.logger is not None:
+                self.logger.record(
+                    task.run_id,
+                    {
+                        "type": "llm_response",
+                        "iteration": len([event for event in task.trace_events if event.phase == "react"]),
+                        "request": result.source_request or request_payload,
+                        "response": result.source_response or result.model_dump(mode="json"),
+                    },
+                )
+            return result
+        except (LLMRequestError, ValueError, TypeError, KeyError, IndexError) as error:
+            if self.logger is not None:
+                self.logger.record(
+                    task.run_id,
+                    {
+                        "type": "llm_response",
+                        "iteration": len([event for event in task.trace_events if event.phase == "react"]),
+                        "request": {"messages": openai_messages(messages), "tool_names": self.registry.names()},
+                        "response": {"error": str(error) or error.__class__.__name__, "fallback": True},
+                    },
+                )
+            task.trace_events.append(
+                TraceEvent(
+                    phase="llm",
+                    message="LLM returned invalid output, falling back to rule-based draft",
+                    data={
+                        "error": str(error) or error.__class__.__name__,
+                        "tool_names": self.registry.names(),
+                    },
+                )
+            )
+            fallback_text = self._rule_fallback_content(task, messages)
+            return LLMResult(content=fallback_text)
+
+    def _rule_fallback_content(self, task: TaskState, messages: list[Message]) -> str:
+        user_messages = [message.content for message in messages if message.role == "user"]
+        focus = user_messages[-1] if user_messages else task.goal
+        successful_observations = [observation for observation in task.observations if observation.ok]
+        if successful_observations:
+            lines = [
+                "已使用规则兜底生成草稿：",
+                f"- 当前目标：{focus}",
+                "- 最近工具结果：",
+            ]
+            for observation in successful_observations[-5:]:
+                snippet = observation.content.strip().splitlines()[0] if observation.content.strip() else observation.summary
+                lines.append(f"  - {observation.tool_call_id or observation.id}: {observation.summary}。{snippet[:160]}")
+            return "\n".join(lines)
+        return f"已使用规则兜底生成草稿：{focus}"
 
     def _normalize_tool_call_ids(self, llm_result, iteration_index: int):
         seen: set[str] = set()
@@ -210,61 +308,24 @@ class ReActLoop:
         return known_tool_calls, tool_results
 
     def _with_runtime_tool_args(self, call, session: SessionState):
-        run_args = sanitize_tool_args(call.args)
-        run_args["workspace"] = session.cwd
-        if call.name == "write_file" and "confirmed" not in run_args:
-            run_args["confirmed"] = True
-        return call.model_copy(update={"args": run_args})
+        return self.executor.prepare_tool_call(call, session)
 
     def _run_batch(self, batch, session: SessionState, task: TaskState) -> dict[str, ToolResult]:
-        if len(batch) == 1:
-            call = batch[0]
-            return {call.id: self._run_tool_call(call, session, task)}
+        batch_started = monotonic()
+        result = self.executor.run_batch(batch, session, task)
+        self._record_batch_trace(task, batch, batch_started)
+        return result
 
-        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
-            results = executor.map(lambda call: (call.id, self._run_tool_call(call, session, task)), batch)
-            return dict(results)
-
-    def _run_tool_call(self, call, session: SessionState, task: TaskState) -> ToolResult:
-        max_attempts = max(1, task.limits.max_tool_retries + 1)
-        last_result: ToolResult | None = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                tool = self.registry.get(call.name)
-                result = tool.run(**call.args)
-            except PermissionError as error:
-                return ToolResult(
-                    tool_name=call.name,
-                    ok=False,
-                    summary=str(error) or error.__class__.__name__,
-                    error_code=str(error) or "PERMISSION_DENIED",
-                )
-            except Exception as error:  # noqa: BLE001
-                result = ToolResult(
-                    tool_name=call.name,
-                    ok=False,
-                    summary=str(error) or error.__class__.__name__,
-                    error_code="TOOL_ERROR",
-                )
-
-            if result.ok:
-                return result
-
-            last_result = result
-            if attempt < max_attempts:
-                task.trace_events.append(
-                    TraceEvent(
-                        phase="tool",
-                        message="Tool retry scheduled",
-                        data={
-                            "tool_call_id": call.id,
-                            "tool_name": call.name,
-                            "attempt": attempt,
-                            "max_attempts": max_attempts,
-                            "error_code": result.error_code,
-                        },
-                    )
-                )
-
-        assert last_result is not None
-        return last_result.model_copy(update={"error_code": "TOOL_RETRY_EXHAUSTED"})
+    def _record_batch_trace(self, task: TaskState, batch, batch_started: float) -> None:
+        task.trace_events.append(
+            TraceEvent(
+                phase="tool",
+                message="Tool batch completed",
+                data={
+                    "batch_id": batch[0].id if batch else "empty",
+                    "parallel": len(batch) > 1,
+                    "tool_call_ids": [call.id for call in batch],
+                    "duration_ms": int((monotonic() - batch_started) * 1000),
+                },
+            )
+        )

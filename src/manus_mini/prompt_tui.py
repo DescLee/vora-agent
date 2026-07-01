@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from bisect import bisect_right
+from dataclasses import dataclass
 from pathlib import Path
 
 from prompt_toolkit.application import Application
@@ -19,10 +20,21 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, Label, TextArea
+from rich.console import Console
+from rich.markdown import Markdown
 
+from manus_mini.context import estimate_message_tokens
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, TraceEvent
+from manus_mini.memory import MemoryManager
 from manus_mini.redaction import redact_sensitive_text
 from manus_mini.session import SessionManager
+
+
+@dataclass(slots=True)
+class PromptTuiOptions:
+    cwd: Path
+    limits: LoopLimits
+    dry_run: bool = False
 
 SHIFT_ENTER_SEQUENCES = (
     "\x1b[27;2;13~",
@@ -116,7 +128,7 @@ def format_task_overview(task: TaskState) -> str:
             f"- 任务：{task.goal}",
             f"- 阶段：{format_phase_label(task)}",
             f"- 当前动作：{format_current_action(task)}",
-            f"- 进度：{current} / 最多 {task.limits.max_engineering_steps} 步",
+            f"- 进度：{current}",
             f"- 状态：{task.status}",
         ]
     )
@@ -251,6 +263,11 @@ def format_event_summary(event: TraceEvent) -> str:
             error_code = event.data.get("error_code")
             suffix = f"，错误码 {error_code}" if error_code else ""
             return f"工具返回：{tool_name or 'unknown'}({tool_call_id or 'unknown'}) {status}，{summary}{suffix}"
+        if event.data.get("batch_id"):
+            batch_id = event.data.get("batch_id")
+            parallel = "并行" if event.data.get("parallel") else "串行"
+            duration_ms = event.data.get("duration_ms")
+            return f"工具批次：{batch_id}（{parallel}，{duration_ms}ms）"
         batches = event.data.get("batches")
         if batches:
             return f"工具调度：{len(batches)} 个批次"
@@ -279,7 +296,7 @@ def format_artifact(session: SessionState, result_override: str | None = None) -
         return "当前产物会显示在这里"
     task = session.active_task
     result = result_override if result_override is not None else task.result
-    result = result or "生成中..."
+    result = render_markdown_result(result or "生成中...")
     return "\n".join(
         [
             "完成摘要",
@@ -291,6 +308,19 @@ def format_artifact(session: SessionState, result_override: str | None = None) -
             result,
         ]
     )
+
+
+def render_markdown_result(markdown_text: str) -> str:
+    try:
+        console = Console(width=88, color_system=None, force_terminal=False, soft_wrap=False)
+        with console.capture() as capture:
+            console.print(Markdown(markdown_text))
+        rendered = capture.get()
+    except Exception:
+        return markdown_text
+
+    lines = [line.rstrip() for line in rendered.splitlines()]
+    return "\n".join(lines).strip() or markdown_text
 
 
 def format_transcript(
@@ -332,11 +362,13 @@ def format_welcome(limits: LoopLimits) -> str:
             f"- ReAct 上限：{limits.max_react_iterations} 轮",
             f"- Reflection 上限：{limits.max_reflection_rounds} 轮",
             f"- 单工具重试上限：{limits.max_tool_retries} 次",
+            f"- 单工具超时：{limits.max_tool_timeout_seconds} 秒",
             f"- 单轮运行超时：{limits.max_runtime_seconds} 秒",
             "",
             "操作",
             "- Enter 发送",
             "- Shift+Enter 换行",
+            "- 输入 `压缩上下文` 或 `/compact` 可手动压缩上下文",
             "- Tab 切换输入区和输出区",
             "- Ctrl-C 退出",
         ]
@@ -405,6 +437,7 @@ def format_phase_label(task: TaskState) -> str:
         "observing": "读取结果",
         "reflecting": "反思校验",
         "reporting": "整理产物",
+        "waiting_confirmation": "等待确认",
         "done": "已完成",
         "failed": "执行失败",
     }
@@ -414,20 +447,34 @@ def format_phase_label(task: TaskState) -> str:
 def format_status(session: SessionState, is_running: bool | None = None) -> str:
     task = session.active_task
     if task is None:
-        return "idle | Enter 发送 | Shift+Enter 换行 | Ctrl-C 退出"
+        return f"idle | {format_context_usage(session)} | Enter 发送 | Shift+Enter 换行 | Ctrl-C 退出"
     state_label = format_status_label(task, is_running=is_running)
-    return " | ".join(
-        [
-            state_label,
-            f"阶段 {format_phase_label(task)}",
-            f"当前 {format_current_action(task)}",
-            "Enter 发送",
-            "Shift+Enter 换行",
-        ]
-    )
+    parts = [
+        state_label,
+        f"阶段 {format_phase_label(task)}",
+        f"当前 {format_current_action(task)}",
+        format_context_usage(session),
+    ]
+    if session.pending_confirmation is not None:
+        parts.append(f"确认 {session.pending_confirmation.prompt or session.pending_confirmation.summary}")
+    parts.extend(["Enter 发送", "Shift+Enter 换行"])
+    return " | ".join(parts)
+
+
+def format_context_usage(session: SessionState) -> str:
+    limit = None
+    if session.active_task is not None:
+        limit = session.active_task.limits.max_estimated_tokens
+    if limit is None or limit <= 0:
+        return "上下文 --"
+    used = estimate_message_tokens(session.messages)
+    percent = min(999, round((used / limit) * 100))
+    return f"上下文 {percent}%"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:
+    if task.status == "waiting_confirmation":
+        return "等待确认"
     if task.status == "done":
         return "已完成"
     if task.status == "failed":
@@ -503,6 +550,27 @@ def wrap_text_for_display(text: str, width: int) -> tuple[str, list[int]]:
     return "\n".join(lines), starts
 
 
+def style_output_fragments(text: str) -> list[tuple[str, str]]:
+    fragments: list[tuple[str, str]] = []
+    current_section = ""
+    pending_section_title = False
+
+    for line in text.splitlines(keepends=True):
+        bare_line = line.rstrip("\n")
+        if bare_line == SECTION_SEPARATOR:
+            pending_section_title = True
+        elif pending_section_title:
+            current_section = bare_line
+            pending_section_title = False
+
+        style = "class:process" if current_section == "执行过程" else ""
+        fragments.append((style, line))
+
+    if not fragments:
+        fragments.append(("", ""))
+    return fragments
+
+
 class ScrollPositionBuffer:
     def __init__(self, view: "ScrollableOutputView") -> None:
         self.view = view
@@ -529,7 +597,7 @@ class ScrollableTextControl(FormattedTextControl):
     def __init__(self, view: "ScrollableOutputView") -> None:
         self.view = view
         super().__init__(
-            view.get_rendered_text,
+            view.get_rendered_fragments,
             focusable=True,
             show_cursor=False,
             get_cursor_position=view.get_cursor_position,
@@ -611,6 +679,10 @@ class ScrollableOutputView:
         self.ensure_render_cache()
         return self._rendered_text
 
+    def get_rendered_fragments(self) -> list[tuple[str, str]]:
+        self.ensure_render_cache()
+        return style_output_fragments(self._rendered_text)
+
     def get_cursor_position(self) -> Point:
         self.ensure_render_cache()
         line_count = max(1, len(self.display_line_starts))
@@ -660,8 +732,17 @@ class ScrollableOutputView:
 
 
 class PromptTui:
-    def __init__(self, cwd: Path | None = None) -> None:
-        self.manager = SessionManager(cwd or Path.cwd())
+    def __init__(self, options: PromptTuiOptions | None = None, cwd: Path | None = None) -> None:
+        resolved_options = options or PromptTuiOptions(cwd=cwd or Path.cwd(), limits=LoopLimits())
+        self.options = resolved_options
+        memory_manager = MemoryManager(resolved_options.cwd / ".manus-mini" / "memory.db")
+        self.manager = SessionManager(
+            resolved_options.cwd,
+            runtime=None,
+            default_limits=resolved_options.limits,
+            dry_run=resolved_options.dry_run,
+            memory_manager=memory_manager,
+        )
         self.is_running = False
         self.is_streaming_artifact = False
         self.visible_trace_count = 0
@@ -752,6 +833,7 @@ class PromptTui:
                 "frame.border": "#6ea8a1",
                 "frame.label": "#f3f0e8",
                 "panel": "bg:#172026 #d7dedb",
+                "process": "bg:#172026 #8fa19c",
                 "input": "bg:#121a20 #f3f0e8",
                 "status": "bg:#0f171b #c7d4cf",
             }

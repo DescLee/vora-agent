@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
+from manus_mini.memory import MemoryManager
 from manus_mini.session import SessionManager
+from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
+from manus_mini.models import LoopLimits
 
 PRINTABLE_KEY_ALIASES = {
     "period": "full_stop",
@@ -121,9 +125,24 @@ def _build_app_class():
         }
         """
 
-        def __init__(self, cwd: Path | None = None) -> None:
+        def __init__(self, cwd: Path | None = None, max_steps: int | None = None, max_react: int | None = None, max_reflect: int | None = None, max_tool_timeout: int | None = None, dry_run: bool = False) -> None:
             super().__init__()
-            self.manager = SessionManager(cwd or Path.cwd())
+            limits = LoopLimits()
+            if max_steps is not None:
+                limits.max_engineering_steps = max_steps
+            if max_react is not None:
+                limits.max_react_iterations = max_react
+            if max_reflect is not None:
+                limits.max_reflection_rounds = max_reflect
+            if max_tool_timeout is not None:
+                limits.max_tool_timeout_seconds = max_tool_timeout
+            resolved_cwd = cwd or Path.cwd()
+            self.manager = SessionManager(
+                resolved_cwd,
+                default_limits=limits,
+                dry_run=dry_run,
+                memory_manager=MemoryManager(resolved_cwd / ".manus-mini" / "memory.db"),
+            )
 
         def on_mount(self) -> None:
             self.call_after_refresh(self._focus_message_input)
@@ -137,7 +156,11 @@ def _build_app_class():
                 with Horizontal(id="main"):
                     yield Static("等待输入...", id="messages")
                     yield Static("当前产物会显示在这里", id="artifact")
-                yield Static("step 0/8 | react 0/5 | reflect 0/3 | idle", id="status")
+                limits = self.manager.runtime.default_limits
+                yield Static(
+                    f"step 0/{limits.max_engineering_steps} | react 0/{limits.max_react_iterations} | reflect 0/{limits.max_reflection_rounds} | idle",
+                    id="status",
+                )
             yield ChatInput(placeholder="继续输入你的要求...", id="input")
             yield Footer()
 
@@ -180,13 +203,42 @@ ManusMiniApp = None
 
 
 def main_textual() -> None:
+    parser = argparse.ArgumentParser(prog="manus-mini-textual")
+    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--max-steps", type=int, default=99)
+    parser.add_argument("--max-react", type=int, default=99)
+    parser.add_argument("--max-reflect", type=int, default=99)
+    parser.add_argument("--max-tool-timeout", type=int, default=30)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
     global ManusMiniApp
     if ManusMiniApp is None:
         ManusMiniApp = _build_app_class()
-    ManusMiniApp().run()
+    ManusMiniApp(
+        cwd=args.cwd,
+        max_steps=args.max_steps,
+        max_react=args.max_react,
+        max_reflect=args.max_reflect,
+        max_tool_timeout=args.max_tool_timeout,
+        dry_run=args.dry_run,
+    ).run()
 
 
 def main() -> None:
-    from manus_mini.prompt_tui import main as prompt_main
-
-    prompt_main()
+    parser = argparse.ArgumentParser(prog="manus-mini")
+    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--max-steps", type=int, default=99)
+    parser.add_argument("--max-react", type=int, default=99)
+    parser.add_argument("--max-reflect", type=int, default=99)
+    parser.add_argument("--max-tool-retries", type=int, default=99)
+    parser.add_argument("--max-tool-timeout", type=int, default=30)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    limits = LoopLimits(
+        max_engineering_steps=args.max_steps,
+        max_react_iterations=args.max_react,
+        max_reflection_rounds=args.max_reflect,
+        max_tool_retries=args.max_tool_retries,
+        max_tool_timeout_seconds=args.max_tool_timeout,
+    )
+    PromptTui(PromptTuiOptions(cwd=args.cwd, limits=limits, dry_run=args.dry_run)).run()

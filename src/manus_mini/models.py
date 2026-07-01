@@ -13,10 +13,11 @@ def new_id(prefix: str) -> str:
 
 
 class LoopLimits(BaseModel):
-    max_engineering_steps: int = 12
-    max_react_iterations: int = 8
-    max_reflection_rounds: int = 5
-    max_tool_retries: int = 2
+    max_engineering_steps: int = 99
+    max_react_iterations: int = 99
+    max_reflection_rounds: int = 99
+    max_tool_retries: int = 99
+    max_tool_timeout_seconds: int = 30
     max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
 
@@ -106,7 +107,16 @@ class TaskState(BaseModel):
     run_id: str = Field(default_factory=lambda: new_id("run"))
     goal: str
     cwd: Path
-    status: Literal["planning", "acting", "observing", "reflecting", "reporting", "done", "failed"] = "planning"
+    status: Literal[
+        "planning",
+        "acting",
+        "observing",
+        "reflecting",
+        "reporting",
+        "waiting_confirmation",
+        "done",
+        "failed",
+    ] = "planning"
     plan: list[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
     observations: list[Observation] = Field(default_factory=list)
@@ -123,8 +133,12 @@ class TaskState(BaseModel):
 
 
 class PendingConfirmation(BaseModel):
-    prompt: str
+    tool_name: str
     tool_call_id: str
+    tool_args: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
+    prompt: str = ""
+    approved: bool = False
 
 
 class CompressionSnapshot(BaseModel):

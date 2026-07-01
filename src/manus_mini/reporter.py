@@ -18,7 +18,16 @@ class Reporter:
         return path
 
     def write_task_report(self, filename: str, task: TaskState, user_input: str) -> Path:
-        return self.write_markdown(filename, render_task_report(task, user_input))
+        report = self.write_markdown(filename, render_task_report(task, user_input))
+        self.write_run_summary(task, user_input)
+        return report
+
+    def write_run_summary(self, task: TaskState, user_input: str) -> Path:
+        run_dir = self.output_dir.parent / "runs" / task.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path = run_dir / "summary.md"
+        path.write_text(render_run_summary(task, user_input), encoding="utf-8")
+        return path
 
     def _available_path(self, filename: str) -> Path:
         candidate = self.output_dir / filename
@@ -88,6 +97,24 @@ def render_task_report(task: TaskState, user_input: str, chunk_size: int = 4000)
         ]
     )
     return "\n".join(sections)
+
+
+def render_run_summary(task: TaskState, user_input: str) -> str:
+    return "\n".join(
+        [
+            "# Manus Mini Run Summary",
+            "",
+            f"- goal: {redact_sensitive_text(user_input)}",
+            f"- status: {task.status}",
+            f"- steps: {task.step_count}",
+            f"- observations: {len(task.observations)}",
+            f"- artifacts: {len(task.artifacts)}",
+            "",
+            "## Result",
+            "",
+            redact_sensitive_text(task.result or "暂无结果。"),
+        ]
+    )
 
 
 def markdown_chunks(content: str, chunk_size: int = 4000) -> list[str]:

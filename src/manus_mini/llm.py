@@ -16,6 +16,8 @@ class LLMResult(BaseModel):
     reasoning_content: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_arguments: dict[str, str] = Field(default_factory=dict)
+    source_request: dict[str, Any] = Field(default_factory=dict)
+    source_response: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMClient:
@@ -120,6 +122,30 @@ def tool_schema(name: str) -> dict[str, Any]:
             "required": ["path", "content"],
             "additionalProperties": False,
         },
+        "append_file": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative output file path inside the workspace."},
+                "content": {"type": "string", "description": "Text to append."},
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes allowed for the resulting content.",
+                    "default": 1000000,
+                    "minimum": 1,
+                },
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+        "make_directory": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative directory path inside the workspace."}
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
     }
     return schemas.get(name, {"type": "object", "properties": {}, "additionalProperties": True})
 
@@ -200,11 +226,17 @@ class MockLLMClient:
                     "再经过 reflection 与外层工程循环生成调研、总结或代码相关产物。"
                     "项目已经包含 prompt_toolkit TUI、OpenAI-compatible/Mock LLM 配置、文件工具、"
                     "工具调度、长期记忆、上下文压缩基础、运行日志、产物输出和过程 trace 展示。"
-                )
+                ),
+                source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+                source_response={"mode": "mock", "content": "project summary"},
             )
 
         if tool_text:
-            return LLMResult(content=f"已根据工具结果生成草稿：{tool_text}")
+            return LLMResult(
+                content=f"已根据工具结果生成草稿：{tool_text}",
+                source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+                source_response={"mode": "mock", "content": tool_text},
+            )
 
         if "a.md" in user_text and "read_file" in tool_names:
             return LLMResult(
@@ -214,7 +246,9 @@ class MockLLMClient:
                         name="read_file",
                         args={"path": "a.md"},
                     )
-                ]
+                ],
+                source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+                source_response={"mode": "mock", "content": "tool_call: read_file"},
             )
 
         if "docs" in user_text and "list_files" in tool_names:
@@ -225,10 +259,16 @@ class MockLLMClient:
                         name="list_files",
                         args={"path": "docs"},
                     )
-                ]
+                ],
+                source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+                source_response={"mode": "mock", "content": "tool_call: list_files"},
             )
 
-        return LLMResult(content=f"报告草稿：{user_text or '已生成'}")
+        return LLMResult(
+            content=f"报告草稿：{user_text or '已生成'}",
+            source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+            source_response={"mode": "mock", "content": user_text or "已生成"},
+        )
 
 
 class OpenAICompatibleLLMClient(LLMClient):
@@ -282,7 +322,7 @@ class OpenAICompatibleLLMClient(LLMClient):
 
         try:
             message = self._extract_message(body)
-            return self._parse_message(message)
+            return self._parse_message(message, payload=payload, body=body, tool_names=tool_names)
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise LLMRequestError("LLM returned malformed response") from error
 
@@ -295,7 +335,13 @@ class OpenAICompatibleLLMClient(LLMClient):
             raise ValueError("missing message")
         return message
 
-    def _parse_message(self, message: dict[str, Any]) -> LLMResult:
+    def _parse_message(
+        self,
+        message: dict[str, Any],
+        payload: dict[str, Any],
+        body: dict[str, Any],
+        tool_names: list[str],
+    ) -> LLMResult:
         tool_calls: list[ToolCall] = []
         tool_call_arguments: dict[str, str] = {}
         raw_tool_calls = message.get("tool_calls") or []
@@ -335,6 +381,8 @@ class OpenAICompatibleLLMClient(LLMClient):
             reasoning_content=message.get("reasoning_content") or "",
             tool_calls=tool_calls,
             tool_call_arguments=tool_call_arguments,
+            source_request={"messages": payload["messages"], "tool_names": list(tool_names), "payload": payload},
+            source_response=body,
         )
 
 

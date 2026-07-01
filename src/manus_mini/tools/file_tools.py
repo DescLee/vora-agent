@@ -153,6 +153,19 @@ def _looks_binary(content: bytes) -> bool:
     return b"\x00" in sample
 
 
+def _preview_existing_text(target: Path, limit: int = 160) -> str:
+    if not target.exists() or not target.is_file():
+        return ""
+    try:
+        content = target.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+    compact = " ".join(content.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
+
+
 class WriteFileTool(BaseTool):
     name = "write_file"
     description = "Write a file inside the workspace."
@@ -191,6 +204,7 @@ class WriteFileTool(BaseTool):
 
         target = resolve_workspace_path(workspace, path)
         relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        previous_preview = _preview_existing_text(target)
         if _is_protected_write_path(Path(relative_path)):
             return ToolResult(
                 tool_name=self.name,
@@ -214,6 +228,7 @@ class WriteFileTool(BaseTool):
             ok=True,
             summary=f"wrote {path}",
             written_path=relative_path,
+            data={"previous_content_preview": previous_preview},
         )
 
     def resource_keys(self, **kwargs: Any) -> list[str]:
@@ -223,6 +238,72 @@ class WriteFileTool(BaseTool):
             return []
         target = resolve_workspace_path(workspace, path)
         return [target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()]
+
+
+class AppendFileTool(BaseTool):
+    name = "append_file"
+    description = "Append text to a file inside the workspace."
+    risk_level = "write"
+    requires_confirmation = True
+    is_read_only = False
+
+    def describe_preview(self, **kwargs: Any) -> str:
+        path = kwargs.get("path", "<missing>")
+        return f"Append {path}"
+
+    def run(self, **kwargs) -> ToolResult:
+        workspace = Path(kwargs["workspace"])
+        path = kwargs.get("path")
+        content = kwargs.get("content")
+        if not path:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
+        if content is None:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: content", error_code="INVALID_TOOL_PARAMS")
+        if not bool(kwargs.get("confirmed", False)):
+            raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
+
+        target = resolve_workspace_path(workspace, path)
+        relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        previous_preview = _preview_existing_text(target)
+        if _is_protected_write_path(Path(relative_path)):
+            return ToolResult(tool_name=self.name, ok=False, summary=f"protected write target: {relative_path}", error_code="PROTECTED_PATH")
+        encoded = str(content).encode(kwargs.get("encoding", "utf-8"))
+        max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_WRITE_BYTES)
+        if target.exists():
+            existing = target.read_bytes()
+            if len(existing) + len(encoded) > max_bytes:
+                return ToolResult(tool_name=self.name, ok=False, summary=f"content too large: {len(existing) + len(encoded)} bytes exceeds {max_bytes} bytes", error_code="CONTENT_TOO_LARGE")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("ab") as handle:
+            handle.write(encoded)
+        return ToolResult(
+            tool_name=self.name,
+            ok=True,
+            summary=f"appended {path}",
+            written_path=relative_path,
+            data={"previous_content_preview": previous_preview},
+        )
+
+
+class MakeDirectoryTool(BaseTool):
+    name = "make_directory"
+    description = "Create a directory inside the workspace."
+    risk_level = "safe"
+    is_read_only = False
+
+    def describe_preview(self, **kwargs: Any) -> str:
+        path = kwargs.get("path", "<missing>")
+        return f"Create directory {path}"
+
+    def run(self, **kwargs) -> ToolResult:
+        workspace = Path(kwargs["workspace"])
+        path = kwargs.get("path")
+        if not path:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
+        target = resolve_workspace_path(workspace, path)
+        target.mkdir(parents=True, exist_ok=True)
+        relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        return ToolResult(tool_name=self.name, ok=True, summary=f"created directory {path}", written_path=relative_path)
 
 
 def _is_protected_write_path(relative_path: Path) -> bool:
