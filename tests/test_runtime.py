@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import re
+import tempfile
 from time import perf_counter, sleep
 
 import pytest
@@ -30,6 +31,19 @@ def test_runtime_turns_user_request_into_agent_reply(tmp_path: Path) -> None:
     assert any(observation.tool_call_id == "call-read-a" for observation in result.active_task.observations)
     assert any(event.phase == "llm" for event in result.active_task.trace_events)
     assert any(event.data.get("tool_name") == "read_file" for event in result.active_task.trace_events)
+
+
+def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+
+    result = runtime.on_user_message("你好，今天状态怎么样？", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.active_task.plan[0].intent == "chat"
+    assert not [event for event in result.active_task.trace_events if event.phase == "tool"]
+    assert "你好" in result.messages[-1].content
 
 
 def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
@@ -74,9 +88,11 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     assert "hello world" in content
     assert "## 4. 最终产物" in content
     assert result.messages[-1].content in content
-    summary_path = tmp_path / "runs" / result.active_task.run_id / "summary.md"
-    assert summary_path.exists()
-    assert "Manus Mini Run Summary" in summary_path.read_text(encoding="utf-8")
+    summary_dir = tmp_path / "runs" / result.active_task.run_id
+    summary_files = list(summary_dir.glob("summary-*.md"))
+    assert len(summary_files) == 1
+    assert re.match(r"^summary-\d{8}-\d{6}\.md$", summary_files[0].name)
+    assert "Manus Mini Run Summary" in summary_files[0].read_text(encoding="utf-8")
 
 
 def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path) -> None:
@@ -88,6 +104,18 @@ def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path
     assert result.active_task is not None
     filename = result.active_task.artifacts[-1].path.name
     assert re.match(r"^\d{8}-\d{6}-run-[a-f0-9]{12}\.md$", filename)
+
+
+def test_runtime_defaults_to_temp_reporter_output_dir_under_pytest(tmp_path: Path) -> None:
+    runtime = AgentRuntime()
+
+    assert runtime.reporter.output_dir == Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime.on_user_message("你好", session)
+
+    assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "outputs").exists()
 
 
 def test_react_loop_raises_when_budget_is_zero(tmp_path: Path) -> None:
@@ -556,6 +584,24 @@ def test_runtime_exposes_active_task_before_reflection_runs(tmp_path: Path) -> N
     assert result.active_task.result == "ok"
 
 
+def test_runtime_updates_plan_step_statuses_during_execution(tmp_path: Path) -> None:
+    class InspectingReflectionLoop:
+        def run(self, task: TaskState, session: SessionState) -> ReflectionResult:  # noqa: ARG002
+            assert task.plan
+            assert task.plan[0].status == "running"
+            return ReflectionResult(accepted=True, content="ok", reason="accepted")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.reflection_loop = InspectingReflectionLoop()
+
+    result = runtime.on_user_message("写报告", session)
+
+    assert result.active_task is not None
+    assert result.active_task.plan
+    assert all(step.status == "done" for step in result.active_task.plan)
+
+
 def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
@@ -570,6 +616,7 @@ def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     assert result.active_task is not None
     assert result.active_task.status == "done"
     assert result.messages[-1].content.startswith("已使用规则兜底生成草稿")
+    assert "兜底原因：malformed output" in result.messages[-1].content
     assert any(
         event.phase == "llm" and "falling back to rule-based draft" in event.message
         for event in result.active_task.trace_events
@@ -619,6 +666,43 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     assert request_rows[0]["request"]["tool_names"]
     assert response_rows[0]["request"]["messages"]
     assert "response" in response_rows[0]
+
+
+def test_runtime_omits_successful_read_file_content_from_logs(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("secret file content", encoding="utf-8")
+
+    class ReadReadmeLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    content="我先读取 README。",
+                    tool_calls=[ToolCall(id="call-read-readme", name="read_file", args={"path": "README.md"})],
+                )
+            return LLMResult(content="读取完成")
+
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime.react_loop.llm = ReadReadmeLLM()
+    session = SessionState.create(cwd=tmp_path)
+
+    result = runtime.on_user_message("读取 README.md", session)
+
+    assert result.active_task is not None
+    read_events = [
+        event
+        for event in result.active_task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert read_events
+    assert "content_preview" not in read_events[-1].data
+
+    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "secret file content" not in log_text
+    assert "[read_file result omitted from logs]" in log_text
 
 
 def test_runtime_stops_when_total_runtime_limit_is_exceeded(tmp_path: Path) -> None:

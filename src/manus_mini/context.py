@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Sequence
 
-from manus_mini.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation
+from manus_mini.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation, SessionState
 from manus_mini.redaction import redact_sensitive_text
 
 
@@ -119,6 +119,17 @@ def estimate_message_tokens(messages: Sequence[Message]) -> int:
     return sum(max(1, len(message.content) // 2) for message in messages)
 
 
+def estimate_context_usage(messages: Sequence[Message], token_limit: int | None) -> tuple[int, float | None]:
+    estimated_tokens = estimate_message_tokens(messages)
+    if token_limit is None or token_limit <= 0:
+        return estimated_tokens, None
+    return estimated_tokens, estimated_tokens / token_limit
+
+
+def estimate_session_context_usage(session: SessionState, token_limit: int | None) -> tuple[int, float | None]:
+    return estimate_context_usage(session.messages, token_limit)
+
+
 def build_context_bundle(
     current_user_message: Message,
     recent_messages: Sequence[Message],
@@ -207,6 +218,8 @@ __all__ = [
     "build_context_bundle",
     "compact_messages",
     "compact_messages_with_snapshot",
+    "estimate_context_usage",
+    "estimate_session_context_usage",
     "estimate_message_tokens",
     "estimate_tokens",
     "validate_tool_call_pairs",

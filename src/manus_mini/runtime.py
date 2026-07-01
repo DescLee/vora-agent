@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
 from manus_mini.logging import EventLogger
-from manus_mini.context import build_context_bundle, estimate_message_tokens
+from manus_mini.context import build_context_bundle, estimate_session_context_usage
 from manus_mini.models import AgentError, Artifact, LoopLimits, Message, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.planner import Planner
@@ -37,9 +39,14 @@ class AgentRuntime:
         self.react_loop = ReActLoop(dry_run=dry_run, logger=self.logger)
         self.reflection_loop = ReflectionLoop(react_loop=self.react_loop)
         self.planner = Planner()
-        self.reporter = reporter or Reporter(Path("outputs"))
+        self.reporter = reporter or Reporter(self._default_reporter_output_dir())
         self.dry_run = dry_run
         self.memory_manager = memory_manager or MemoryManager(":memory:")
+
+    def _default_reporter_output_dir(self) -> Path:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
+        return Path("outputs")
 
     def on_user_message(
         self,
@@ -78,10 +85,11 @@ class AgentRuntime:
             )
         )
         session.active_task = task
+        if self._is_chat_only_task(task):
+            return self._complete_chat_task(content, session, task)
         started_at = monotonic()
         last_result = ""
-        estimated_tokens = estimate_message_tokens(session.messages)
-        context_usage = estimated_tokens / task.limits.max_estimated_tokens if task.limits.max_estimated_tokens else 1.0
+        estimated_tokens, context_usage = estimate_session_context_usage(session, task.limits.max_estimated_tokens)
         self.logger.record(
             task.run_id,
             {
@@ -89,7 +97,7 @@ class AgentRuntime:
                 "estimated_tokens": estimated_tokens,
                 "model_context_limit": task.limits.max_estimated_tokens,
                 "context_usage": context_usage,
-                "compression_triggered": context_usage >= 0.70,
+                "compression_triggered": context_usage is not None and context_usage >= 0.70,
                 "message_count": len(session.messages),
                 "memory_refs": list(session.memory_refs),
             },
@@ -100,6 +108,7 @@ class AgentRuntime:
                 self._mark_runtime_timeout(task)
                 break
             task.step_count += 1
+            self._mark_plan_running(task)
             task.status = "reflecting"
             self.logger.record(
                 task.run_id,
@@ -164,10 +173,12 @@ class AgentRuntime:
                     self._mark_runtime_timeout(task)
                     break
                 if reflection.accepted:
+                    self._mark_plan_done(task)
                     task.status = "done"
                     break
                 if reflection.decision == "replan":
                     task.plan = self.planner.build_plan(f"{content}\n{reflection.reason}", session)
+                    self._mark_plan_running(task)
                     task.trace_events.append(
                         TraceEvent(
                             phase="runtime",
@@ -219,6 +230,58 @@ class AgentRuntime:
             session.pending_confirmation = None
         session.active_task = task
         return session
+
+    def _mark_plan_running(self, task: TaskState) -> None:
+        if not task.plan:
+            return
+        index = min(max(task.current_step_index, 0), len(task.plan) - 1)
+        for position, step in enumerate(task.plan):
+            if step.status == "done":
+                continue
+            if position < index:
+                step.status = "done"
+            elif position == index:
+                step.status = "running"
+            else:
+                step.status = "pending"
+
+    def _mark_plan_done(self, task: TaskState) -> None:
+        for step in task.plan:
+            if step.status != "skipped":
+                step.status = "done"
+
+    def _is_chat_only_task(self, task: TaskState) -> bool:
+        return bool(task.plan) and all(step.intent == "chat" for step in task.plan)
+
+    def _complete_chat_task(self, content: str, session: SessionState, task: TaskState) -> SessionState:
+        for step in task.plan:
+            step.status = "done"
+        task.step_count = 1
+        task.status = "done"
+        task.result = self._chat_reply(content)
+        task.trace_events.append(
+            TraceEvent(
+                phase="llm",
+                message="Planner routed message to direct chat",
+                data={"content_preview": task.result, "tool_calls": []},
+            )
+        )
+        self.logger.record(
+            task.run_id,
+            {
+                "type": "result",
+                "status": task.status,
+                "chat_only": True,
+            },
+        )
+        session.messages.append(Message.agent(task.result))
+        session.active_task = task
+        return session
+
+    def _chat_reply(self, content: str) -> str:
+        if any(keyword in content for keyword in ["你好", "您好", "hello", "hi"]):
+            return "你好，我在。你可以直接继续说需求；如果需要我查看当前项目或文件，再明确告诉我。"
+        return f"我先按普通对话理解，不读取本地文件。你刚才说的是：{content}"
 
     def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
         if self.memory_manager is None:

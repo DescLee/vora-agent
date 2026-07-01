@@ -23,7 +23,7 @@ from prompt_toolkit.widgets import Frame, Label, TextArea
 from rich.console import Console
 from rich.markdown import Markdown
 
-from manus_mini.context import estimate_message_tokens
+from manus_mini.context import estimate_context_usage
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.redaction import redact_sensitive_text
@@ -96,7 +96,6 @@ def format_user_question(session: SessionState) -> str:
 
 def format_process(
     session: SessionState,
-    max_events: int = 8,
     visible_trace_count: int | None = None,
     full_history: bool = False,
 ) -> str:
@@ -110,12 +109,9 @@ def format_process(
 
     sections = [
         format_task_overview(task),
-        format_tool_activity(task, visible_events=trace_events, limit=None if full_history else 5),
-        format_recent_events(
-            trace_events,
-            max_events=len(trace_events) if full_history else max_events,
-            total_events=len(task.trace_events),
-        ),
+        format_plan(task),
+        format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5),
+        format_recent_process(task.trace_events),
     ]
     return "\n\n".join(section for section in sections if section)
 
@@ -134,6 +130,181 @@ def format_task_overview(task: TaskState) -> str:
     )
 
 
+def format_plan(task: TaskState) -> str:
+    if not task.plan:
+        return "执行计划\n- 暂无计划。"
+    status_labels = {
+        "pending": "待执行",
+        "running": "进行中",
+        "done": "已完成",
+        "skipped": "已跳过",
+        "failed": "失败",
+    }
+    lines = ["执行计划"]
+    running_seen = False
+    for index, step in enumerate(task.plan, start=1):
+        status = step.status
+        if status == "pending" and not running_seen and task.status not in {"done", "failed"}:
+            current_index = min(max(task.current_step_index + 1, 1), len(task.plan))
+            if index == current_index:
+                status = "running"
+                running_seen = True
+        label = status_labels.get(status, status)
+        lines.append(f"- [{label}] {step.description}")
+    return "\n".join(lines)
+
+
+def format_llm_activity(events: list[TraceEvent]) -> str:
+    lines = []
+    for event in events:
+        if event.phase != "llm":
+            continue
+        preview = event.data.get("content_preview")
+        if not preview:
+            continue
+        lines.append(f"- {format_display_value(str(preview), limit=220)}")
+    if not lines:
+        return "LLM 返回\n- 暂无模型文本。"
+    return "\n".join(["LLM 返回", *lines[-5:]])
+
+
+def format_llm_tool_rounds(task: TaskState, events: list[TraceEvent], limit: int | None = 5) -> str:
+    rounds = []
+    for index, event in enumerate(events):
+        if event.phase != "llm":
+            continue
+        iteration = event.data.get("iteration")
+        next_llm_index = next(
+            (
+                later_index
+                for later_index in range(index + 1, len(events))
+                if events[later_index].phase == "llm"
+            ),
+            len(events),
+        )
+        round_events = events[index + 1:next_llm_index]
+        rounds.append(format_llm_tool_round(event, round_events, task, iteration))
+    if not rounds:
+        return format_tool_activity(task, visible_events=events, limit=limit)
+    visible_rounds = rounds if limit is None else rounds[-limit:]
+    return "\n\n".join(visible_rounds)
+
+
+def format_llm_tool_round(llm_event: TraceEvent, following_events: list[TraceEvent], task: TaskState, iteration) -> str:
+    title = f"LLM 回合 {iteration}" if iteration else "LLM 回合"
+    lines = [title, "LLM 返回"]
+    preview = llm_event.data.get("content_preview")
+    lines.append(f"- {format_display_value(str(preview), limit=220)}" if preview else "- 暂无模型文本。")
+
+    tool_calls = [call for call in llm_event.data.get("tool_calls", []) or [] if isinstance(call, dict)]
+    if tool_calls:
+        batch_groups = group_tool_calls_by_batch(tool_calls, following_events)
+        lines.extend(format_tool_batch_sections(batch_groups, following_events, task, iteration))
+    return "\n".join(lines)
+
+
+def group_tool_calls_by_batch(tool_calls: list[dict], events: list[TraceEvent]) -> list[tuple[int, list[dict]]]:
+    call_id_to_call = {str(call.get("id", f"call-{index}")): call for index, call in enumerate(tool_calls, start=1)}
+    planned_batches = _find_planned_batches(events)
+    if planned_batches:
+        grouped: list[tuple[int, list[dict]]] = []
+        assigned: set[str] = set()
+        for batch_index, batch_ids in enumerate(planned_batches, start=1):
+            batch_calls = [
+                call_id_to_call[call_id]
+                for call_id in batch_ids
+                if call_id in call_id_to_call
+            ]
+            if batch_calls:
+                grouped.append((batch_index, batch_calls))
+                assigned.update(str(call.get("id", "")) for call in batch_calls)
+        leftovers = [call for call in tool_calls if str(call.get("id", "")) not in assigned]
+        if leftovers:
+            grouped.append((len(grouped) + 1, leftovers))
+        return grouped
+    return [(1, list(tool_calls))]
+
+
+def _find_planned_batches(events: list[TraceEvent]) -> list[list[str]]:
+    for event in events:
+        if event.phase != "tool":
+            continue
+        batches = event.data.get("batches")
+        if isinstance(batches, list) and batches:
+            planned: list[list[str]] = []
+            for batch in batches:
+                if not isinstance(batch, list):
+                    continue
+                batch_ids = [str(item) for item in batch if str(item)]
+                if batch_ids:
+                    planned.append(batch_ids)
+            if planned:
+                return planned
+    return []
+
+
+def format_tool_batch_sections(
+    batch_groups: list[tuple[int, list[dict]]],
+    events: list[TraceEvent],
+    task: TaskState,
+    iteration,
+) -> list[str]:
+    if not batch_groups:
+        return ["工具调度", "- 暂无工具调用。"]
+
+    total_batches = len(batch_groups)
+    lines = ["工具调度", f"- 共 {total_batches} 个批次"]
+    for batch_index, batch_calls in batch_groups:
+        lines.append(f"- 第 {batch_index} 批（{len(batch_calls)} 个工具）")
+        batch_lines = format_tool_batch_lines(batch_index, iteration, batch_calls, events, task)
+        lines.extend([f"  {line}" for line in batch_lines] or ["  - 等待工具返回。"])
+    return lines
+
+
+def format_tool_batch_lines(batch_index: int, iteration, tool_calls: list[dict], events: list[TraceEvent], task: TaskState) -> list[str]:
+    call_ids = {str(call.get("id", "unknown")) for call in tool_calls}
+    prefix = f"{iteration}.{batch_index}" if iteration else str(batch_index)
+    lines = []
+    event_by_call_id = {
+        str(event.data.get("tool_call_id") or ""): event
+        for event in events
+        if event.phase == "tool" and str(event.data.get("tool_call_id") or "") in call_ids
+    }
+    observation_by_call = {
+        observation.tool_call_id: observation
+        for observation in task.observations
+        if observation.tool_call_id in call_ids
+    }
+    for event in events:
+        if event.phase == "tool" and str(event.data.get("tool_call_id") or "") in call_ids:
+            tool_call_id = str(event.data.get("tool_call_id") or "")
+            tool_name = event.data.get("tool_name", "unknown")
+            status = format_tool_return_status(event.data)
+            summary = event.data.get("summary") or event.message
+            preview = event.data.get("content_preview") or ""
+            line = f"- 结果 {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
+            if preview:
+                line += f"\n  返回预览：{format_display_value(str(preview))}"
+            lines.append(line)
+    if not lines:
+        lines.append(f"- 结果 {prefix} 等待工具返回。")
+    call_lines = []
+    for call in tool_calls:
+        tool_call_id = str(call.get("id", "unknown"))
+        name = str(call.get("name", "unknown"))
+        args = format_inline_args(call.get("args", {}))
+        call_line = f"- 调用 {prefix} {name}({tool_call_id}) {args}".rstrip()
+        call_lines.append(call_line)
+        observation = observation_by_call.get(tool_call_id)
+        if observation is not None and tool_call_id not in event_by_call_id:
+            status = "成功" if observation.ok else "失败"
+            result_line = f"- 结果 {prefix} {tool_call_id} {status}: {redact_sensitive_text(observation.summary)}"
+            if observation.content:
+                result_line += f"\n  返回预览：{redact_sensitive_text(_short_text(observation.content))}"
+            lines.append(result_line)
+    return [*call_lines, *lines]
+
+
 def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | None = None, limit: int | None = 5) -> str:
     events = visible_events if visible_events is not None else task.trace_events
     tool_call_lines = []
@@ -145,6 +316,18 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
             name = call.get("name", "unknown")
             args = format_inline_args(call.get("args", {}))
             tool_call_lines.append(f"- {name}({tool_call_id}) {args}".rstrip())
+
+    tool_calls = [
+        call
+        for event in events
+        if event.phase == "llm"
+        for call in event.data.get("tool_calls", []) or []
+        if isinstance(call, dict)
+    ]
+    if tool_calls:
+        batch_groups = group_tool_calls_by_batch(tool_calls, events)
+        sections = ["工具活动", *format_tool_batch_sections(batch_groups, events, task, iteration=None)]
+        return "\n".join(sections)
 
     tool_return_lines = []
     for event in events:
@@ -195,31 +378,24 @@ def format_tool_return_status(data: dict) -> str:
     return "成功" if data.get("ok") else "失败"
 
 
+def format_recent_process(events: list[TraceEvent]) -> str:
+    if not events:
+        return "最近过程（折叠）\n- 暂无过程记录。"
+    latest = format_event_summary(events[-1])
+    total = len(events)
+    hidden = max(0, total - 1)
+    lines = ["最近过程（折叠）", f"- 共 {total} 条过程记录"]
+    if hidden:
+        lines.append(f"- 已折叠 {hidden} 条较早过程")
+    lines.append(f"- 最新：{latest}")
+    return "\n".join(lines)
+
+
 def _short_text(content: str, limit: int = 160) -> str:
     compact = " ".join(content.split())
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1] + "…"
-
-
-def format_recent_events(
-    events: list[TraceEvent],
-    max_events: int = 8,
-    total_events: int | None = None,
-) -> str:
-    if not events:
-        return "最近过程\n- 等待执行..."
-
-    visible_events = events[-max_events:]
-    lines = ["最近过程"]
-    total = total_events if total_events is not None else len(events)
-    if len(events) > max_events:
-        lines.append(f"- 仅展示最近 {max_events} 条，已隐藏 {len(events) - max_events} 条较早过程。")
-    if total > len(events):
-        lines.append(f"- 正在逐步展示过程：已显示 {len(events)}/{total} 条。")
-    for index, event in enumerate(visible_events, start=max(1, len(events) - len(visible_events) + 1)):
-        lines.append(f"- {index}. {format_event_summary(event)}")
-    return "\n".join(lines)
 
 
 def format_event_details(data: dict, ignored_keys: set[str] | None = None) -> str:
@@ -369,6 +545,8 @@ def format_welcome(limits: LoopLimits) -> str:
             "- Enter 发送",
             "- Shift+Enter 换行",
             "- 输入 `压缩上下文` 或 `/compact` 可手动压缩上下文",
+            "- 输入 `/save-context` 可在项目根目录保存当前上下文快照",
+            "- 输入 `/help` 可查看全部指令",
             "- Tab 切换输入区和输出区",
             "- Ctrl-C 退出",
         ]
@@ -467,8 +645,10 @@ def format_context_usage(session: SessionState) -> str:
         limit = session.active_task.limits.max_estimated_tokens
     if limit is None or limit <= 0:
         return "上下文 --"
-    used = estimate_message_tokens(session.messages)
-    percent = min(999, round((used / limit) * 100))
+    _, usage = estimate_context_usage(session.messages, limit)
+    if usage is None:
+        return "上下文 --"
+    percent = min(999, round(usage * 100))
     return f"上下文 {percent}%"
 
 
@@ -732,7 +912,12 @@ class ScrollableOutputView:
 
 
 class PromptTui:
-    def __init__(self, options: PromptTuiOptions | None = None, cwd: Path | None = None) -> None:
+    def __init__(
+        self,
+        options: PromptTuiOptions | None = None,
+        cwd: Path | None = None,
+        initial_session: SessionState | None = None,
+    ) -> None:
         resolved_options = options or PromptTuiOptions(cwd=cwd or Path.cwd(), limits=LoopLimits())
         self.options = resolved_options
         memory_manager = MemoryManager(resolved_options.cwd / ".manus-mini" / "memory.db")
@@ -742,13 +927,18 @@ class PromptTui:
             default_limits=resolved_options.limits,
             dry_run=resolved_options.dry_run,
             memory_manager=memory_manager,
+            initial_session=initial_session,
         )
         self.is_running = False
         self.is_streaming_artifact = False
         self.visible_trace_count = 0
         self.trace_reveal_batch_size = 3
         self.follow_output = True
-        initial_output = format_welcome(self.manager.runtime.default_limits)
+        initial_output = (
+            format_transcript(self.manager.current, show_process=False)
+            if initial_session is not None and initial_session.messages
+            else format_welcome(self.manager.runtime.default_limits)
+        )
         self.output_line_starts = build_line_starts(initial_output)
         self.output_display_width: int | None = None
         self.output_display_line_starts = self.output_line_starts

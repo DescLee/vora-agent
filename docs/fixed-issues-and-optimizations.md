@@ -119,6 +119,36 @@
 - 优化：TUI 状态区增加上下文占比展示，基于当前 session 消息估算 token 使用比例。
 - 验证：测试覆盖状态栏显示上下文使用比例。
 
+### 2.12.1 上下文占比运行中一直显示 0%
+
+- 现象：任务已经执行多轮 ReAct、产生大量 LLM/tool 过程后，状态栏仍显示 `上下文 0%`。
+- 根因：状态栏只统计 `session.messages`，没有统计当前 `active_task` 中的 trace events、tool observations 和运行结果。
+- 修复：上下文估算纳入当前任务运行过程，包括 LLM 返回、工具调用参数、工具结果摘要和 observations。
+- 验证：测试覆盖消息很少但 active task 过程较多时，上下文占比会随运行过程上升。
+
+### 2.13 Planner 计划与执行过程解释不足
+
+- 现象：Planner 已生成计划，但 TUI 执行过程里看不到完整计划，也不知道当前执行到了哪一步。
+- 修复：
+  - 执行过程区新增“执行计划”，展示每个 `PlanStep` 的状态。
+  - Runtime 在执行前将当前计划步骤标记为 `running`，任务完成后标记为 `done`。
+  - TUI 展示使用真实 `PlanStep.status`，不再只由展示层猜测。
+- 验证：测试覆盖执行中 plan step 为 `running`，完成后 plan step 为 `done`。
+
+### 2.14 LLM 返回内容和工具调用关系不清晰
+
+- 现象：执行过程只突出工具调用，用户看不到 LLM 为什么要调用这些工具。
+- 修复：执行过程改为按 LLM 回合分组展示：
+  - 先展示“LLM 返回”。
+  - 再展示对应“工具调用”。
+  - 最后展示“调用进度或结果”。
+- 示例：
+  - `LLM 回合 1`
+  - `LLM 返回：我需要先确认 README 内容。`
+  - `工具调用：read_file(call-read) path: README.md`
+  - `调用进度或结果：read_file(call-read) 成功，read README.md`
+- 验证：测试覆盖 LLM 返回、工具调用、调用结果的展示顺序。
+
 ## 3. TUI 滚动与可读性
 
 ### 3.1 输出区可视窗口太小，历史内容不好查看
@@ -274,6 +304,16 @@
 - 修复：各阶段默认循环/重试上限提升，`MAX_REACT_ITERATIONS_REACHED` 对应的 ReAct 上限设置为 99。
 - 验证：测试覆盖 CLI 默认参数和欢迎页运行设置。
 
+### 5.8 Planner 没有阻止闲聊触发文件工具
+
+- 现象：用户只是闲聊时，Agent 仍可能调用 `list_files` 查询当前目录。
+- 根因：Planner 只生成计划描述，ReAct 仍直接依赖 LLM 决定是否调用工具。
+- 修复：
+  - Planner 增加 `chat` 意图。
+  - Runtime 对明确寒暄/闲聊请求走直接回复路径，不进入 ReAct 工具链。
+  - 文件读取、项目分析、写作、修改等任务仍走正常工具链。
+- 验证：测试覆盖闲聊不产生 tool trace，且文件读取仍能调用 `read_file`。
+
 ## 6. 文件工具与 workspace 安全
 
 ### 6.1 write_file 执行失败：`'workspace'`
@@ -302,6 +342,27 @@
   - 写工具底层仍要求确认，防止直接调用绕过安全保护。
 - 验证：`tests/test_tools.py` 覆盖路径逃逸、二进制、超大内容、敏感路径和确认逻辑。
 
+### 6.4 list_files 未尊重 `.gitignore`
+
+- 现象：Agent 分析项目时，`list_files` 会把 `outputs/`、`runs/`、`build/`、`.manus-mini/` 等运行产物也列入结果，导致文件列表过大、上下文膨胀，并增加 LLM 请求失败概率。
+- 根因：文件枚举只过滤了少量固定噪声目录，没有读取 workspace 根目录的 `.gitignore`。
+- 修复：
+  - `list_files` 加载 `.gitignore` 规则。
+  - 支持常见目录规则、通配符规则和否定规则，例如 `outputs/`、`*.log`、`.env.*`、`!.env.example`。
+  - 当前项目实测 `list_files` 从 1930 个文件降到 65 个文件，并过滤 `outputs/`、`runs/`、`build/`。
+- 验证：测试覆盖 `.gitignore` 中的目录、通配符和否定规则。
+
+### 6.5 无 `.gitignore` 时默认忽略常见依赖和构建产物
+
+- 现象：部分项目没有 `.gitignore` 或规则不完整时，`list_files` 仍可能扫出大量依赖、缓存和构建产物。
+- 修复：扩充默认噪声目录，覆盖常见生态：
+  - Python：`__pycache__`、`.venv`、`.tox`、`.nox`、`.pytest_cache`、`htmlcov`。
+  - JS/前端：`node_modules`、`dist`、`build`、`.next`、`.nuxt`、`.turbo`、`.parcel-cache`。
+  - Java/JVM：`target`、`.gradle`、`.mvn`。
+  - Go/.NET/通用：`vendor`、`pkg`、`bin`、`obj`、`out`、`coverage`、`.cache`。
+  - IDE/本地运行产物：`.idea`、`.vscode`、`runs`、`outputs`、`.manus-mini`。
+- 验证：测试覆盖无 `.gitignore` 时 Java/JS/Go/Python 等依赖和构建目录会被过滤。
+
 ## 7. LLM 兼容与配置
 
 ### 7.1 增加 `.env` 配置
@@ -325,6 +386,16 @@
 - 优化：MockLLM 支持“获取当前项目并说明作用”和“新建 helloworld.py”这类面试演示场景。
 - 价值：不配置真实 LLM 时，也能稳定演示核心 ReAct + tool flow。
 - 验证：runtime 测试和手工命令验证通过。
+
+### 7.5 LLM 请求默认超时时间偏短
+
+- 现象：真实 LLM 请求经常出现 `LLM request timed out`，尤其是长上下文、多工具结果或模型响应较慢时。
+- 根因：默认 `LLM_TIMEOUT_SECONDS=30` 偏保守，复杂任务容易在模型仍在生成时被本地 HTTP 客户端中断。
+- 修复：
+  - 默认 LLM 请求超时提升到 120 秒。
+  - `.env.example`、README 示例和本地 `.env` 同步更新为 `LLM_TIMEOUT_SECONDS=120`。
+  - 保留环境变量覆盖能力，用户仍可按需调大或调小。
+- 验证：测试覆盖未配置 `.env` 时默认超时为 120 秒。
 
 ## 8. 上下文、记忆与输出报告
 
@@ -357,6 +428,44 @@
 - 行为：触发后压缩当前会话历史，并把压缩摘要作为系统消息回写到对话区。
 - 验证：测试覆盖手动压缩命令识别、压缩摘要生成和 session 消息更新。
 
+### 8.5.1 上下文占比与自动压缩口径统一
+
+- 现象：TUI 状态栏的上下文占比、runtime 日志里的压缩触发比例、自动压缩使用的估算口径不一致，容易出现“状态栏已经很高，但自动压缩没有同步触发”的错觉。
+- 修复：抽取共享上下文使用率计算函数，TUI 和 runtime 共用同一口径；自动压缩只基于会话消息估算，不再混入运行过程的 trace 细节。
+- 行为：状态栏展示的百分比与压缩触发百分比保持一致，方便判断当前会话是否接近预算上限。
+- 验证：测试覆盖上下文占比在短消息 + 长运行过程场景下的展示一致性。
+
+### 8.5.2 执行过程中的最近过程折叠展示
+
+- 优化：执行过程保留“最近过程”，但默认折叠成摘要，不再把大量历史事件直接铺开。
+- 行为：折叠区只展示总条数、已折叠条数和最新一条过程，避免主视图被过程日志淹没。
+- 验证：测试覆盖折叠摘要的显示，以及默认执行过程不再暴露完整最近过程列表。
+
+### 8.6 对话恢复能力
+
+- 优化：新增会话持久化与恢复能力。
+- 行为：
+  - 每轮 `SessionManager.handle_user_message()` 结束后保存完整 `SessionState`。
+  - 会话文件位于 `.manus-mini/sessions/<session_id>.json`。
+  - `manus-mini list --cwd <目录>` 列出当前工作目录下已有会话。
+  - `manus-mini resume <session_id> --cwd <目录>` 恢复上次上下文并进入 TUI。
+- 验证：测试覆盖 session 保存、加载、列表展示和 resume 入口加载历史消息。
+
+### 8.7 手动保存上下文快照
+
+- 优化：新增 `/save-context` 指令，方便学习和复盘当前上下文。
+- 行为：
+  - 在项目根目录创建 `context-YYYYMMDD-HHMMSS` 目录。
+  - 写入 `session.json` 和便于阅读的 `context.md`。
+  - 同一秒重复保存时追加序号，避免覆盖。
+- 验证：测试覆盖快照目录、`session.json`、`context.md` 和系统提示消息。
+
+### 8.8 指令帮助
+
+- 优化：新增 `/help` 指令，输出当前可执行指令与作用。
+- 覆盖内容：`/help`、`/save-context`、`/compact`、`忘记 <关键词>`、`确认/取消`、`manus-mini list`、`manus-mini resume`。
+- 验证：测试覆盖 `/help` 输出包含核心 TUI 指令和 CLI 指令。
+
 ## 9. 日志与脱敏
 
 ### 9.1 运行日志
@@ -375,11 +484,28 @@
 - 修复：pytest 默认设置 `MANUS_DISABLE_LOGGING=1`；`EventLogger` 在 pytest 或禁用环境变量下默认不写文件，只有显式 `enabled=True` 的日志测试才写入临时目录。
 - 验证：测试覆盖日志禁用时不创建日志文件，日志专项测试仍可显式启用。
 
+### 9.3.1 pytest 下运行产物与日志输出隔离
+
+- 现象：测试执行时，`runs/` 目录下的报告和事件日志容易落到仓库工作区，干扰本地开发和 `git status`。
+- 修复：
+  - `Reporter` 写入的 run summary 文件名改为 `summary-YYYYMMDD-HHMMSS.md`，避免同一 run 目录下的产物重名。
+  - pytest 环境下默认的 `AgentRuntime()` 报告输出切到系统临时目录，避免在仓库根目录生成 `outputs/` 或 `runs/`。
+- 验证：测试覆盖带时间戳的 run summary 文件名，以及 pytest 环境中默认 runtime 不在当前工作区写出产物。
+
 ### 9.4 LLM 原始入参和返回结果日志
 
 - 优化：`LLMResult` 增加 `source_request` 和 `source_response`，OpenAI-compatible client 保留请求 payload 与原始响应结构。
 - 日志：ReAct 流程写入 `llm_request` 和 `llm_response` 事件，便于排查真实模型调用问题。
 - 验证：测试覆盖 OpenAI-compatible client 暴露源数据，以及 runtime 日志记录 LLM 入参与返回。
+
+### 9.5 读文件结果不应落入日志
+
+- 现象：`read_file` 成功读取的文件正文会通过 trace `content_preview` 或下一轮 LLM request 日志进入 JSONL，日志体积大且不利于隐私控制。
+- 修复：
+  - `read_file` 成功时，tool trace 只记录工具名、调用 id、参数、状态和摘要，不记录文件内容预览。
+  - LLM request 日志中的成功 `read_file` tool result 替换为 `[read_file result omitted from logs]`。
+  - `read_file` 失败时仍保留错误摘要和 `error_code`，便于排查。
+- 验证：测试覆盖成功读取文件内容不会进入日志，且日志保留省略标记。
 
 ## 10. 当前验证基线
 
@@ -387,7 +513,7 @@
 
 ```bash
 pytest -q
-# 152 passed
+# 174 passed
 
 ruff check src tests
 # All checks passed!

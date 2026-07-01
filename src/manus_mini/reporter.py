@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,8 @@ class Reporter:
     def write_run_summary(self, task: TaskState, user_input: str) -> Path:
         run_dir = self.output_dir.parent / "runs" / task.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        path = run_dir / "summary.md"
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = self._available_run_summary_path(run_dir, f"summary-{timestamp}.md")
         path.write_text(render_run_summary(task, user_input), encoding="utf-8")
         return path
 
@@ -41,6 +43,19 @@ class Reporter:
             if not next_candidate.exists():
                 return next_candidate
         raise RuntimeError(f"no available output filename for {filename}")
+
+    def _available_run_summary_path(self, run_dir: Path, filename: str) -> Path:
+        candidate = run_dir / filename
+        if not candidate.exists():
+            return candidate
+
+        stem = candidate.stem
+        suffix = candidate.suffix
+        for index in range(1, 10_000):
+            next_candidate = run_dir / f"{stem}-{index}{suffix}"
+            if not next_candidate.exists():
+                return next_candidate
+        raise RuntimeError(f"no available run summary filename for {filename}")
 
 
 def render_task_report(task: TaskState, user_input: str, chunk_size: int = 4000) -> str:

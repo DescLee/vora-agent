@@ -4,7 +4,7 @@ from pathlib import Path
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from manus_mini.models import Message, Observation, SessionState, TaskState
+from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
     PromptTui,
@@ -73,6 +73,8 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     assert "Reflection 上限：99 轮" in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
+    assert "/save-context" in welcome
+    assert "/help" in welcome
     assert "Enter 发送" in welcome
     assert "Shift+Enter 换行" in welcome
 
@@ -147,8 +149,54 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
 
     process = format_process(session)
 
-    assert "工具返回：read_file(unknown) 已返回" in process
+    assert "工具活动" in process
+    assert "工具返回" in process
+    assert "read_file(unknown)" in process
+    assert "Tool read_file finished: failed" in process
+    assert "最近过程（折叠）" in process
+    assert "最新：工具返回：read_file(unknown) 已返回" in process
     assert "INVALID_TOOL_PARAMS" in process
+
+
+def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="统计上下文", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="工具结果很多很多很多很多很多很多很多很多很多很多",
+            data={"content_preview": "X" * 1000},
+        )
+    )
+    session.messages.append(Message.user("一二三四五六七八九十"))
+    session.active_task = task
+    task.limits.max_estimated_tokens = 100
+    usage = format_context_usage(session)
+
+    assert usage == "上下文 5%"
+
+
+def test_format_process_collapses_recent_process_section(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="react",
+            message="ReAct iteration 1 started",
+            data={"iteration": 1},
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "最近过程（折叠）" in process
+    assert "最新：ReAct：第 1 轮开始" in process
+    assert "当前步骤" in process
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -157,6 +205,10 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
     task.step_count = 2
+    task.plan = [
+        PlanStep(description="扫描工作目录并识别项目结构", intent="research", status="done"),
+        PlanStep(description="读取关键文档", intent="research", status="running"),
+    ]
     task.trace_events.append(
         TraceEvent(
             phase="llm",
@@ -199,14 +251,59 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
 
     assert "当前步骤" in process
     assert "第 2 步" in process
+    assert "执行计划" in process
+    assert "[已完成] 扫描工作目录并识别项目结构" in process
+    assert "[进行中] 读取关键文档" in process
     assert "当前动作" in process
-    assert "工具调用" in process
-    assert "read_file(call-read)" in process
-    assert "path: README.md" in process
-    assert "path='README.md'" not in process
-    assert "工具返回" in process
-    assert "read README.md" in process
+    assert "工具调度" in process
+    assert "共 1 个批次" in process
+    assert "第 1 批（1 个工具）" in process
+    assert "调用 1.1 read_file(call-read) path: README.md" in process
+    assert "结果 1.1 read_file(call-read) 已返回: read README.md" in process
     assert "# demo project" in process
+    assert "最近过程（折叠）" in process
+
+
+def test_format_process_orders_llm_content_before_matching_tool_call_and_result(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 1,
+                "content_preview": "我需要先确认 README 内容。",
+                "tool_calls": [{"id": "call-read", "name": "read_file", "args": {"path": "README.md"}}],
+            },
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool read_file finished: ok",
+            data={
+                "iteration": 1,
+                "tool_call_id": "call-read",
+                "tool_name": "read_file",
+                "ok": True,
+                "summary": "read README.md",
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    llm_index = process.index("LLM 回合")
+    schedule_index = process.index("工具调度")
+    batch_index = process.index("第 1 批（1 个工具）")
+    assert llm_index < schedule_index < batch_index
+    assert "我需要先确认 README 内容。" in process
+    assert "调用 1.1 read_file(call-read) path: README.md" in process
+    assert "结果 1.1 read_file(call-read) 成功: read README.md" in process
 
 
 def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path) -> None:
@@ -219,7 +316,7 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
             phase="llm",
             message="LLM requested 2 tool call(s)",
             data={
-                "iteration": 1,
+                "iteration": 10,
                 "content_preview": "",
                 "tool_calls": [
                     {"id": "call-list", "name": "list_files", "args": {"path": "."}},
@@ -233,7 +330,7 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
             phase="tool",
             message="Tool read_file finished: ok",
             data={
-                "iteration": 1,
+                "iteration": 10,
                 "tool_call_id": "call-read",
                 "tool_name": "read_file",
                 "args": {"path": "README.md"},
@@ -247,11 +344,103 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
 
     process = format_process(session)
 
-    assert "准备调用：list_files(call-list), read_file(call-read)" in process
-    assert "工具返回：read_file(call-read) 成功，read README.md" in process
+    assert "LLM 回合 10" in process
+    assert "工具调度" in process
+    assert "共 1 个批次" in process
+    assert "第 1 批（2 个工具）" in process
+    assert "调用 10.1 list_files(call-list) path: ." in process
+    assert "调用 10.1 read_file(call-read) path: README.md" in process
+    assert "结果 10.1 read_file(call-read) 成功: read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
+
+
+def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 3 tool call(s)",
+            data={
+                "iteration": 10,
+                "content_preview": "",
+                "tool_calls": [
+                    {"id": "call-list", "name": "list_files", "args": {"path": "."}},
+                    {"id": "call-read", "name": "read_file", "args": {"path": "README.md"}},
+                    {"id": "call-docs", "name": "read_file", "args": {"path": "docs/design.md"}},
+                ],
+            },
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool scheduler planned 2 batch(es)",
+            data={"iteration": 10, "batches": [["call-list", "call-read"], ["call-docs"]]},
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool list_files finished: ok",
+            data={"iteration": 10, "tool_call_id": "call-list", "tool_name": "list_files", "ok": True, "summary": "found 3 files"},
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool read_file finished: ok",
+            data={"iteration": 10, "tool_call_id": "call-read", "tool_name": "read_file", "ok": True, "summary": "read README.md"},
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool read_file finished: ok",
+            data={"iteration": 10, "tool_call_id": "call-docs", "tool_name": "read_file", "ok": True, "summary": "read docs/design.md"},
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "LLM 回合 10" in process
+    assert "共 2 个批次" in process
+    assert "第 1 批（2 个工具）" in process
+    assert "第 2 批（1 个工具）" in process
+    assert "调用 10.1 list_files(call-list) path: ." in process
+    assert "调用 10.1 read_file(call-read) path: README.md" in process
+    assert "调用 10.2 read_file(call-docs) path: docs/design.md" in process
+    assert "结果 10.1 list_files(call-list) 成功: found 3 files" in process
+    assert "结果 10.1 read_file(call-read) 成功: read README.md" in process
+    assert "结果 10.2 read_file(call-docs) 成功: read docs/design.md" in process
+
+
+def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "content_preview": "我需要先确认项目结构，所以准备读取文件列表。",
+                "tool_calls": [{"id": "call-list", "name": "list_files", "args": {"path": "."}}],
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "LLM 返回" in process
+    assert "我需要先确认项目结构，所以准备读取文件列表。" in process
 
 
 def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) -> None:
@@ -382,12 +571,12 @@ def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path
         )
     session.active_task = task
 
-    process = format_process(session, max_events=5)
+    process = format_process(session)
 
-    assert "仅展示最近 5 条" in process
-    assert "event 0" not in process
-    assert "event 7" in process
     assert "event 11" in process
+    assert "最近过程（折叠）" in process
+    assert "已折叠 11 条较早过程" in process
+    assert "最新：ReAct：event 11" in process
 
 
 def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
@@ -408,7 +597,8 @@ def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
 
     assert "sk-live-secret" not in process
     assert "password=abc123" not in process
-    assert "[REDACTED]" in process
+    assert "LLM 回合" in process
+    assert "最近过程（折叠）" in process
 
 
 def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
@@ -450,7 +640,8 @@ def test_format_transcript_keeps_process_for_final_artifact(tmp_path: Path) -> N
     assert "产物" in transcript
     assert "最终总结" in transcript
     assert transcript.count("最终总结") == 1
-    assert "工具：" in transcript
+    assert "工具活动" in transcript
+    assert "最近过程（折叠）" in transcript
 
 
 def test_format_transcript_final_artifact_keeps_full_process_history(tmp_path: Path) -> None:
@@ -503,6 +694,33 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     assert "上下文 25%" in status
     assert format_context_usage(session) == "上下文 25%"
+
+
+def test_format_status_context_usage_includes_active_task_process(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.limits.max_estimated_tokens = 10_000
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested tools",
+            data={"content_preview": "x" * 4_000, "tool_calls": [{"id": "call-read", "name": "read_file"}]},
+        )
+    )
+    task.observations.append(
+        Observation(
+            tool_call_id="call-read",
+            ok=True,
+            summary="read README.md",
+            content="y" * 4_000,
+        )
+    )
+    session.active_task = task
+    session.messages.append(Message.user("hi"))
+
+    assert format_context_usage(session) == "上下文 0%"
 
 
 def test_format_status_describes_current_step_while_running(tmp_path: Path) -> None:
@@ -676,8 +894,9 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     tui.render_progress()
 
-    assert "LLM：准备调用：read_file(unknown)" in tui.output.text
-    assert "read_file" in tui.output.text
+    assert "LLM 回合" in tui.output.text
+    assert "工具调度" in tui.output.text
+    assert "最近过程（折叠）" in tui.output.text
 
 
 def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> None:
@@ -698,15 +917,13 @@ def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> N
 
     tui.render_progress()
 
-    assert "event 0" in tui.output.text
-    assert "event 2" in tui.output.text
-    assert "event 3" not in tui.output.text
     assert tui.visible_trace_count == 3
+    assert "最近过程（折叠）" in tui.output.text
 
     tui.render_progress()
 
-    assert "event 5" in tui.output.text
     assert tui.visible_trace_count == 6
+    assert "最近过程（折叠）" in tui.output.text
 
 
 def test_render_progress_keeps_output_scrolled_to_latest_content(tmp_path: Path) -> None:
