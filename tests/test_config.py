@@ -31,6 +31,27 @@ def test_load_dotenv_reads_llm_settings(tmp_path: Path, monkeypatch) -> None:
     assert loaded["LLM_MODEL"] == "test-model"
 
 
+def test_load_dotenv_supports_export_prefix_and_inline_comments(tmp_path: Path, monkeypatch) -> None:
+    clear_llm_env_vars(monkeypatch)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "export LLM_PROVIDER=openai-compatible # provider comment",
+                "LLM_MODEL='qwen turbo' # model comment",
+                'LLM_BASE_URL="http://localhost:1234/v1#not-comment"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_dotenv(env_path)
+
+    assert loaded["LLM_PROVIDER"] == "openai-compatible"
+    assert loaded["LLM_MODEL"] == "qwen turbo"
+    assert loaded["LLM_BASE_URL"] == "http://localhost:1234/v1#not-comment"
+
+
 def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
     env_path = tmp_path / ".env"
@@ -52,8 +73,9 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     assert config.llm_timeout_seconds == 15
 
 
-def test_get_default_llm_client_uses_mock_when_not_configured(monkeypatch) -> None:
+def test_get_default_llm_client_uses_mock_when_not_configured(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
+    monkeypatch.chdir(tmp_path)
 
     client = get_default_llm_client()
 

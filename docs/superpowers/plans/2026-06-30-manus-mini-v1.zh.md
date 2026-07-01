@@ -173,9 +173,9 @@ from manus_mini.models import ContextSegment, LoopLimits, Message, SessionState,
 
 def test_loop_limits_have_v1_defaults() -> None:
     limits = LoopLimits()
-    assert limits.max_engineering_steps == 8
-    assert limits.max_react_iterations == 5
-    assert limits.max_reflection_rounds == 3
+    assert limits.max_engineering_steps == 12
+    assert limits.max_react_iterations == 8
+    assert limits.max_reflection_rounds == 5
     assert limits.max_tool_retries == 2
 
 
@@ -196,7 +196,7 @@ def test_session_state_starts_empty(tmp_path: Path) -> None:
 def test_task_state_uses_loop_limits(tmp_path: Path) -> None:
     task = TaskState.create(goal="write report", cwd=tmp_path)
     assert task.goal == "write report"
-    assert task.limits.max_engineering_steps == 8
+    assert task.limits.max_engineering_steps == 12
     assert task.step_count == 0
 
 

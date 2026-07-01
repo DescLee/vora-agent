@@ -59,6 +59,24 @@ def test_sensitive_content_is_not_written_to_long_term_memory(tmp_path: Path) ->
         )
         is None
     )
+    assert (
+        manager.add_if_allowed(
+            scope="user",
+            kind="preference",
+            content="我的 key 是 sk-live-secret",
+            tags=["secret"],
+        )
+        is None
+    )
+    assert (
+        manager.add_if_allowed(
+            scope="user",
+            kind="preference",
+            content="数据库 password: abc123",
+            tags=["secret"],
+        )
+        is None
+    )
 
     assert manager.search("secret", limit=10) == []
 

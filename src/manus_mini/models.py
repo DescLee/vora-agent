@@ -13,9 +13,9 @@ def new_id(prefix: str) -> str:
 
 
 class LoopLimits(BaseModel):
-    max_engineering_steps: int = 8
-    max_react_iterations: int = 5
-    max_reflection_rounds: int = 3
+    max_engineering_steps: int = 12
+    max_react_iterations: int = 8
+    max_reflection_rounds: int = 5
     max_tool_retries: int = 2
     max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
@@ -60,6 +60,7 @@ class AgentError(BaseModel):
         "MAX_STEPS_REACHED",
         "MAX_REACT_ITERATIONS_REACHED",
         "MAX_REFLECTION_ROUNDS_REACHED",
+        "RUNTIME_TIMEOUT",
         "TOKEN_BUDGET_EXCEEDED",
         "TOOL_TIMEOUT",
         "TOOL_RETRY_EXHAUSTED",
@@ -86,6 +87,14 @@ class Observation(BaseModel):
     content: str = ""
 
 
+class TraceEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("trace"))
+    phase: Literal["react", "llm", "tool", "reflection", "runtime"]
+    message: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class PlanStep(BaseModel):
     id: str = Field(default_factory=lambda: new_id("step"))
     description: str
@@ -101,6 +110,7 @@ class TaskState(BaseModel):
     plan: list[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
     observations: list[Observation] = Field(default_factory=list)
+    trace_events: list[TraceEvent] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
     limits: LoopLimits = Field(default_factory=LoopLimits)
@@ -197,5 +207,6 @@ __all__ = [
     "SessionState",
     "TaskState",
     "ToolCall",
+    "TraceEvent",
     "new_id",
 ]

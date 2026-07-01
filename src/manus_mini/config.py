@@ -15,13 +15,35 @@ def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = _parse_dotenv_value(value)
+        if not key:
+            continue
         loaded[key] = value
         os.environ.setdefault(key, value)
 
     return loaded
+
+
+def _parse_dotenv_value(raw_value: str) -> str:
+    value = _strip_inline_comment(raw_value.strip()).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _strip_inline_comment(value: str) -> str:
+    quote: str | None = None
+    for index, char in enumerate(value):
+        if char in {"'", '"'}:
+            quote = None if quote == char else char if quote is None else quote
+            continue
+        if char == "#" and quote is None and (index == 0 or value[index - 1].isspace()):
+            return value[:index].rstrip()
+    return value
 
 
 @dataclass(slots=True)

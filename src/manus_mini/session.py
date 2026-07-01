@@ -11,6 +11,6 @@ class SessionManager:
         self.runtime = runtime or AgentRuntime()
         self.current = SessionState.create(cwd=cwd)
 
-    def handle_user_message(self, content: str) -> SessionState:
-        self.current = self.runtime.on_user_message(content, self.current)
+    def handle_user_message(self, content: str, append_user_message: bool = True) -> SessionState:
+        self.current = self.runtime.on_user_message(content, self.current, append_user_message=append_user_message)
         return self.current

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from manus_mini.models import MemoryItem
+from manus_mini.redaction import contains_sensitive_text
 
 SENSITIVE_PATTERN = re.compile(r"(API_KEY|TOKEN=|PASSWORD=|SECRET)", re.IGNORECASE)
 
@@ -107,7 +108,7 @@ class MemoryManager:
         confidence: float = 1.0,
         source_message_ids: Iterable[str] | None = None,
     ) -> MemoryItem | None:
-        if SENSITIVE_PATTERN.search(content):
+        if contains_sensitive_text(content) or SENSITIVE_PATTERN.search(content):
             return None
         return self.add(
             scope=scope,

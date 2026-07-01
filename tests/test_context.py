@@ -1,6 +1,7 @@
 from manus_mini.context import (
     ContextIntegrityError,
     build_segments,
+    compact_messages,
     estimate_tokens,
     validate_tool_call_pairs,
 )
@@ -55,3 +56,36 @@ def test_build_segments_keeps_tool_exchange_together() -> None:
     assert [message.role for message in segments[1].messages] == ["agent", "tool"]
     assert segments[1].messages[0].tool_call_ids == ["call-1"]
     assert segments[1].messages[1].tool_call_id == "call-1"
+
+
+def test_compact_messages_summarizes_old_messages_without_splitting_tool_exchange() -> None:
+    messages = [
+        Message.user("很早以前的需求：" + "A" * 80),
+        Message.agent("need file", tool_call_ids=["call-1"]),
+        Message.tool("file content " + "B" * 80, tool_call_id="call-1"),
+        Message.user("最新需求：请基于上文继续"),
+    ]
+
+    compacted = compact_messages(messages, token_budget=30)
+
+    validate_tool_call_pairs(compacted)
+    assert compacted[0].role == "system"
+    assert compacted[0].content.startswith("历史上下文摘要：")
+    assert compacted[-1].content == "最新需求：请基于上文继续"
+    assert not any(message.role == "tool" for message in compacted[1:])
+
+
+def test_compact_messages_redacts_sensitive_content_in_summary() -> None:
+    messages = [
+        Message.user("旧需求包含 API_KEY=sk-live-secret " + "A" * 80),
+        Message.agent("need file", tool_call_ids=["call-1"]),
+        Message.tool("文件里有 password=abc123 " + "B" * 80, tool_call_id="call-1"),
+        Message.user("最新需求"),
+    ]
+
+    compacted = compact_messages(messages, token_budget=20)
+
+    assert compacted[0].role == "system"
+    assert "sk-live-secret" not in compacted[0].content
+    assert "password=abc123" not in compacted[0].content
+    assert "[REDACTED]" in compacted[0].content

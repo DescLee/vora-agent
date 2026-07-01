@@ -177,9 +177,9 @@ from manus_mini.models import (
 
 def test_loop_limits_have_v1_defaults() -> None:
     limits = LoopLimits()
-    assert limits.max_engineering_steps == 8
-    assert limits.max_react_iterations == 5
-    assert limits.max_reflection_rounds == 3
+    assert limits.max_engineering_steps == 12
+    assert limits.max_react_iterations == 8
+    assert limits.max_reflection_rounds == 5
     assert limits.max_tool_retries == 2
 
 
@@ -200,7 +200,7 @@ def test_session_state_starts_empty(tmp_path: Path) -> None:
 def test_task_state_uses_loop_limits(tmp_path: Path) -> None:
     task = TaskState.create(goal="write report", cwd=tmp_path)
     assert task.goal == "write report"
-    assert task.limits.max_engineering_steps == 8
+    assert task.limits.max_engineering_steps == 12
     assert task.step_count == 0
 
 
@@ -245,9 +245,9 @@ def new_id(prefix: str) -> str:
 
 
 class LoopLimits(BaseModel):
-    max_engineering_steps: int = 8
-    max_react_iterations: int = 5
-    max_reflection_rounds: int = 3
+    max_engineering_steps: int = 12
+    max_react_iterations: int = 8
+    max_reflection_rounds: int = 5
     max_tool_retries: int = 2
     max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000

@@ -225,9 +225,9 @@ class TaskState(BaseModel):
 
 ```python
 class LoopLimits(BaseModel):
-    max_engineering_steps: int = 8
-    max_react_iterations: int = 5
-    max_reflection_rounds: int = 3
+    max_engineering_steps: int = 12
+    max_react_iterations: int = 8
+    max_reflection_rounds: int = 5
     max_tool_retries: int = 2
     max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
@@ -235,9 +235,9 @@ class LoopLimits(BaseModel):
 
 默认值说明：
 
-- `max_engineering_steps=8`：外层工程兜底循环最多 8 轮，防止整轮用户请求卡死。
-- `max_react_iterations=5`：单个计划步骤最多 5 次 LLM/tool_calls 循环。
-- `max_reflection_rounds=3`：质量反馈最多 3 轮，避免反复重写。
+- `max_engineering_steps=12`：外层工程兜底循环最多 12 轮，给复杂任务更多拆解空间。
+- `max_react_iterations=8`：单个计划步骤最多 8 次 LLM/tool_calls 循环，降低调研类任务过早触顶概率。
+- `max_reflection_rounds=5`：质量反馈最多 5 轮，允许更多局部修正但仍避免反复重写。
 - `max_tool_retries=2`：单个工具失败最多重试 2 次。
 - `max_runtime_seconds=180`：单轮用户消息最多运行 3 分钟。
 - `max_estimated_tokens=128_000`：用于上下文预算估算，实际可按模型配置覆盖。

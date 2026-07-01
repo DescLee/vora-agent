@@ -9,6 +9,7 @@ description = "Manus mini demo project"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "prompt_toolkit",
   "pydantic",
   "rich",
   "textual",
@@ -22,6 +23,7 @@ dev = [
 
 [project.scripts]
 manus-mini = "manus_mini.app:main"
+manus-mini-textual = "manus_mini.app:main_textual"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
