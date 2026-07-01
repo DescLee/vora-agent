@@ -363,8 +363,8 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
     assert "共 1 个批次" in process
     assert "第 1 批（2 个工具）" in process
     assert "调用 10.1 list_files(call-list) path: ." in process
-    assert "调用 10.1 read_file(call-read) path: README.md" in process
-    assert "结果 10.1 read_file(call-read) 成功: read README.md" in process
+    assert "调用 10.2 read_file(call-read) path: README.md" in process
+    assert "结果 10.2 read_file(call-read) 成功: read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
@@ -427,11 +427,11 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
     assert "第 1 批（2 个工具）" in process
     assert "第 2 批（1 个工具）" in process
     assert "调用 10.1 list_files(call-list) path: ." in process
-    assert "调用 10.1 read_file(call-read) path: README.md" in process
-    assert "调用 10.2 read_file(call-docs) path: docs/design.md" in process
+    assert "调用 10.2 read_file(call-read) path: README.md" in process
+    assert "调用 10.3 read_file(call-docs) path: docs/design.md" in process
     assert "结果 10.1 list_files(call-list) 成功: found 3 files" in process
-    assert "结果 10.1 read_file(call-read) 成功: read README.md" in process
-    assert "结果 10.2 read_file(call-docs) 成功: read docs/design.md" in process
+    assert "结果 10.2 read_file(call-read) 成功: read README.md" in process
+    assert "结果 10.3 read_file(call-docs) 成功: read docs/design.md" in process
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:

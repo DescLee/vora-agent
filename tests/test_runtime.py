@@ -354,6 +354,48 @@ def test_react_loop_retries_transient_tool_failure(tmp_path: Path) -> None:
     assert task.observations[-1].ok is True
 
 
+def test_react_loop_does_not_retry_deterministic_tool_errors(tmp_path: Path) -> None:
+    class TooLargeTool:
+        name = "too_large"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return ToolResult(tool_name=self.name, ok=False, summary="file too large", error_code="FILE_TOO_LARGE")
+
+    class OneShotLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-too-large", name="too_large")])
+            return LLMResult(content="done")
+
+    tool = TooLargeTool()
+    registry = ToolRegistry(tools=[tool])
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取大文件", cwd=tmp_path)
+
+    result = ReActLoop(OneShotLLM(), registry).run(task, session)
+
+    assert result == "done"
+    assert tool.calls == 1
+    assert not any(event.message == "Tool retry scheduled" for event in task.trace_events)
+
+
 def test_react_loop_marks_tool_timeout(tmp_path: Path) -> None:
     class SlowTool:
         name = "slow"

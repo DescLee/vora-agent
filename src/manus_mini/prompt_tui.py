@@ -254,16 +254,31 @@ def format_tool_batch_sections(
 
     total_batches = len(batch_groups)
     lines = ["工具调度", f"- 共 {total_batches} 个批次"]
+    call_index = 1
     for batch_index, batch_calls in batch_groups:
         lines.append(f"- 第 {batch_index} 批（{len(batch_calls)} 个工具）")
-        batch_lines = format_tool_batch_lines(batch_index, iteration, batch_calls, events, task)
+        batch_lines = format_tool_batch_lines(batch_index, iteration, batch_calls, events, task, start_index=call_index)
+        call_index += len(batch_calls)
         lines.extend([f"  {line}" for line in batch_lines] or ["  - 等待工具返回。"])
     return lines
 
 
-def format_tool_batch_lines(batch_index: int, iteration, tool_calls: list[dict], events: list[TraceEvent], task: TaskState) -> list[str]:
+def format_tool_batch_lines(
+    batch_index: int,
+    iteration,
+    tool_calls: list[dict],
+    events: list[TraceEvent],
+    task: TaskState,
+    start_index: int = 1,
+) -> list[str]:
     call_ids = {str(call.get("id", "unknown")) for call in tool_calls}
-    prefix = f"{iteration}.{batch_index}" if iteration else str(batch_index)
+    prefixes = {
+        str(call.get("id", "unknown")): (
+            f"{iteration}.{call_index}" if iteration else str(call_index)
+        )
+        for call_index, call in enumerate(tool_calls, start=start_index)
+    }
+    default_prefix = next(iter(prefixes.values()), f"{iteration}.{batch_index}" if iteration else str(batch_index))
     lines = []
     event_by_call_id = {
         str(event.data.get("tool_call_id") or ""): event
@@ -279,6 +294,12 @@ def format_tool_batch_lines(batch_index: int, iteration, tool_calls: list[dict],
         if event.phase == "tool" and str(event.data.get("tool_call_id") or "") in call_ids:
             tool_call_id = str(event.data.get("tool_call_id") or "")
             tool_name = event.data.get("tool_name", "unknown")
+            prefix = prefixes.get(tool_call_id, default_prefix)
+            if event.message == "Tool batch completed":
+                lines.append(
+                    f"- 结果 {prefix} {tool_name}({tool_call_id}) 已返回: 批次完成"
+                )
+                continue
             status = format_tool_return_status(event.data)
             summary = event.data.get("summary") or event.message
             preview = event.data.get("content_preview") or ""
@@ -287,12 +308,13 @@ def format_tool_batch_lines(batch_index: int, iteration, tool_calls: list[dict],
                 line += f"\n  返回预览：{format_display_value(str(preview))}"
             lines.append(line)
     if not lines:
-        lines.append(f"- 结果 {prefix} 等待工具返回。")
+        lines.append(f"- 结果 {default_prefix} 等待工具返回。")
     call_lines = []
-    for call in tool_calls:
+    for call_index, call in enumerate(tool_calls, start=start_index):
         tool_call_id = str(call.get("id", "unknown"))
         name = str(call.get("name", "unknown"))
         args = format_inline_args(call.get("args", {}))
+        prefix = prefixes.get(tool_call_id, f"{iteration}.{call_index}" if iteration else str(call_index))
         call_line = f"- 调用 {prefix} {name}({tool_call_id}) {args}".rstrip()
         call_lines.append(call_line)
         observation = observation_by_call.get(tool_call_id)

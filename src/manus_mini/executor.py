@@ -8,6 +8,9 @@ from manus_mini.tools.base import ToolPreview, ToolResult
 from manus_mini.tools.registry import ToolRegistry
 
 
+RETRYABLE_TOOL_ERROR_CODES = {"TOOL_TIMEOUT", "TOOL_ERROR"}
+
+
 def sanitize_tool_args(args: dict) -> dict:
     return {key: value for key, value in dict(args).items() if key != "workspace"}
 
@@ -105,7 +108,7 @@ class Executor:
                 return result
 
             last_result = result
-            if attempt < max_attempts:
+            if attempt < max_attempts and self._should_retry(result):
                 task.trace_events.append(
                     TraceEvent(
                         phase="tool",
@@ -119,9 +122,15 @@ class Executor:
                         },
                     )
                 )
+                continue
+            if not self._should_retry(result):
+                return last_result
 
         assert last_result is not None
         return last_result.model_copy(update={"error_code": "TOOL_RETRY_EXHAUSTED"})
+
+    def _should_retry(self, result: ToolResult) -> bool:
+        return result.error_code in RETRYABLE_TOOL_ERROR_CODES
 
     def run_batch(self, batch: list[ToolCall], session: SessionState, task: TaskState) -> dict[str, ToolResult]:
         if len(batch) == 1:
