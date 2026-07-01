@@ -5,5 +5,5 @@ def test_package_version_and_import():
 
     assert package.__version__ == "0.1.0"
 
-    app = import_module("manus_mini.app")
-    assert hasattr(app, "main")
+    prompt_tui = import_module("manus_mini.prompt_tui")
+    assert hasattr(prompt_tui, "main")

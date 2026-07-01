@@ -41,10 +41,4 @@ manus-mini
 
 默认 TUI 使用 `prompt_toolkit` 输入层，中文输入法上屏后可以直接进入输入区。输入完成后按 `Enter` 发送，按 `Shift+Enter` 换行，按 `Ctrl-C` 退出。
 
-如果需要打开旧版 Textual 界面，可以运行：
-
-```bash
-manus-mini-textual
-```
-
 当前版本已经包含最小可运行的 TUI 会话骨架和可测试的 Agent Runtime。

@@ -12,7 +12,6 @@ dependencies = [
   "prompt_toolkit",
   "pydantic",
   "rich",
-  "textual",
 ]
 
 [project.optional-dependencies]
@@ -22,8 +21,7 @@ dev = [
 ]
 
 [project.scripts]
-manus-mini = "manus_mini.app:main"
-manus-mini-textual = "manus_mini.app:main_textual"
+manus-mini = "manus_mini.prompt_tui:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
