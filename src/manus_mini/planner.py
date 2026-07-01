@@ -1,15 +1,79 @@
 from __future__ import annotations
 
-from manus_mini.models import PlanStep, SessionState
+import re
+from typing import Literal, cast
+
+from manus_mini.llm import LLMClient, LLMRequestError, get_default_llm_client
+from manus_mini.models import Message, PlanStep, SessionState
+
+
+PLAN_INSTRUCTIONS = (
+    "你是本地项目任务规划器。"
+    "请根据用户目标和最近对话，输出一个简洁的执行计划。"
+    "每行一条计划，格式为：`序号. 计划描述 | intent`。"
+    "intent 只能是 chat、research、code、automation、report 之一。"
+    "不要输出多余解释，不要输出 JSON。"
+)
 
 
 class Planner:
-    def build_plan(self, goal: str, session: SessionState) -> list[PlanStep]:  # noqa: ARG002
-        normalized = goal.lower()
-        plan: list[PlanStep] = []
+    def __init__(self, llm: LLMClient | None = None) -> None:
+        self.llm = llm or get_default_llm_client()
 
+    def build_plan(self, goal: str, session: SessionState) -> list[PlanStep]:
+        normalized = goal.lower()
         if _is_small_talk(goal, normalized):
             return [PlanStep(description="直接回复用户，不读取本地文件", intent="chat")]
+
+        llm_plan = self._build_llm_plan(goal, session)
+        if llm_plan:
+            return _deduplicate_plan(llm_plan)
+
+        return _deduplicate_plan(self._build_rule_plan(goal, normalized))
+
+    def _build_llm_plan(self, goal: str, session: SessionState) -> list[PlanStep]:
+        messages = self._build_prompt_messages(goal, session)
+        try:
+            result = self.llm.complete_with_tools(messages, [])
+        except (LLMRequestError, ValueError, TypeError, KeyError, IndexError):
+            return []
+        return self._parse_llm_plan(result.content)
+
+    def _build_prompt_messages(self, goal: str, session: SessionState) -> list[Message]:
+        recent_messages = session.messages[-8:]
+        recent_lines = [f"- {message.role}: {message.content}" for message in recent_messages]
+        context = "\n".join(recent_lines) if recent_lines else "- 无"
+        return [
+            Message.system(PLAN_INSTRUCTIONS),
+            Message.user(
+                "\n".join(
+                    [
+                        f"用户目标：{goal}",
+                        "最近对话：",
+                        context,
+                        "请输出计划：",
+                    ]
+                )
+            ),
+        ]
+
+    def _parse_llm_plan(self, content: str) -> list[PlanStep]:
+        steps: list[PlanStep] = []
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^[\-\*\d\.\)\(、\s]+", "", line).strip()
+            if not line:
+                continue
+            description, intent = _split_plan_line(line)
+            if not description:
+                continue
+            steps.append(PlanStep(description=description, intent=_normalize_intent(intent, description)))
+        return steps
+
+    def _build_rule_plan(self, goal: str, normalized: str) -> list[PlanStep]:
+        plan: list[PlanStep] = []
 
         if any(keyword in goal for keyword in ["项目", "project", "目录", "结构", "分析"]):
             plan.append(PlanStep(description="扫描工作目录并识别项目结构", intent="research"))
@@ -26,7 +90,37 @@ class Planner:
         if not plan:
             plan.append(PlanStep(description="分析用户目标并生成草稿结果", intent="report"))
 
-        return _deduplicate_plan(plan)
+        return plan
+
+
+def _split_plan_line(line: str) -> tuple[str, str | None]:
+    if "|" in line:
+        description, intent = line.rsplit("|", 1)
+        return description.strip(), intent.strip()
+    if "：" in line:
+        description, intent = line.rsplit("：", 1)
+        if _is_known_intent(intent):
+            return description.strip(), intent.strip()
+    return line.strip(), None
+
+
+def _normalize_intent(intent: str | None, description: str) -> Literal["chat", "research", "code", "automation", "report"]:
+    if intent and _is_known_intent(intent):
+        return cast(Literal["chat", "research", "code", "automation", "report"], intent.strip().lower())
+    description_lower = description.lower()
+    if any(keyword in description_lower for keyword in ["读取", "查看", "分析", "调研", "扫描", "research"]):
+        return "research"
+    if any(keyword in description_lower for keyword in ["写", "生成", "创建", "修改", "更新", "补充", "code"]):
+        return "code"
+    if any(keyword in description_lower for keyword in ["todo", "清单", "整理", "归类", "automation"]):
+        return "automation"
+    if any(keyword in description_lower for keyword in ["回复", "聊天", "问候", "chat"]):
+        return "chat"
+    return "report"
+
+
+def _is_known_intent(value: str) -> bool:
+    return value.strip().lower() in {"chat", "research", "code", "automation", "report"}
 
 
 def _deduplicate_plan(steps: list[PlanStep]) -> list[PlanStep]:

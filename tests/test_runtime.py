@@ -602,6 +602,43 @@ def test_runtime_updates_plan_step_statuses_during_execution(tmp_path: Path) -> 
     assert all(step.status == "done" for step in result.active_task.plan)
 
 
+def test_runtime_replans_with_llm_planner_after_reflection_requests_replan(tmp_path: Path) -> None:
+    class ReplanReflectionLoop:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, task: TaskState, session: SessionState) -> ReflectionResult:  # noqa: ARG002
+            self.calls += 1
+            return ReflectionResult(accepted=False, content="草稿", reason="needs more structure", decision="replan")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.reflection_loop = ReplanReflectionLoop()
+
+    class PlanStepPlanner:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def build_plan(self, goal: str, session: SessionState):  # noqa: ANN001, ANN201
+            self.calls.append(goal)
+            from manus_mini.models import PlanStep
+
+            return [
+                PlanStep(description="重新识别目标并拆分执行步骤", intent="report"),
+                PlanStep(description="补充当前草稿不足之处", intent="report"),
+            ]
+
+    planner = PlanStepPlanner()
+    runtime.planner = planner
+
+    result = runtime.on_user_message("写一个报告", session)
+
+    assert result.active_task is not None
+    assert len(planner.calls) >= 2
+    assert planner.calls[0] == "写一个报告"
+    assert any("needs more structure" in goal for goal in planner.calls[1:])
+
+
 def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
