@@ -189,7 +189,7 @@ def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -
 
     usage = format_context_usage(session)
 
-    assert usage == "上下文 25%"
+    assert usage == "上下文 25.0%"
 
 
 def test_format_process_collapses_recent_process_section(tmp_path: Path) -> None:
@@ -708,6 +708,25 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     assert "上下文 25%" in status
     assert format_context_usage(session) == "上下文 25%"
+
+
+def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+    )
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    fragments = tui.get_confirmation_fragments()
+
+    assert any("确认写入" in text for _, text in fragments)
+    assert any("▶ 确认" in text for _, text in fragments)
+    assert any("▶ 拒绝" in text for _, text in fragments)
 
 
 def test_format_status_context_usage_includes_active_task_process(tmp_path: Path) -> None:

@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prompt_toolkit.application import Application
-from prompt_toolkit.filters import has_focus
+from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import HSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
@@ -633,8 +633,6 @@ def format_status(session: SessionState, is_running: bool | None = None) -> str:
         f"当前 {format_current_action(task)}",
         format_context_usage(session),
     ]
-    if session.pending_confirmation is not None:
-        parts.append(f"确认 {session.pending_confirmation.prompt or session.pending_confirmation.summary}")
     parts.extend(["Enter 发送", "Shift+Enter 换行"])
     return " | ".join(parts)
 
@@ -646,14 +644,17 @@ def format_context_usage(session: SessionState) -> str:
     limit = task.model_context_limit or task.limits.max_estimated_tokens
     if limit <= 0:
         return "上下文 --"
+    actual_usage = task.last_prompt_tokens is not None
     if task.last_prompt_tokens is not None:
         usage = task.last_prompt_tokens / limit
     else:
         _, usage = estimate_context_usage(session.messages, limit)
     if usage is None:
         return "上下文 --"
-    percent = min(999, round(usage * 100))
-    return f"上下文 {percent}%"
+    percent = min(999.9, usage * 100)
+    if actual_usage:
+        return f"上下文 {percent:.1f}%"
+    return f"上下文 {round(percent)}%"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:
@@ -938,6 +939,7 @@ class PromptTui:
         self.visible_trace_count = 0
         self.trace_reveal_batch_size = 3
         self.follow_output = True
+        self.confirmation_selection = 0
         initial_output = (
             format_transcript(self.manager.current, show_process=False)
             if initial_session is not None and initial_session.messages
@@ -964,14 +966,31 @@ class PromptTui:
         install_shift_enter_mapping()
         key_bindings = KeyBindings()
         input_focused = has_focus(self.input)
+        confirmation_active = Condition(lambda: self.manager.current.pending_confirmation is not None)
 
-        @key_bindings.add("enter", filter=input_focused)
+        @key_bindings.add("enter", filter=input_focused & ~confirmation_active)
         def _send_message(_) -> None:
             self.send_current_input()
+
+        @key_bindings.add("enter", filter=confirmation_active)
+        def _confirm_confirmation(_) -> None:
+            self.confirm_pending_confirmation()
 
         @key_bindings.add("c-j", filter=input_focused)
         def _insert_newline(_) -> None:
             self.insert_input_newline()
+
+        @key_bindings.add("escape", filter=confirmation_active)
+        def _reject_confirmation(_) -> None:
+            self.reject_pending_confirmation()
+
+        @key_bindings.add("up", filter=confirmation_active)
+        def _confirmation_up(_) -> None:
+            self.move_confirmation_selection(-1)
+
+        @key_bindings.add("down", filter=confirmation_active)
+        def _confirmation_down(_) -> None:
+            self.move_confirmation_selection(1)
 
         @key_bindings.add("c-c")
         def _exit(event) -> None:
@@ -1014,13 +1033,27 @@ class PromptTui:
             self.scroll_output(-5)
             event.app.layout.focus(self.output)
 
-        body = HSplit(
+        main_body = HSplit(
             [
                 Frame(self.output, title="对话 / 过程 / 产物"),
                 self.status,
                 Frame(self.input, title="输入区"),
             ],
             padding=1,
+        )
+        body = FloatContainer(
+            content=main_body,
+            floats=[
+                Float(
+                    content=ConditionalContainer(
+                        Frame(self.confirmation_panel, title="文件修改确认"),
+                        filter=confirmation_active,
+                    ),
+                    bottom=1,
+                    left=2,
+                    right=2,
+                )
+            ],
         )
         style = Style.from_dict(
             {
@@ -1030,6 +1063,12 @@ class PromptTui:
                 "process": "bg:#172026 #8fa19c",
                 "input": "bg:#121a20 #f3f0e8",
                 "status": "bg:#0f171b #c7d4cf",
+                "confirmation": "bg:#1f2933 #f3f0e8",
+                "confirmation.title": "bold #f3f0e8",
+                "confirmation.body": "#d7dedb",
+                "confirmation.option": "#d7dedb",
+                "confirmation.option.selected": "bold reverse #f3f0e8",
+                "confirmation.hint": "#8fa19c",
             }
         )
         return Application(
@@ -1041,7 +1080,7 @@ class PromptTui:
         )
 
     def send_current_input(self) -> None:
-        if self.is_running:
+        if self.is_running or self.manager.current.pending_confirmation is not None:
             return
 
         content = self.input.text.strip()
@@ -1058,6 +1097,34 @@ class PromptTui:
         self.app.layout.focus(self.input)
         self.app.invalidate()
         self.start_agent_turn(content)
+
+    def confirm_pending_confirmation(self) -> None:
+        if self.manager.current.pending_confirmation is None:
+            return
+        self.manager.current = self.manager.accept_pending_confirmation()
+        self.manager._save_current(self.manager.current)
+        self.confirmation_selection = 0
+        self.status.text = format_status(self.manager.current)
+        self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
+
+    def reject_pending_confirmation(self) -> None:
+        if self.manager.current.pending_confirmation is None:
+            return
+        self.manager.current = self.manager.reject_pending_confirmation()
+        self.manager._save_current(self.manager.current)
+        self.confirmation_selection = 0
+        self.status.text = format_status(self.manager.current)
+        self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
+
+    def move_confirmation_selection(self, delta: int) -> None:
+        if self.manager.current.pending_confirmation is None:
+            return
+        self.confirmation_selection = (self.confirmation_selection + delta) % 2
+        self.app.invalidate()
 
     def start_agent_turn(self, content: str) -> None:
         self.app.create_background_task(self.run_agent_turn(content))
@@ -1123,6 +1190,32 @@ class PromptTui:
         self.status.text = "failed | Enter 发送 | Shift+Enter 换行"
         self.app.layout.focus(self.input)
         self.app.invalidate()
+
+    def get_confirmation_fragments(self) -> list[tuple[str, str]]:
+        pending = self.manager.current.pending_confirmation
+        if pending is None:
+            return [("", "")]
+        selected = self.confirmation_selection
+        title = pending.prompt or pending.summary or "即将修改文件"
+        body_lines = [
+            ("class:confirmation.title", "确认写入\n"),
+            ("class:confirmation.body", f"{title}\n"),
+            ("class:confirmation.body", f"工具：{pending.tool_name}\n" if pending.tool_name else ""),
+            ("class:confirmation.option.selected" if selected == 0 else "class:confirmation.option", "▶ 确认\n"),
+            ("class:confirmation.option.selected" if selected == 1 else "class:confirmation.option", "▶ 拒绝\n"),
+            ("class:confirmation.hint", "↑/↓ 选择，Enter 确认，Esc 拒绝"),
+        ]
+        return [fragment for fragment in body_lines if fragment[1]]
+
+    @property
+    def confirmation_panel(self) -> Window:
+        return Window(
+            content=FormattedTextControl(self.get_confirmation_fragments),
+            height=Dimension(preferred=5, max=6),
+            wrap_lines=True,
+            always_hide_cursor=True,
+            style="class:confirmation",
+        )
 
     async def run_agent_turn(self, content: str) -> None:
         try:

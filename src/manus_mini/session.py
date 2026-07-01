@@ -49,24 +49,34 @@ class SessionManager:
             return self._save_current(self.current)
         if self.current.pending_confirmation is not None:
             if normalized in CONFIRMATION_WORDS:
-                self.current.pending_confirmation.approved = True
-                self.current.pending_confirmation.prompt = self.current.pending_confirmation.prompt or content.strip()
-                self.current = self.runtime.on_user_message(
-                    self.current.active_task.goal if self.current.active_task else content,
-                    self.current,
-                    append_user_message=False,
-                )
-                self.current.pending_confirmation = None
-                return self._save_current(self.current)
+                return self._save_current(self.accept_pending_confirmation())
             if normalized in DENIAL_WORDS:
-                self.current.pending_confirmation = None
-                self.current.messages.append(Message.system("用户拒绝了待确认写入。"))
-                if self.current.active_task is not None:
-                    self.current.active_task.status = "failed"
-                    self.current.active_task.result = "用户拒绝了待确认写入。"
-                return self._save_current(self.current)
+                return self._save_current(self.reject_pending_confirmation())
         self.current = self.runtime.on_user_message(content, self.current, append_user_message=append_user_message)
         return self._save_current(self.current)
+
+    def accept_pending_confirmation(self) -> SessionState:
+        if self.current.pending_confirmation is None:
+            return self.current
+        self.current.pending_confirmation.approved = True
+        self.current.pending_confirmation.prompt = self.current.pending_confirmation.prompt or "confirmed"
+        self.current = self.runtime.on_user_message(
+            self.current.active_task.goal if self.current.active_task else "",
+            self.current,
+            append_user_message=False,
+        )
+        self.current.pending_confirmation = None
+        return self.current
+
+    def reject_pending_confirmation(self) -> SessionState:
+        if self.current.pending_confirmation is None:
+            return self.current
+        self.current.pending_confirmation = None
+        self.current.messages.append(Message.system("用户拒绝了待确认写入。"))
+        if self.current.active_task is not None:
+            self.current.active_task.status = "failed"
+            self.current.active_task.result = "用户拒绝了待确认写入。"
+        return self.current
 
     def compact_context(self) -> SessionState:
         if not self.current.messages:
@@ -168,6 +178,7 @@ def format_help_text() -> str:
             "- `/compact` / `压缩上下文`：手动压缩当前对话上下文。",
             "- `忘记 <关键词>`：删除匹配的长期记忆；只输入 `忘记` 会清空长期记忆。",
             "- `确认` / `取消`：处理待确认的写入操作。",
+            "- 待确认时会在 TUI 底部显示弹层，可用 ↑/↓ 切换，Enter 确认，Esc 取消。",
             "",
             "CLI 指令",
             "- `manus-mini list --cwd <目录>`：列出指定工作目录下已保存的对话。",
