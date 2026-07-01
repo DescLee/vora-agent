@@ -28,9 +28,38 @@ def test_runtime_turns_user_request_into_agent_reply(tmp_path: Path) -> None:
     assert result.active_task is not None
     assert result.messages[-1].role == "agent"
     assert "hello world" in result.messages[-1].content
+    assert any(message.role == "tool" for message in result.messages)
     assert any(observation.tool_call_id == "call-read-a" for observation in result.active_task.observations)
     assert any(event.phase == "llm" for event in result.active_task.trace_events)
     assert any(event.data.get("tool_name") == "read_file" for event in result.active_task.trace_events)
+
+
+def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> None:
+    class ToolThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    content="先读取 README。",
+                    tool_calls=[ToolCall(id="call-read-readme", name="read_file", args={"path": "README.md"})],
+                )
+            return LLMResult(content="完成")
+
+    (tmp_path / "README.md").write_text("hello world", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime()
+    runtime.react_loop.llm = ToolThenAnswerLLM()
+
+    result = runtime.on_user_message("读取 README.md", session)
+
+    assert result.active_task is not None
+    roles = [message.role for message in result.messages]
+    assert "agent" in roles
+    assert "tool" in roles
+    assert any(message.tool_call_id == "call-read-readme" for message in result.messages if message.role == "tool")
 
 
 def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
@@ -627,7 +656,7 @@ def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: 
     result = runtime.on_user_message("继续", session)
 
     assert result.active_task is not None
-    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     budget_rows = [row for row in rows if row.get("type") == "context_budget"]
     assert budget_rows
@@ -709,6 +738,47 @@ def test_runtime_replans_with_llm_planner_after_reflection_requests_replan(tmp_p
     assert any("needs more structure" in goal for goal in planner.calls[1:])
 
 
+def test_reflection_loop_carries_follow_up_context_into_next_round(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, task: TaskState, session: SessionState) -> str:  # noqa: ARG002
+            self.calls += 1
+            task.observations.append(
+                Observation(
+                    tool_call_id="call-list-files",
+                    ok=True,
+                    summary="已列出 4 个文件",
+                )
+            )
+            return "第一轮草稿"
+
+    class FakeReflector:
+        def decide(self, task: TaskState, draft: str):  # noqa: ANN001, ANN201, ARG002
+            return type(
+                "ReflectionDecision",
+                (),
+                {
+                    "decision": "replan",
+                    "reason": "需要基于已有结果继续",
+                },
+            )()
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="分析项目结构", cwd=tmp_path)
+    reflection_loop = ReflectionLoop(react_loop=FakeReactLoop(), reflector=FakeReflector())
+
+    result = reflection_loop.run(task, session)
+
+    assert result.decision == "replan"
+    assert session.messages
+    assert session.messages[-1].role == "system"
+    assert "上一轮已完成的进展" in session.messages[-1].content
+    assert "第一轮草稿" in session.messages[-1].content
+    assert "已列出 4 个文件" in session.messages[-1].content
+
+
 def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
@@ -763,7 +833,7 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     result = runtime.on_user_message("写一个报告", session)
 
     assert result.active_task is not None
-    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     request_rows = [row for row in rows if row.get("type") == "llm_request"]
     response_rows = [row for row in rows if row.get("type") == "llm_response"]
@@ -773,9 +843,70 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     assert request_rows[0]["request"]["tool_names"]
     assert response_rows[0]["request"]["messages"]
     assert "response" in response_rows[0]
+    reflection_rows = [row for row in rows if row.get("type") == "reflection"]
+    assert reflection_rows
+    assert "decision" in reflection_rows[0]
+    assert "reason" in reflection_rows[0]
+    assert "draft_preview" in reflection_rows[0]
 
 
-def test_runtime_omits_successful_read_file_content_from_logs(tmp_path: Path) -> None:
+def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path: Path) -> None:
+    class ToolThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    content="先读取 README。",
+                    tool_calls=[ToolCall(id="call-read-readme", name="read_file", args={"path": "README.md"})],
+                )
+            return LLMResult(content="完成")
+
+    (tmp_path / "README.md").write_text("hello world", encoding="utf-8")
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime.react_loop.llm = ToolThenAnswerLLM()
+    session = SessionState.create(cwd=tmp_path)
+
+    result = runtime.on_user_message("读取 README.md", session)
+
+    assert result.active_task is not None
+    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    request_rows = [row for row in rows if row.get("type") == "llm_request"]
+    assert request_rows
+    payload_messages = request_rows[-1]["request"]["messages"]
+    assert any(message["role"] == "tool" for message in payload_messages)
+    assert any(message["role"] == "assistant" and message.get("tool_calls") for message in payload_messages)
+    assert any("hello world" in message.get("content", "") for message in payload_messages if message["role"] == "tool")
+
+
+def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -> None:
+    class InterruptingLLM:
+        def context_limit(self) -> int | None:
+            return 1_000
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise KeyboardInterrupt
+
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime.react_loop.llm = InterruptingLLM()
+    session = SessionState.create(cwd=tmp_path)
+
+    result = runtime.on_user_message("写一个报告", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "failed"
+    assert "用户中断" in result.active_task.result
+    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    interrupt_rows = [row for row in rows if row.get("type") == "interrupt"]
+    assert interrupt_rows
+    assert interrupt_rows[0]["code"] == "USER_CANCELLED"
+
+
+def test_runtime_logs_successful_read_file_content_in_logs(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("secret file content", encoding="utf-8")
 
     class ReadReadmeLLM:
@@ -806,10 +937,11 @@ def test_runtime_omits_successful_read_file_content_from_logs(tmp_path: Path) ->
     assert read_events
     assert "content_preview" not in read_events[-1].data
 
-    log_path = tmp_path / "runs" / result.active_task.run_id / "events.jsonl"
+    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
     log_text = log_path.read_text(encoding="utf-8")
-    assert "secret file content" not in log_text
-    assert "[read_file result omitted from logs]" in log_text
+    assert "secret file content" in log_text
+    assert "read_file" in log_text
+    assert "secret file content" in log_text
 
 
 def test_runtime_stops_when_total_runtime_limit_is_exceeded(tmp_path: Path) -> None:

@@ -26,16 +26,6 @@ def format_tool_result_message(tool_result) -> str:
     return "\n\n".join(parts)
 
 
-def _read_file_error_log_content(content: str) -> str:
-    lines = []
-    for line in content.splitlines():
-        if line.startswith("error_code:"):
-            lines.append(line)
-        elif line and not line.startswith("content:"):
-            lines.append(line)
-    return "\n".join(lines) or "[read_file failed]"
-
-
 def assistant_message_from_llm_result(llm_result) -> Message:
     message = Message.agent(
         llm_result.content,
@@ -85,7 +75,7 @@ class ReActLoop:
                 )
             )
             validate_tool_call_pairs(messages)
-            llm_result = self._complete_with_rule_fallback(messages, task)
+            llm_result = self._complete_with_rule_fallback(messages, task, session.session_id)
             llm_result = self._normalize_tool_call_ids(llm_result, iteration_index)
             task.trace_events.append(
                 TraceEvent(
@@ -117,6 +107,7 @@ class ReActLoop:
 
             self._record_llm_usage(task, llm_result)
             messages.append(assistant_message_from_llm_result(llm_result))
+            session.messages.append(assistant_message_from_llm_result(llm_result))
             known_tool_calls, tool_results = self._prepare_tool_calls(llm_result.tool_calls, task, session)
             known_ids = {call.id for call in known_tool_calls}
             schedulable_calls = [
@@ -150,7 +141,9 @@ class ReActLoop:
                 task.observations.append(
                     self.observer.observe(call, tool_result)
                 )
-                messages.append(Message.tool(format_tool_result_message(tool_result), tool_call_id=call.id))
+                tool_message = Message.tool(format_tool_result_message(tool_result), tool_call_id=call.id)
+                messages.append(tool_message)
+                session.messages.append(tool_message)
 
             if any(result.error_code in {"WRITE_REQUIRES_CONFIRMATION", "DRY_RUN"} for result in tool_results.values()):
                 pending = session.pending_confirmation
@@ -229,11 +222,12 @@ class ReActLoop:
     def _estimated_context_tokens(self, messages: list[Message]) -> int:
         return estimate_message_tokens(messages)
 
-    def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState) -> LLMResult:
+    def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState, session_id: str) -> LLMResult:
         try:
             request_payload = {"messages": self._loggable_messages(messages), "tool_names": self.registry.names()}
             if self.logger is not None:
                 self.logger.record(
+                    session_id,
                     task.run_id,
                     {
                         "type": "llm_request",
@@ -244,6 +238,7 @@ class ReActLoop:
             result = self.llm.complete_with_tools(messages, self.registry.names())
             if self.logger is not None:
                 self.logger.record(
+                    session_id,
                     task.run_id,
                     {
                         "type": "llm_response",
@@ -256,6 +251,7 @@ class ReActLoop:
         except (LLMRequestError, ValueError, TypeError, KeyError, IndexError) as error:
             if self.logger is not None:
                 self.logger.record(
+                    session_id,
                     task.run_id,
                     {
                         "type": "llm_response",
@@ -278,26 +274,7 @@ class ReActLoop:
             return LLMResult(content=fallback_text)
 
     def _loggable_messages(self, messages: list[Message]) -> list[dict]:
-        payload = openai_messages(messages)
-        assistant_tool_names: dict[str, str] = {}
-        for row in payload:
-            for call in row.get("tool_calls", []) or []:
-                if not isinstance(call, dict):
-                    continue
-                function = call.get("function") if isinstance(call.get("function"), dict) else {}
-                assistant_tool_names[str(call.get("id") or "")] = str(function.get("name") or "")
-        for row in payload:
-            if row.get("role") != "tool":
-                continue
-            tool_call_id = str(row.get("tool_call_id") or "")
-            if assistant_tool_names.get(tool_call_id) != "read_file":
-                continue
-            content = str(row.get("content") or "")
-            if "error_code:" in content:
-                row["content"] = _read_file_error_log_content(content)
-            else:
-                row["content"] = "[read_file result omitted from logs]"
-        return payload
+        return openai_messages(messages)
 
     def _rule_fallback_content(self, task: TaskState, messages: list[Message], reason: str = "") -> str:
         user_messages = [message.content for message in messages if message.role == "user"]

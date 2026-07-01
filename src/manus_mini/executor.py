@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from concurrent.futures import as_completed
 
 from manus_mini.models import PendingConfirmation, SessionState, TaskState, TraceEvent, ToolCall
 from manus_mini.tools.base import ToolPreview, ToolResult
@@ -9,6 +10,7 @@ from manus_mini.tools.registry import ToolRegistry
 
 
 RETRYABLE_TOOL_ERROR_CODES = {"TOOL_TIMEOUT", "TOOL_ERROR"}
+USER_CANCELLED_ERROR_CODE = "USER_CANCELLED"
 
 
 def sanitize_tool_args(args: dict) -> dict:
@@ -92,6 +94,9 @@ class Executor:
             try:
                 future = pool.submit(tool.run, **call.args)
                 result = future.result(timeout=task.limits.max_tool_timeout_seconds)
+            except KeyboardInterrupt:
+                pool.shutdown(wait=False, cancel_futures=True)
+                return self._cancelled_result(call.name)
             except FuturesTimeoutError:
                 pool.shutdown(wait=False, cancel_futures=True)
                 return ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
@@ -132,11 +137,37 @@ class Executor:
     def _should_retry(self, result: ToolResult) -> bool:
         return result.error_code in RETRYABLE_TOOL_ERROR_CODES
 
+    def _cancelled_result(self, tool_name: str) -> ToolResult:
+        return ToolResult(tool_name=tool_name, ok=False, summary="tool execution interrupted by user", error_code=USER_CANCELLED_ERROR_CODE)
+
     def run_batch(self, batch: list[ToolCall], session: SessionState, task: TaskState) -> dict[str, ToolResult]:
         if len(batch) == 1:
             call = batch[0]
             return {call.id: self.execute(call, session, task)}
 
-        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
-            results = executor.map(lambda call: (call.id, self.execute(call, session, task)), batch)
-            return dict(results)
+        pool = ThreadPoolExecutor(max_workers=len(batch))
+        futures = {pool.submit(self.execute, call, session, task): call for call in batch}
+        results: dict[str, ToolResult] = {}
+        try:
+            for future in as_completed(futures):
+                call = futures[future]
+                results[call.id] = future.result()
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            task.trace_events.append(
+                TraceEvent(
+                    phase="tool",
+                    message="Tool batch interrupted by user",
+                    data={
+                        "tool_call_ids": [call.id for call in batch],
+                        "tool_names": [call.name for call in batch],
+                    },
+                )
+            )
+            for call in batch:
+                if call.id not in results:
+                    results[call.id] = self._cancelled_result(call.name)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        return results

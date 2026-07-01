@@ -52,7 +52,10 @@ class SessionManager:
                 return self._save_current(self.accept_pending_confirmation())
             if normalized in DENIAL_WORDS:
                 return self._save_current(self.reject_pending_confirmation())
-        self.current = self.runtime.on_user_message(content, self.current, append_user_message=append_user_message)
+        try:
+            self.current = self.runtime.on_user_message(content, self.current, append_user_message=append_user_message)
+        except KeyboardInterrupt:
+            self._mark_current_interrupted()
         return self._save_current(self.current)
 
     def accept_pending_confirmation(self) -> SessionState:
@@ -165,6 +168,12 @@ class SessionManager:
     def _save_current(self, session: SessionState) -> SessionState:
         self.session_store.save(session)
         return session
+
+    def _mark_current_interrupted(self) -> None:
+        if self.current.active_task is not None:
+            self.current.active_task.status = "failed"
+            self.current.active_task.result = "执行已被用户中断，已保留当前进度。"
+        self.current.messages.append(Message.system("用户中断了当前执行，已保留当前进度。"))
 
 
 def format_help_text() -> str:

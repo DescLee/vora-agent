@@ -68,9 +68,9 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     welcome = format_welcome(task.limits)
 
     assert "欢迎使用 Manus Mini" in welcome
-    assert "外层工程循环上限：99 轮" in welcome
-    assert "ReAct 上限：99 轮" in welcome
-    assert "Reflection 上限：99 轮" in welcome
+    assert "外层工程循环上限：3 轮" in welcome
+    assert "ReAct 上限：10 轮" in welcome
+    assert "Reflection 上限：3 轮" in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
     assert "/save-context" in welcome
@@ -272,8 +272,8 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "工具调度" in process
     assert "共 1 个批次" in process
     assert "第 1 批（1 个工具）" in process
-    assert "调用 1.1 read_file(call-read) path: README.md" in process
-    assert "结果 1.1 read_file(call-read) 已返回: read README.md" in process
+    assert "1.1 调用 read_file(call-read) path: README.md" in process
+    assert "1.1 read_file(call-read) 已返回: read README.md" in process
     assert "# demo project" not in process
     assert "最近过程（折叠）" in process
 
@@ -317,8 +317,8 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
     assert llm_index < schedule_index < batch_index
     assert "我需要先确认 README 内容。" not in process
     assert "已返回" in process
-    assert "调用 1.1 read_file(call-read) path: README.md" in process
-    assert "结果 1.1 read_file(call-read) 成功: read README.md" in process
+    assert "1.1 调用 read_file(call-read) path: README.md" in process
+    assert "1.1 read_file(call-read) 成功: read README.md" in process
 
 
 def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path) -> None:
@@ -363,9 +363,9 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
     assert "工具调度" in process
     assert "共 1 个批次" in process
     assert "第 1 批（2 个工具）" in process
-    assert "调用 10.1 list_files(call-list) path: ." in process
-    assert "调用 10.2 read_file(call-read) path: README.md" in process
-    assert "结果 10.2 read_file(call-read) 成功: read README.md" in process
+    assert "10.1 调用 list_files(call-list) path: ." in process
+    assert "10.2 调用 read_file(call-read) path: README.md" in process
+    assert "10.2 read_file(call-read) 成功: read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
@@ -427,12 +427,12 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
     assert "共 2 个批次" in process
     assert "第 1 批（2 个工具）" in process
     assert "第 2 批（1 个工具）" in process
-    assert "调用 10.1 list_files(call-list) path: ." in process
-    assert "调用 10.2 read_file(call-read) path: README.md" in process
-    assert "调用 10.3 read_file(call-docs) path: docs/design.md" in process
-    assert "结果 10.1 list_files(call-list) 成功: found 3 files" in process
-    assert "结果 10.2 read_file(call-read) 成功: read README.md" in process
-    assert "结果 10.3 read_file(call-docs) 成功: read docs/design.md" in process
+    assert "10.1 调用 list_files(call-list) path: ." in process
+    assert "10.2 调用 read_file(call-read) path: README.md" in process
+    assert "10.3 调用 read_file(call-docs) path: docs/design.md" in process
+    assert "10.1 list_files(call-list) 成功: found 3 files" in process
+    assert "10.2 read_file(call-read) 成功: read README.md" in process
+    assert "10.3 read_file(call-docs) 成功: read docs/design.md" in process
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
@@ -528,6 +528,30 @@ def test_format_phase_label_maps_task_status_for_users(tmp_path: Path) -> None:
 
     task.status = "done"
     assert format_phase_label(task) == "已完成"
+
+
+def test_format_process_shows_reflection_reason_in_recent_process(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="reflection",
+            message="Reflection decided replan: 需要补充技术架构说明",
+            data={
+                "decision": "replan",
+                "reason": "需要补充技术架构说明",
+                "draft_preview": "草稿",
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "最近过程（折叠）" in process
+    assert "反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in process
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:

@@ -268,9 +268,7 @@ def format_tool_batch_lines(
 ) -> list[str]:
     call_ids = {str(call.get("id", "unknown")) for call in tool_calls}
     prefixes = {
-        str(call.get("id", "unknown")): (
-            f"{iteration}.{call_index}" if iteration else str(call_index)
-        )
+        str(call.get("id", "unknown")): f"{iteration}.{call_index}" if iteration else str(call_index)
         for call_index, call in enumerate(tool_calls, start=start_index)
     }
     default_prefix = next(iter(prefixes.values()), f"{iteration}.{batch_index}" if iteration else str(batch_index))
@@ -290,29 +288,24 @@ def format_tool_batch_lines(
             tool_call_id = str(event.data.get("tool_call_id") or "")
             tool_name = event.data.get("tool_name", "unknown")
             prefix = prefixes.get(tool_call_id, default_prefix)
-            if event.message == "Tool batch completed":
-                lines.append(
-                    f"- 结果 {prefix} {tool_name}({tool_call_id}) 已返回: 批次完成"
-                )
-                continue
             status = format_tool_return_status(event.data)
             summary = event.data.get("summary") or event.message
-            line = f"- 结果 {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
+            line = f"- {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
             lines.append(line)
     if not lines:
-        lines.append(f"- 结果 {default_prefix} 等待工具返回。")
+        lines.append(f"- {default_prefix} 等待工具返回。")
     call_lines = []
     for call_index, call in enumerate(tool_calls, start=start_index):
         tool_call_id = str(call.get("id", "unknown"))
         name = str(call.get("name", "unknown"))
         args = format_inline_args(call.get("args", {}))
         prefix = prefixes.get(tool_call_id, f"{iteration}.{call_index}" if iteration else str(call_index))
-        call_line = f"- 调用 {prefix} {name}({tool_call_id}) {args}".rstrip()
+        call_line = f"- {prefix} 调用 {name}({tool_call_id}) {args}".rstrip()
         call_lines.append(call_line)
         observation = observation_by_call.get(tool_call_id)
         if observation is not None and tool_call_id not in event_by_call_id:
             status = "成功" if observation.ok else "失败"
-            result_line = f"- 结果 {prefix} {tool_call_id} {status}: {redact_sensitive_text(observation.summary)}"
+            result_line = f"- {prefix} {tool_call_id} {status}: {redact_sensitive_text(observation.summary)}"
             lines.append(result_line)
     return [*call_lines, *lines]
 
@@ -458,6 +451,9 @@ def format_event_summary(event: TraceEvent) -> str:
         return f"ReAct：{event.message}"
 
     if event.phase == "reflection":
+        reason = event.data.get("reason")
+        if reason:
+            return f"反思：{event.message}（{reason}）"
         return f"反思：{event.message}"
 
     if event.phase == "runtime":
@@ -1223,6 +1219,13 @@ class PromptTui:
         try:
             session = await asyncio.to_thread(self.manager.handle_user_message, content, False)
             await self.stream_session(session)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            self.manager._save_current(self.manager.current)
+            self.is_running = False
+            self.is_streaming_artifact = False
+            self.status.text = format_status(self.manager.current, is_running=False)
+            self.app.invalidate()
+            return
         except Exception as error:
             self.render_unexpected_error(error)
             return
@@ -1273,8 +1276,13 @@ class PromptTui:
         self.app.invalidate()
 
     def run(self) -> None:
-        self.app.run()
+        try:
+            self.app.run()
+        except KeyboardInterrupt:
+            self.manager._save_current(self.manager.current)
 
 
 def main() -> None:
-    PromptTui().run()
+    from manus_mini.cli import main as cli_main
+
+    cli_main()

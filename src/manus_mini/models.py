@@ -13,10 +13,10 @@ def new_id(prefix: str) -> str:
 
 
 class LoopLimits(BaseModel):
-    max_engineering_steps: int = 99
-    max_react_iterations: int = 99
-    max_reflection_rounds: int = 99
-    max_tool_retries: int = 99
+    max_engineering_steps: int = 3
+    max_react_iterations: int = 10
+    max_reflection_rounds: int = 3
+    max_tool_retries: int = 3
     max_tool_timeout_seconds: int = 30
     max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
@@ -105,6 +105,7 @@ class PlanStep(BaseModel):
 
 class TaskState(BaseModel):
     run_id: str = Field(default_factory=lambda: new_id("run"))
+    session_id: str = ""
     goal: str
     cwd: Path
     status: Literal[

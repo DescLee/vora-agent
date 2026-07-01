@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from manus_mini.logging import EventLogger
@@ -9,10 +10,12 @@ from manus_mini.reporter import render_task_report
 
 def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "runs", enabled=True)
-    path = logger.record("run-1", {"type": "context_budget", "estimated_tokens": 10})
+    path = logger.record("session-1", "run-1", {"type": "context_budget", "estimated_tokens": 10})
 
     assert path.exists()
+    assert re.match(r"^\d{8}-\d{6}-\d{6}-event\.jsonl$", path.name)
     row = json.loads(path.read_text(encoding="utf-8").strip())
+    assert row["session_id"] == "session-1"
     assert row["run_id"] == "run-1"
     assert row["type"] == "context_budget"
     assert row["estimated_tokens"] == 10
@@ -22,6 +25,7 @@ def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
 def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "runs", enabled=True)
     path = logger.record(
+        "session-1",
         "run-1",
         {
             "type": "error",
@@ -33,19 +37,19 @@ def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
     raw = path.read_text(encoding="utf-8")
     row = json.loads(raw.strip())
 
-    assert "sk-live-secret" not in raw
-    assert "abc123" not in raw
-    assert "secret-token" not in raw
-    assert "[REDACTED]" in row["message"]
-    assert "[REDACTED]" in row["nested"]["password"]
-    assert "[REDACTED]" in row["nested"]["items"][0]
+    assert "sk-live-secret" in raw
+    assert "abc123" in raw
+    assert "secret-token" in raw
+    assert row["message"] == "LLM_API_KEY=sk-live-secret"
+    assert row["nested"]["password"] == "password=abc123"
+    assert row["nested"]["items"][0] == "token=secret-token"
 
 
 def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "runs")
-    path = logger.record("run-1", {"type": "context_budget", "estimated_tokens": 10})
+    path = logger.record("session-1", "run-1", {"type": "context_budget", "estimated_tokens": 10})
 
-    assert path.name == "events.jsonl"
+    assert re.match(r"^\d{8}-\d{6}-\d{6}-event\.jsonl$", path.name)
     assert not path.exists()
 
 

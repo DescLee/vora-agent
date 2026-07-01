@@ -37,7 +37,7 @@ class AgentRuntime:
         self.default_limits = default_limits or LoopLimits()
         self.logger = logger or EventLogger(Path("runs"))
         self.react_loop = ReActLoop(dry_run=dry_run, logger=self.logger)
-        self.reflection_loop = ReflectionLoop(react_loop=self.react_loop)
+        self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, logger=self.logger)
         self.planner = Planner()
         self.reporter = reporter or Reporter(self._default_reporter_output_dir())
         self.dry_run = dry_run
@@ -66,6 +66,7 @@ class AgentRuntime:
         relevant_memories = self._inject_relevant_memories(session, content)
 
         task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits)
+        task.session_id = session.session_id
         context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
         model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
         task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
@@ -88,129 +89,137 @@ class AgentRuntime:
             )
         )
         session.active_task = task
-        if self._is_chat_only_task(task):
-            return self._complete_chat_task(content, session, task)
-        started_at = monotonic()
-        last_result = ""
-        estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
-        self.logger.record(
-            task.run_id,
-            {
-                "type": "context_budget",
-                "estimated_tokens": estimated_tokens,
-                "model_context_limit": task.model_context_limit,
-                "context_usage": context_usage,
-                "compression_triggered": context_usage is not None and context_usage >= 0.70,
-                "message_count": len(session.messages),
-                "memory_refs": list(session.memory_refs),
-            },
-        )
-
-        for _ in range(task.limits.max_engineering_steps):
-            if self._runtime_exceeded(started_at, task.limits.max_runtime_seconds):
-                self._mark_runtime_timeout(task)
-                break
-            task.step_count += 1
-            self._mark_plan_running(task)
-            task.status = "reflecting"
+        interrupted = False
+        try:
+            if self._is_chat_only_task(task):
+                return self._complete_chat_task(content, session, task)
+            started_at = monotonic()
+            last_result = ""
+            estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
             self.logger.record(
+                session.session_id,
                 task.run_id,
                 {
-                    "type": "engineering_step",
-                    "step_count": task.step_count,
-                    "goal": task.goal,
+                    "type": "context_budget",
+                    "estimated_tokens": estimated_tokens,
+                    "model_context_limit": task.model_context_limit,
+                    "context_usage": context_usage,
+                    "compression_triggered": context_usage is not None and context_usage >= 0.70,
+                    "message_count": len(session.messages),
+                    "memory_refs": list(session.memory_refs),
                 },
-                )
-            try:
-                reflection = self.reflection_loop.run(task, session)
-            except Exception as error:
-                error_code = "MAX_REACT_ITERATIONS_REACHED"
-                if str(error) == "TOKEN_BUDGET_EXCEEDED":
-                    error_code = "TOKEN_BUDGET_EXCEEDED"
-                elif str(error) != "MAX_REACT_ITERATIONS_REACHED":
-                    error_code = "LLM_ERROR"
-                task.errors.append(
-                    AgentError(
-                        code=error_code,
-                        message=str(error) or error.__class__.__name__,
-                        retryable=True,
-                    )
-                )
-                task.trace_events.append(
-                    TraceEvent(
-                        phase="runtime",
-                        message="Runtime caught execution error",
-                        data={"code": error_code, "message": task.errors[-1].message},
-                    )
-                )
-                task.result = format_runtime_exception(error)
-                task.status = "failed"
-                self.logger.record(
-                    task.run_id,
-                    {
-                        "type": "error",
-                        "code": task.errors[-1].code,
-                        "message": task.errors[-1].message,
-                    },
-                )
-                break
-            else:
-                last_result = reflection.content
-                task.result = reflection.content
-                task.trace_events.append(
-                    TraceEvent(
-                        phase="runtime",
-                        message="Reflection result applied",
-                        data={
-                            "decision": reflection.decision,
-                            "accepted": reflection.accepted,
-                            "reason": reflection.reason,
-                        },
-                    )
-                )
-                if session.pending_confirmation is not None and not session.pending_confirmation.approved:
-                    task.status = "waiting_confirmation"
-                    task.result = session.pending_confirmation.prompt or session.pending_confirmation.summary or "需要用户确认写入"
-                    break
+            )
+
+            for _ in range(task.limits.max_engineering_steps):
                 if self._runtime_exceeded(started_at, task.limits.max_runtime_seconds):
                     self._mark_runtime_timeout(task)
                     break
-                if reflection.accepted:
-                    self._mark_plan_done(task)
-                    task.status = "done"
-                    break
-                if reflection.decision == "replan":
-                    task.plan = self.planner.build_plan(f"{content}\n{reflection.reason}", session)
-                    self._mark_plan_running(task)
+                task.step_count += 1
+                self._mark_plan_running(task)
+                task.status = "reflecting"
+                self.logger.record(
+                    session.session_id,
+                    task.run_id,
+                    {
+                        "type": "engineering_step",
+                        "step_count": task.step_count,
+                        "goal": task.goal,
+                    },
+                )
+                try:
+                    reflection = self.reflection_loop.run(task, session)
+                except Exception as error:
+                    error_code = "MAX_REACT_ITERATIONS_REACHED"
+                    if str(error) == "TOKEN_BUDGET_EXCEEDED":
+                        error_code = "TOKEN_BUDGET_EXCEEDED"
+                    elif str(error) != "MAX_REACT_ITERATIONS_REACHED":
+                        error_code = "LLM_ERROR"
+                    task.errors.append(
+                        AgentError(
+                            code=error_code,
+                            message=str(error) or error.__class__.__name__,
+                            retryable=True,
+                        )
+                    )
                     task.trace_events.append(
                         TraceEvent(
                             phase="runtime",
-                            message="Planner regenerated plan after reflection",
+                            message="Runtime caught execution error",
+                            data={"code": error_code, "message": task.errors[-1].message},
+                        )
+                    )
+                    task.result = format_runtime_exception(error)
+                    task.status = "failed"
+                    self.logger.record(
+                        session.session_id,
+                        task.run_id,
+                        {
+                            "type": "error",
+                            "code": task.errors[-1].code,
+                            "message": task.errors[-1].message,
+                        },
+                    )
+                    break
+                else:
+                    last_result = reflection.content
+                    task.result = reflection.content
+                    task.trace_events.append(
+                        TraceEvent(
+                            phase="runtime",
+                            message="Reflection result applied",
                             data={
+                                "decision": reflection.decision,
+                                "accepted": reflection.accepted,
                                 "reason": reflection.reason,
-                                "steps": [
-                                    {
-                                        "description": step.description,
-                                        "intent": step.intent,
-                                        "status": step.status,
-                                    }
-                                    for step in task.plan
-                                ],
                             },
                         )
                     )
-                elif reflection.decision == "regenerate":
-                    session.messages.append(
-                        Message.system(f"请基于现有草稿重新生成，并补强细节：{reflection.reason}")
-                    )
-                elif reflection.decision == "local_update":
-                    session.messages.append(
-                        Message.system(f"请对当前草稿做局部修订：{reflection.reason}")
-                    )
-                task.status = "planning"
-        else:
-            task.result = last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。"
-            task.status = "failed"
+                    if session.pending_confirmation is not None and not session.pending_confirmation.approved:
+                        task.status = "waiting_confirmation"
+                        task.result = session.pending_confirmation.prompt or session.pending_confirmation.summary or "需要用户确认写入"
+                        break
+                    if self._runtime_exceeded(started_at, task.limits.max_runtime_seconds):
+                        self._mark_runtime_timeout(task)
+                        break
+                    if reflection.accepted:
+                        self._mark_plan_done(task)
+                        task.status = "done"
+                        break
+                    if reflection.decision == "replan":
+                        task.plan = self.planner.build_plan(f"{content}\n{reflection.reason}", session)
+                        self._mark_plan_running(task)
+                        task.trace_events.append(
+                            TraceEvent(
+                                phase="runtime",
+                                message="Planner regenerated plan after reflection",
+                                data={
+                                    "reason": reflection.reason,
+                                    "steps": [
+                                        {
+                                            "description": step.description,
+                                            "intent": step.intent,
+                                            "status": step.status,
+                                        }
+                                        for step in task.plan
+                                    ],
+                                },
+                            )
+                        )
+                    elif reflection.decision == "regenerate":
+                        session.messages.append(
+                            Message.system(f"请基于现有草稿重新生成，并补强细节：{reflection.reason}")
+                        )
+                    elif reflection.decision == "local_update":
+                        session.messages.append(
+                            Message.system(f"请对当前草稿做局部修订：{reflection.reason}")
+                        )
+                    task.status = "planning"
+            else:
+                task.result = last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。"
+                task.status = "failed"
+        except KeyboardInterrupt:
+            interrupted = True
+            self._mark_user_cancelled(task)
 
         artifact_path = self.reporter.write_task_report(
             f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{task.run_id}.md",
@@ -221,11 +230,13 @@ class AgentRuntime:
         task.artifacts.append(artifact)
         self._persist_memory_from_turn(session, task, content)
         self.logger.record(
+            session.session_id,
             task.run_id,
             {
                 "type": "result",
                 "status": task.status,
                 "artifact": artifact.path.as_posix(),
+                "interrupted": interrupted,
             },
         )
         session.messages.append(Message.agent(task.result))
@@ -270,6 +281,7 @@ class AgentRuntime:
             )
         )
         self.logger.record(
+            session.session_id,
             task.run_id,
             {
                 "type": "result",
@@ -344,6 +356,7 @@ class AgentRuntime:
             recent_observations=session.active_task.observations[-10:] if session.active_task is not None else [],
         )
         self.logger.record(
+            session.session_id,
             session.active_task.run_id if session.active_task is not None else "unknown",
             {
                 "type": "context_bundle",
@@ -375,3 +388,31 @@ class AgentRuntime:
         )
         task.result = format_runtime_timeout(task.limits.max_runtime_seconds)
         task.status = "failed"
+
+    def _mark_user_cancelled(self, task: TaskState) -> None:
+        task.errors.append(
+            AgentError(
+                code="USER_CANCELLED",
+                message="execution interrupted by user",
+                retryable=False,
+            )
+        )
+        task.trace_events.append(
+            TraceEvent(
+                phase="runtime",
+                message="Execution interrupted by user",
+                data={"code": "USER_CANCELLED"},
+            )
+        )
+        task.result = "执行已被用户中断，已保留当前进度。"
+        task.status = "failed"
+        self.logger.record(
+            task.session_id or "unknown-session",
+            task.run_id,
+            {
+                "type": "interrupt",
+                "code": "USER_CANCELLED",
+                "message": task.result,
+                "step_count": task.step_count,
+            },
+        )
