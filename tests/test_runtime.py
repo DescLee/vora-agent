@@ -162,6 +162,34 @@ def test_react_loop_preserves_assistant_reasoning_content_between_tool_rounds(tm
     assert result == "总结完成"
 
 
+def test_react_loop_records_llm_usage_from_source_response(tmp_path: Path) -> None:
+    class UsageLLM:
+        def context_limit(self) -> int | None:
+            return 1_000
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                content="done",
+                source_response={
+                    "usage": {
+                        "prompt_tokens": 321,
+                        "completion_tokens": 45,
+                        "total_tokens": 366,
+                    }
+                },
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="记录用量", cwd=tmp_path)
+
+    result = ReActLoop(UsageLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "done"
+    assert task.last_prompt_tokens == 321
+    assert task.last_completion_tokens == 45
+    assert task.last_total_tokens == 366
+
+
 def test_react_loop_executes_independent_tool_batch_in_parallel(tmp_path: Path) -> None:
     class SlowReadOnlyTool:
         risk_level = "safe"

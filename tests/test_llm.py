@@ -4,7 +4,7 @@ import urllib.error
 import pytest
 
 from manus_mini.config import AppConfig
-from manus_mini.llm import LLMRequestError, OpenAICompatibleLLMClient, openai_messages, tool_schema
+from manus_mini.llm import LLMRequestError, OpenAICompatibleLLMClient, extract_usage, infer_model_context_limit, openai_messages, tool_schema
 from manus_mini.models import Message
 
 
@@ -113,6 +113,32 @@ def test_openai_compatible_client_exposes_source_request_and_response(monkeypatc
     assert result.source_response["choices"][0]["message"]["content"] == "done"
 
 
+def test_openai_compatible_client_keeps_usage_from_response(monkeypatch) -> None:
+    def fake_urlopen(*args, **kwargs):  # noqa: ARG001
+        return io.BytesIO(
+            b'{"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168},"choices":[{"message":{"content":"done","tool_calls":[]}}]}'
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost/v1",
+            llm_api_key="test-key",
+            llm_model="deepseek-v4-flash",
+        )
+    )
+
+    result = client.complete_with_tools([Message.user("hi")], ["read_file"])
+
+    assert result.source_response["usage"]["prompt_tokens"] == 123
+    assert extract_usage(result.source_response) == {
+        "prompt_tokens": 123,
+        "completion_tokens": 45,
+        "total_tokens": 168,
+    }
+
+
 def test_openai_messages_maps_agent_role_to_assistant() -> None:
     assistant_message = Message.agent("tool executed", tool_call_ids=["call-1"])
     assistant_message.metadata["tool_call_names"] = {"call-1": "read_file"}
@@ -152,3 +178,9 @@ def test_tool_schema_exposes_file_tool_limits() -> None:
     assert "limit" in list_schema["properties"]
     assert "max_bytes" in read_schema["properties"]
     assert "max_bytes" in write_schema["properties"]
+
+
+def test_infer_model_context_limit_supports_deepseek_family() -> None:
+    assert infer_model_context_limit("deepseek-v4-flash") == 1_000_000
+    assert infer_model_context_limit("deepseek-v4-pro") == 1_000_000
+    assert infer_model_context_limit("gpt-4o-mini") is None

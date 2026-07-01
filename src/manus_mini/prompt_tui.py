@@ -640,12 +640,16 @@ def format_status(session: SessionState, is_running: bool | None = None) -> str:
 
 
 def format_context_usage(session: SessionState) -> str:
-    limit = None
-    if session.active_task is not None:
-        limit = session.active_task.limits.max_estimated_tokens
-    if limit is None or limit <= 0:
+    task = session.active_task
+    if task is None:
         return "上下文 --"
-    _, usage = estimate_context_usage(session.messages, limit)
+    limit = task.model_context_limit or task.limits.max_estimated_tokens
+    if limit <= 0:
+        return "上下文 --"
+    if task.last_prompt_tokens is not None:
+        usage = task.last_prompt_tokens / limit
+    else:
+        _, usage = estimate_context_usage(session.messages, limit)
     if usage is None:
         return "上下文 --"
     percent = min(999, round(usage * 100))

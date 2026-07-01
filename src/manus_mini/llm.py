@@ -24,6 +24,9 @@ class LLMClient:
     def complete_with_tools(self, messages: list[Any], tool_names: list[str]) -> LLMResult:
         raise NotImplementedError
 
+    def context_limit(self) -> int | None:
+        return None
+
 
 class LLMRequestError(RuntimeError):
     pass
@@ -67,6 +70,27 @@ def openai_messages(messages: list[Any]) -> list[dict[str, Any]]:
             payload_message["reasoning_content"] = reasoning_content
         payload_messages.append(payload_message)
     return payload_messages
+
+
+def extract_usage(payload: dict[str, Any]) -> dict[str, int] | None:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    extracted: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            extracted[key] = value
+    return extracted or None
+
+
+def infer_model_context_limit(model_name: str) -> int | None:
+    normalized = model_name.strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("deepseek"):
+        return 1_000_000
+    return None
 
 
 def tool_schema(name: str) -> dict[str, Any]:
@@ -270,6 +294,9 @@ class MockLLMClient:
             source_response={"mode": "mock", "content": user_text or "已生成"},
         )
 
+    def context_limit(self) -> int | None:
+        return None
+
 
 class OpenAICompatibleLLMClient(LLMClient):
     def __init__(self, config: AppConfig) -> None:
@@ -325,6 +352,9 @@ class OpenAICompatibleLLMClient(LLMClient):
             return self._parse_message(message, payload=payload, body=body, tool_names=tool_names)
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise LLMRequestError("LLM returned malformed response") from error
+
+    def context_limit(self) -> int | None:
+        return infer_model_context_limit(self.config.llm_model)
 
     def _extract_message(self, body: dict[str, Any]) -> dict[str, Any]:
         choices = body["choices"]

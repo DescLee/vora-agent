@@ -66,6 +66,9 @@ class AgentRuntime:
         relevant_memories = self._inject_relevant_memories(session, content)
 
         task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits)
+        context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
+        model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
+        task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
         self._build_context_bundle(session, content, relevant_memories)
         task.plan = self.planner.build_plan(content, session)
         task.trace_events.append(
@@ -89,13 +92,13 @@ class AgentRuntime:
             return self._complete_chat_task(content, session, task)
         started_at = monotonic()
         last_result = ""
-        estimated_tokens, context_usage = estimate_session_context_usage(session, task.limits.max_estimated_tokens)
+        estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
         self.logger.record(
             task.run_id,
             {
                 "type": "context_budget",
                 "estimated_tokens": estimated_tokens,
-                "model_context_limit": task.limits.max_estimated_tokens,
+                "model_context_limit": task.model_context_limit,
                 "context_usage": context_usage,
                 "compression_triggered": context_usage is not None and context_usage >= 0.70,
                 "message_count": len(session.messages),

@@ -178,6 +178,20 @@ def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
     assert usage == "上下文 5%"
 
 
+def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="统计上下文", cwd=tmp_path)
+    task.model_context_limit = 1_000
+    task.last_prompt_tokens = 250
+    task.limits.max_estimated_tokens = 100
+    session.messages.append(Message.user("x" * 10))
+    session.active_task = task
+
+    usage = format_context_usage(session)
+
+    assert usage == "上下文 25%"
+
+
 def test_format_process_collapses_recent_process_section(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 

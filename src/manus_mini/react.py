@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import monotonic
 
 from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, validate_tool_call_pairs
-from manus_mini.llm import LLMClient, LLMRequestError, LLMResult, get_default_llm_client, openai_messages
+from manus_mini.llm import LLMClient, LLMRequestError, LLMResult, extract_usage, get_default_llm_client, openai_messages
 from manus_mini.executor import Executor, sanitize_tool_args
 from manus_mini.logging import EventLogger
 from manus_mini.models import Message, SessionState, TaskState, TraceEvent
@@ -112,8 +112,10 @@ class ReActLoop:
             )
 
             if not llm_result.tool_calls:
+                self._record_llm_usage(task, llm_result)
                 return llm_result.content
 
+            self._record_llm_usage(task, llm_result)
             messages.append(assistant_message_from_llm_result(llm_result))
             known_tool_calls, tool_results = self._prepare_tool_calls(llm_result.tool_calls, task, session)
             known_ids = {call.id for call in known_tool_calls}
@@ -165,28 +167,37 @@ class ReActLoop:
         )
         raise RuntimeError("MAX_REACT_ITERATIONS_REACHED")
 
+    def _record_llm_usage(self, task: TaskState, llm_result: LLMResult) -> None:
+        usage = extract_usage(llm_result.source_response)
+        if usage is None:
+            return
+        task.last_prompt_tokens = usage.get("prompt_tokens")
+        task.last_completion_tokens = usage.get("completion_tokens")
+        task.last_total_tokens = usage.get("total_tokens")
+
     def _conversation_context(self, task: TaskState, session: SessionState) -> list[Message]:
         history = list(session.messages)
         if not history or history[-1].role != "user" or history[-1].content != task.goal:
             history.append(Message.user(task.goal))
         original_estimated = estimate_message_tokens(history)
-        original_usage = original_estimated / task.limits.max_estimated_tokens if task.limits.max_estimated_tokens else 1.0
-        effective_budget = task.limits.max_estimated_tokens
+        context_limit = self._context_limit(task)
+        original_usage = original_estimated / context_limit if context_limit else 1.0
+        effective_budget = context_limit
         if original_usage >= 0.90:
-            effective_budget = max(1, int(task.limits.max_estimated_tokens * 0.55))
+            effective_budget = max(1, int(context_limit * 0.55))
         elif original_usage >= 0.70:
-            effective_budget = max(1, int(task.limits.max_estimated_tokens * 0.69))
+            effective_budget = max(1, int(context_limit * 0.69))
 
         compacted, snapshot = compact_messages_with_snapshot(history, token_budget=effective_budget)
         if (
-            original_estimated > task.limits.max_estimated_tokens * 2
-            and self._estimated_context_tokens(compacted) > task.limits.max_estimated_tokens
+            original_estimated > context_limit * 2
+            and self._estimated_context_tokens(compacted) > context_limit
         ):
             task.trace_events.append(
                 TraceEvent(
                     phase="runtime",
                     message="Context token budget exceeded",
-                    data={"max_estimated_tokens": task.limits.max_estimated_tokens},
+                    data={"max_estimated_tokens": task.limits.max_estimated_tokens, "model_context_limit": context_limit},
                 )
             )
             raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
@@ -194,6 +205,9 @@ class ReActLoop:
             session.compression_snapshots.append(snapshot)
             session.messages.append(Message.system(f"[System] 已压缩较早的上下文：{snapshot.summary}"))
         return compacted
+
+    def _context_limit(self, task: TaskState) -> int:
+        return max(1, task.model_context_limit or task.limits.max_estimated_tokens)
 
     def _tool_event_data(self, iteration_index: int, call, tool_result: ToolResult) -> dict:
         data = {

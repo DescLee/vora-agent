@@ -124,6 +124,10 @@ class TaskState(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
     limits: LoopLimits = Field(default_factory=LoopLimits)
+    model_context_limit: int | None = None
+    last_prompt_tokens: int | None = None
+    last_completion_tokens: int | None = None
+    last_total_tokens: int | None = None
     step_count: int = 0
     result: str = ""
 
