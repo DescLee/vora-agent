@@ -44,6 +44,74 @@ def test_list_files_skips_noise_directories_and_applies_limit(tmp_path: Path) ->
     assert "__pycache__/mod.pyc" not in result.paths
 
 
+def test_list_files_respects_workspace_gitignore(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text(
+        "\n".join(
+            [
+                "outputs/",
+                "runs/",
+                "*.log",
+                ".env.*",
+                "!.env.example",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "old.md").write_text("old", encoding="utf-8")
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "events.jsonl").write_text("{}", encoding="utf-8")
+    (tmp_path / "debug.log").write_text("debug", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("secret", encoding="utf-8")
+    (tmp_path / ".env.example").write_text("example", encoding="utf-8")
+    (tmp_path / "README.md").write_text("readme", encoding="utf-8")
+
+    result = ListFilesTool().run(workspace=tmp_path)
+
+    assert result.ok is True
+    assert "README.md" in result.paths
+    assert ".env.example" in result.paths
+    assert "outputs/old.md" not in result.paths
+    assert "runs/events.jsonl" not in result.paths
+    assert "debug.log" not in result.paths
+    assert ".env.local" not in result.paths
+
+
+def test_list_files_skips_common_build_and_dependency_outputs_without_gitignore(tmp_path: Path) -> None:
+    ignored_files = {
+        "node_modules/pkg/index.js",
+        "dist/app.js",
+        "build/lib.py",
+        "target/classes/App.class",
+        ".gradle/cache.bin",
+        ".mvn/wrapper/maven-wrapper.jar",
+        "vendor/module/file.go",
+        "bin/server",
+        "obj/app.o",
+        "pkg/mod/cache.zip",
+        ".tox/py/lib.py",
+        ".nox/session/log.txt",
+        "coverage/lcov.info",
+        ".next/server/page.js",
+        ".nuxt/app.js",
+        ".turbo/cache.bin",
+        ".cache/tool/cache.bin",
+        ".idea/workspace.xml",
+        ".vscode/settings.json",
+    }
+    for path in ignored_files:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("ignored", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('ok')", encoding="utf-8")
+
+    result = ListFilesTool().run(workspace=tmp_path, limit=200)
+
+    assert result.ok is True
+    assert result.paths == ["src/main.py"]
+
+
 def test_read_file_rejects_binary_files(tmp_path: Path) -> None:
     (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02\x03")
 

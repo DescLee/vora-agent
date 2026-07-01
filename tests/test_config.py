@@ -73,6 +73,14 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     assert config.llm_timeout_seconds == 15
 
 
+def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) -> None:
+    clear_llm_env_vars(monkeypatch)
+
+    config = AppConfig.from_env(tmp_path / ".env")
+
+    assert config.llm_timeout_seconds == 120
+
+
 def test_get_default_llm_client_uses_mock_when_not_configured(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
     monkeypatch.chdir(tmp_path)

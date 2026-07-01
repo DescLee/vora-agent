@@ -1,6 +1,8 @@
 from pathlib import Path
 
+from manus_mini.models import Message
 from manus_mini.session import SessionManager
+from manus_mini.session_store import SessionStore
 
 
 def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
@@ -21,3 +23,44 @@ def test_session_manager_handles_user_message(tmp_path: Path) -> None:
     assert session.messages[-1].role == "agent"
     assert session.active_task is not None
     assert "hello world" in session.messages[-1].content
+
+
+def test_session_manager_saves_session_after_turn(tmp_path: Path) -> None:
+    manager = SessionManager(cwd=tmp_path)
+
+    session = manager.handle_user_message("你好")
+    loaded = SessionStore(tmp_path).load(session.session_id)
+
+    assert loaded.session_id == session.session_id
+    assert loaded.messages[0].content == "你好"
+    assert loaded.messages[-1].role == "agent"
+
+
+def test_session_manager_save_context_command_writes_timestamped_snapshot(tmp_path: Path) -> None:
+    manager = SessionManager(cwd=tmp_path)
+    manager.current.messages.append(Message.user("学习用上下文"))
+    manager.current.messages.append(Message.agent("这是当前回答"))
+
+    session = manager.handle_user_message("/save-context")
+
+    snapshots = list(tmp_path.glob("context-*"))
+    assert len(snapshots) == 1
+    assert snapshots[0].is_dir()
+    assert (snapshots[0] / "session.json").exists()
+    context_md = (snapshots[0] / "context.md").read_text(encoding="utf-8")
+    assert "学习用上下文" in context_md
+    assert "这是当前回答" in context_md
+    assert "已保存当前上下文" in session.messages[-1].content
+
+
+def test_session_manager_help_command_lists_available_commands(tmp_path: Path) -> None:
+    manager = SessionManager(cwd=tmp_path)
+
+    session = manager.handle_user_message("/help")
+
+    help_text = session.messages[-1].content
+    assert "可用指令" in help_text
+    assert "/save-context" in help_text
+    assert "/compact" in help_text
+    assert "manus-mini list" in help_text
+    assert "manus-mini resume" in help_text

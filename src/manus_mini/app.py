@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 from manus_mini.memory import MemoryManager
 from manus_mini.session import SessionManager
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
 from manus_mini.models import LoopLimits
+from manus_mini.session_store import SessionStore
 
 PRINTABLE_KEY_ALIASES = {
     "period": "full_stop",
@@ -125,7 +127,7 @@ def _build_app_class():
         }
         """
 
-        def __init__(self, cwd: Path | None = None, max_steps: int | None = None, max_react: int | None = None, max_reflect: int | None = None, max_tool_timeout: int | None = None, dry_run: bool = False) -> None:
+        def __init__(self, cwd: Path | None = None, max_steps: int | None = None, max_react: int | None = None, max_reflect: int | None = None, max_tool_timeout: int | None = None, dry_run: bool = False, initial_session=None) -> None:
             super().__init__()
             limits = LoopLimits()
             if max_steps is not None:
@@ -142,6 +144,7 @@ def _build_app_class():
                 default_limits=limits,
                 dry_run=dry_run,
                 memory_manager=MemoryManager(resolved_cwd / ".manus-mini" / "memory.db"),
+                initial_session=initial_session,
             )
 
         def on_mount(self) -> None:
@@ -224,8 +227,7 @@ def main_textual() -> None:
     ).run()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="manus-mini")
+def _add_common_prompt_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     parser.add_argument("--max-steps", type=int, default=99)
     parser.add_argument("--max-react", type=int, default=99)
@@ -233,12 +235,62 @@ def main() -> None:
     parser.add_argument("--max-tool-retries", type=int, default=99)
     parser.add_argument("--max-tool-timeout", type=int, default=30)
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-    limits = LoopLimits(
+
+
+def _limits_from_args(args) -> LoopLimits:  # noqa: ANN001
+    return LoopLimits(
         max_engineering_steps=args.max_steps,
         max_react_iterations=args.max_react,
         max_reflection_rounds=args.max_reflect,
         max_tool_retries=args.max_tool_retries,
         max_tool_timeout_seconds=args.max_tool_timeout,
     )
-    PromptTui(PromptTuiOptions(cwd=args.cwd, limits=limits, dry_run=args.dry_run)).run()
+
+
+def _print_session_list(store: SessionStore) -> None:
+    summaries = store.list_sessions()
+    if not summaries:
+        print("当前工作目录下没有已保存的对话。")
+        return
+    for summary in summaries:
+        updated_at = summary.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+        preview = summary.last_user_message.replace("\n", " ")[:80]
+        print(f"{summary.session_id}\t{updated_at}\t{summary.message_count} messages\t{preview}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="manus-mini")
+    subparsers = parser.add_subparsers(dest="command")
+    list_parser = subparsers.add_parser("list", help="列出当前工作目录下已保存的对话")
+    list_parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    resume_parser = subparsers.add_parser("resume", help="恢复一个已保存的对话")
+    resume_parser.add_argument("session_id")
+    _add_common_prompt_args(resume_parser)
+    _add_common_prompt_args(parser)
+
+    args = parser.parse_args(argv)
+    store = SessionStore(args.cwd)
+    if args.command == "list":
+        _print_session_list(store)
+        return 0
+
+    initial_session = None
+    if args.command == "resume":
+        try:
+            initial_session = store.load(args.session_id)
+        except FileNotFoundError:
+            print(
+                f"找不到对话：{args.session_id}\n"
+                f"当前查找目录：{store.sessions_dir}\n"
+                "请先运行 `manus-mini list --cwd <目录>` 查看可恢复的对话，"
+                "或确认 resume 时使用了和保存时相同的 --cwd。",
+                file=sys.stderr,
+            )
+            return 1
+
+    limits = _limits_from_args(args)
+    PromptTui(
+        PromptTuiOptions(cwd=args.cwd, limits=limits, dry_run=args.dry_run),
+        initial_session=initial_session,
+    ).run()
+    return 0

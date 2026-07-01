@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +11,52 @@ from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult, resolve_wor
 DEFAULT_LIST_LIMIT = 500
 DEFAULT_MAX_READ_BYTES = 1_000_000
 DEFAULT_MAX_WRITE_BYTES = 1_000_000
-NOISE_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".venv", "venv"}
+NOISE_DIR_NAMES = {
+    ".cache",
+    ".dart_tool",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".idea",
+    ".manus",
+    ".manus-mini",
+    ".mvn",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".pyre",
+    ".ruff_cache",
+    ".serverless",
+    ".svn",
+    ".terraform",
+    ".tox",
+    ".turbo",
+    ".venv",
+    ".vscode",
+    "__pycache__",
+    "bin",
+    "bower_components",
+    "build",
+    "coverage",
+    "debug",
+    "dist",
+    "env",
+    "htmlcov",
+    "logs",
+    "node_modules",
+    "obj",
+    "out",
+    "outputs",
+    "pkg",
+    "runs",
+    "target",
+    "tmp",
+    "vendor",
+    "venv",
+}
 PROTECTED_FILE_NAMES = {".env", ".env.local", ".env.production", ".env.development"}
 
 
@@ -34,12 +81,20 @@ class ListFilesTool(BaseTool):
         if not root.exists():
             return ToolResult(tool_name=self.name, ok=False, summary="workspace not found", error_code="FILE_NOT_FOUND")
 
-        if root.is_file():
-            files = [root]
-        else:
-            files = [item for item in sorted(root.rglob("*")) if item.is_file() and not _is_noise_path(item, root)]
-
         workspace_root = workspace.expanduser().resolve()
+        gitignore_rules = load_gitignore_rules(workspace_root)
+
+        if root.is_file():
+            files = [root] if not is_gitignored(root, workspace_root, gitignore_rules) else []
+        else:
+            files = [
+                item
+                for item in sorted(root.rglob("*"))
+                if item.is_file()
+                and not _is_noise_path(item, root)
+                and not is_gitignored(item, workspace_root, gitignore_rules)
+            ]
+
         paths = [item.resolve().relative_to(workspace_root).as_posix() for item in files]
         truncated = len(paths) > limit
         visible_paths = paths[:limit]
@@ -144,6 +199,69 @@ def _is_noise_path(path: Path, root: Path) -> bool:
     except ValueError:
         relative_parts = path.parts
     return any(part in NOISE_DIR_NAMES for part in relative_parts[:-1])
+
+
+@dataclass(frozen=True)
+class GitignoreRule:
+    pattern: str
+    negated: bool = False
+    directory_only: bool = False
+    anchored: bool = False
+
+
+def load_gitignore_rules(workspace: Path) -> list[GitignoreRule]:
+    gitignore = workspace / ".gitignore"
+    if not gitignore.exists() or not gitignore.is_file():
+        return []
+    rules = []
+    for raw_line in gitignore.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        if negated:
+            line = line[1:].strip()
+        if not line:
+            continue
+        anchored = line.startswith("/")
+        if anchored:
+            line = line[1:]
+        directory_only = line.endswith("/")
+        if directory_only:
+            line = line.rstrip("/")
+        if line:
+            rules.append(
+                GitignoreRule(
+                    pattern=line,
+                    negated=negated,
+                    directory_only=directory_only,
+                    anchored=anchored,
+                )
+            )
+    return rules
+
+
+def is_gitignored(path: Path, workspace: Path, rules: list[GitignoreRule]) -> bool:
+    if not rules:
+        return False
+    relative = path.resolve().relative_to(workspace.resolve()).as_posix()
+    ignored = False
+    for rule in rules:
+        if _matches_gitignore_rule(relative, rule):
+            ignored = not rule.negated
+    return ignored
+
+
+def _matches_gitignore_rule(relative: str, rule: GitignoreRule) -> bool:
+    pattern = rule.pattern
+    parts = relative.split("/")
+    if rule.directory_only:
+        if rule.anchored:
+            return relative == pattern or relative.startswith(f"{pattern}/")
+        return any(part == pattern for part in parts[:-1]) or relative.startswith(f"{pattern}/")
+
+    candidates = [relative] if rule.anchored or "/" in pattern else [relative, parts[-1]]
+    return any(fnmatch(candidate, pattern) for candidate in candidates)
 
 
 def _looks_binary(content: bytes) -> bool:

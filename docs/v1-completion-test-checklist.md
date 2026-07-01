@@ -21,7 +21,7 @@
 当前验证结果：
 
 ```text
-pytest: 152 passed in 2.70s
+pytest: 170 passed in 2.89s
 ruff check src tests: passed
 ```
 
@@ -48,7 +48,7 @@ ruff check src tests: passed
 | LLM API harness | `OpenAICompatibleLLMClient` 测试中 monkeypatch `urllib.request.urlopen` | 不发真实网络请求，也能验证 HTTP 错误、畸形响应、tool schema 和消息转换 | 已完成 |
 | Reporter/Logger harness | `Reporter(tmp_path / "outputs")`、`EventLogger(tmp_path / "runs")` | 将产物与事件日志输出到临时目录，验证报告分块、脱敏和 trace 记录 | 已完成 |
 
-从质量检测角度看，这套 harness 的价值是：当前 152 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
+从质量检测角度看，这套 harness 的价值是：当前 170 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
 
 但 harness 设计仍有少量可继续增强的点：
 
@@ -67,12 +67,12 @@ ruff check src tests: passed
 | ReAct 工具循环 | P3 | 已完成 | 能处理 LLM tool_calls、执行工具、回填工具结果、达到上限报错。 |
 | Reflection 质量反馈循环 | P0 | 已完成 | 已支持 `accept/local_update/regenerate/replan` 决策，并接入主链路。 |
 | 工程兜底循环 | P0 | 已完成 | 已支持多工程步推进、超时、异常处理和反思回路。 |
-| Planner | P0 | 已完成 | 已有独立 Planner 模块并接入 Runtime。 |
+| Planner | P0 | 已完成 | 已有独立 Planner 模块并接入 Runtime，可区分 chat / research / code / automation / report 意图。 |
 | Executor | P1 | 已完成 | 工具执行逻辑已内聚为独立 Executor 模块。 |
 | Observer | P1 | 已完成 | 已有独立 Observer，将工具结果转换为 Observation。 |
 | Reflector | P0 | 已完成 | 已有独立 Reflector，负责草稿质量判断和跳转决策。 |
 | ToolScheduler 并行调度 | P2 | 已完成 | 调度器和 batch trace 都已接入，能记录 batch、耗时和并行信息。 |
-| 文件工具：`list_files`、`read_file`、`write_file` | P3 | 已完成 | 三个基础文件工具已实现并有测试。 |
+| 文件工具：`list_files`、`read_file`、`write_file` | P3 | 已完成 | 三个基础文件工具已实现并有测试，`list_files` 会尊重 workspace `.gitignore`，且无 `.gitignore` 时会过滤常见依赖和构建产物。 |
 | 文件工具：`append_file`、`make_directory` | P2 | 已完成 | 已实现并接入默认工具注册。 |
 | Research Pack | P1 | 已完成 | 已提供 `collect_local_docs`、`summarize_text`、`generate_markdown_report`。 |
 | Code Pack | P1 | 已完成 | 已提供 `scan_project`、`read_code_file`、`propose_patch`、`apply_text_edit`。 |
@@ -91,7 +91,10 @@ ruff check src tests: passed
 | token 预算触发策略 | P1 | 已完成 | 已实现 70% 触发压缩和 90% 硬裁剪策略，并记录预算日志。 |
 | token 预算日志 | P2 | 已完成 | 已记录 `context_budget` 和 `context_bundle` 日志。 |
 | 压缩摘要进入 TUI | P2 | 已完成 | 压缩摘要会以系统消息回写到对话区。 |
+| 手动保存上下文快照 | P2 | 已完成 | `/save-context` 会在项目根目录写入带时间戳的 `context-*` 快照目录。 |
+| 指令帮助 | P3 | 已完成 | `/help` 会输出 TUI 指令和 CLI 指令清单。 |
 | 执行日志 `events.jsonl` | P2 | 已完成 | 已记录计划、反思、工具批次、超时和上下文信息。 |
+| 对话 list/resume | P1 | 已完成 | `manus-mini list` 可列出会话，`manus-mini resume <session_id>` 可恢复上下文。 |
 | `runs/<run_id>/summary.md` | P2 | 已完成 | Reporter 已写入 `runs/<run_id>/summary.md`。 |
 | Markdown 产物输出 | P3 | 已完成 | 每轮会写 `outputs/<timestamp>-<run_id>.md`。 |
 | 多轮基于当前产物修改 | P1 | 已完成 | 已保留会话历史、产物回写和当前产物上下文注入，可连续基于上一轮结果修改。 |
@@ -137,7 +140,7 @@ ruff check src tests: passed
 ### P3：低风险验证与已完成项
 
 1. 保持现有 ReAct、文件工具、路径限制、Reporter、敏感信息过滤等测试覆盖。
-2. 后续改动应避免破坏当前 152 个通过测试。
+2. 后续改动应避免破坏当前 170 个通过测试。
 
 ## 建议验收顺序
 

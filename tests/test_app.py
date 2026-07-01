@@ -1,7 +1,9 @@
 import asyncio
 from pathlib import Path
 
-from manus_mini.app import _build_app_class, build_chat_input_bindings, key_to_chat_text
+from manus_mini.app import _build_app_class, build_chat_input_bindings, key_to_chat_text, main
+from manus_mini.models import Message, SessionState
+from manus_mini.session_store import SessionStore
 
 
 def test_chat_input_bindings_keep_enter_free_for_ime() -> None:
@@ -53,3 +55,50 @@ def test_textual_app_uses_wider_default_limits() -> None:
     assert app.manager.runtime.default_limits.max_react_iterations == 99
     assert app.manager.runtime.default_limits.max_reflection_rounds == 99
     assert app.manager.runtime.default_limits.max_tool_retries == 99
+
+
+def test_main_list_prints_workspace_sessions(tmp_path: Path, capsys) -> None:  # noqa: ANN001
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("继续分析这个项目"))
+    SessionStore(tmp_path).save(session)
+
+    exit_code = main(["list", "--cwd", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert session.session_id in output
+    assert "继续分析这个项目" in output
+
+
+def test_main_resume_loads_existing_session(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("上一轮上下文"))
+    SessionStore(tmp_path).save(session)
+    captured = {}
+
+    class FakeTui:
+        def __init__(self, options=None, cwd=None, initial_session=None):  # noqa: ANN001
+            captured["session"] = initial_session
+            captured["cwd"] = cwd
+
+        def run(self) -> None:
+            captured["ran"] = True
+
+    monkeypatch.setattr("manus_mini.app.PromptTui", FakeTui)
+
+    exit_code = main(["resume", session.session_id, "--cwd", str(tmp_path)])
+
+    assert exit_code == 0
+    assert captured["ran"] is True
+    assert captured["session"].messages[0].content == "上一轮上下文"
+
+
+def test_main_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys) -> None:  # noqa: ANN001
+    exit_code = main(["resume", "session-missing", "--cwd", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "找不到对话" in captured.err
+    assert "session-missing" in captured.err
+    assert "manus-mini list" in captured.err
+    assert "Traceback" not in captured.err

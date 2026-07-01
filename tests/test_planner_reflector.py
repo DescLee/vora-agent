@@ -17,6 +17,17 @@ def test_planner_produces_steps_for_project_analysis(tmp_path: Path) -> None:
     assert any(step.intent == "report" for step in steps)
 
 
+def test_planner_classifies_small_talk_as_chat(tmp_path: Path) -> None:
+    planner = Planner()
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("你好，今天状态怎么样？", session=session)
+
+    assert len(steps) == 1
+    assert steps[0].intent == "chat"
+    assert "直接回复" in steps[0].description
+
+
 def test_reflector_covers_accept_update_regenerate_and_replan(tmp_path: Path) -> None:
     reflector = Reflector()
     task = TaskState.create(goal="写报告", cwd=tmp_path, limits=LoopLimits())

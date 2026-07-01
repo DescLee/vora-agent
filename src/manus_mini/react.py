@@ -26,6 +26,16 @@ def format_tool_result_message(tool_result) -> str:
     return "\n\n".join(parts)
 
 
+def _read_file_error_log_content(content: str) -> str:
+    lines = []
+    for line in content.splitlines():
+        if line.startswith("error_code:"):
+            lines.append(line)
+        elif line and not line.startswith("content:"):
+            lines.append(line)
+    return "\n".join(lines) or "[read_file failed]"
+
+
 def assistant_message_from_llm_result(llm_result) -> Message:
     message = Message.agent(
         llm_result.content,
@@ -127,20 +137,12 @@ class ReActLoop:
 
             for call in llm_result.tool_calls:
                 tool_result = tool_results[call.id]
+                event_data = self._tool_event_data(iteration_index, call, tool_result)
                 task.trace_events.append(
                     TraceEvent(
                         phase="tool",
                         message=f"Tool {call.name} finished: {'ok' if tool_result.ok else 'failed'}",
-                        data={
-                            "iteration": iteration_index,
-                            "tool_call_id": call.id,
-                            "tool_name": call.name,
-                            "args": sanitize_tool_args(call.args),
-                            "ok": tool_result.ok,
-                            "summary": tool_result.summary,
-                            "error_code": tool_result.error_code,
-                            "content_preview": tool_result.content[:500],
-                        },
+                        data=event_data,
                     )
                 )
                 task.observations.append(
@@ -193,12 +195,29 @@ class ReActLoop:
             session.messages.append(Message.system(f"[System] 已压缩较早的上下文：{snapshot.summary}"))
         return compacted
 
+    def _tool_event_data(self, iteration_index: int, call, tool_result: ToolResult) -> dict:
+        data = {
+            "iteration": iteration_index,
+            "tool_call_id": call.id,
+            "tool_name": call.name,
+            "args": sanitize_tool_args(call.args),
+            "ok": tool_result.ok,
+            "summary": tool_result.summary,
+            "error_code": tool_result.error_code,
+        }
+        if call.name == "read_file" and tool_result.ok:
+            data["content_omitted"] = True
+            return data
+        if tool_result.content:
+            data["content_preview"] = tool_result.content[:500]
+        return data
+
     def _estimated_context_tokens(self, messages: list[Message]) -> int:
         return estimate_message_tokens(messages)
 
     def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState) -> LLMResult:
         try:
-            request_payload = {"messages": openai_messages(messages), "tool_names": self.registry.names()}
+            request_payload = {"messages": self._loggable_messages(messages), "tool_names": self.registry.names()}
             if self.logger is not None:
                 self.logger.record(
                     task.run_id,
@@ -227,7 +246,7 @@ class ReActLoop:
                     {
                         "type": "llm_response",
                         "iteration": len([event for event in task.trace_events if event.phase == "react"]),
-                        "request": {"messages": openai_messages(messages), "tool_names": self.registry.names()},
+                        "request": {"messages": self._loggable_messages(messages), "tool_names": self.registry.names()},
                         "response": {"error": str(error) or error.__class__.__name__, "fallback": True},
                     },
                 )
@@ -241,16 +260,39 @@ class ReActLoop:
                     },
                 )
             )
-            fallback_text = self._rule_fallback_content(task, messages)
+            fallback_text = self._rule_fallback_content(task, messages, reason=str(error) or error.__class__.__name__)
             return LLMResult(content=fallback_text)
 
-    def _rule_fallback_content(self, task: TaskState, messages: list[Message]) -> str:
+    def _loggable_messages(self, messages: list[Message]) -> list[dict]:
+        payload = openai_messages(messages)
+        assistant_tool_names: dict[str, str] = {}
+        for row in payload:
+            for call in row.get("tool_calls", []) or []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                assistant_tool_names[str(call.get("id") or "")] = str(function.get("name") or "")
+        for row in payload:
+            if row.get("role") != "tool":
+                continue
+            tool_call_id = str(row.get("tool_call_id") or "")
+            if assistant_tool_names.get(tool_call_id) != "read_file":
+                continue
+            content = str(row.get("content") or "")
+            if "error_code:" in content:
+                row["content"] = _read_file_error_log_content(content)
+            else:
+                row["content"] = "[read_file result omitted from logs]"
+        return payload
+
+    def _rule_fallback_content(self, task: TaskState, messages: list[Message], reason: str = "") -> str:
         user_messages = [message.content for message in messages if message.role == "user"]
         focus = user_messages[-1] if user_messages else task.goal
         successful_observations = [observation for observation in task.observations if observation.ok]
         if successful_observations:
             lines = [
                 "已使用规则兜底生成草稿：",
+                f"- 兜底原因：{reason or 'LLM 返回异常'}",
                 f"- 当前目标：{focus}",
                 "- 最近工具结果：",
             ]
@@ -258,7 +300,13 @@ class ReActLoop:
                 snippet = observation.content.strip().splitlines()[0] if observation.content.strip() else observation.summary
                 lines.append(f"  - {observation.tool_call_id or observation.id}: {observation.summary}。{snippet[:160]}")
             return "\n".join(lines)
-        return f"已使用规则兜底生成草稿：{focus}"
+        return "\n".join(
+            [
+                "已使用规则兜底生成草稿：",
+                f"- 兜底原因：{reason or 'LLM 返回异常'}",
+                f"- 当前目标：{focus}",
+            ]
+        )
 
     def _normalize_tool_call_ids(self, llm_result, iteration_index: int):
         seen: set[str] = set()

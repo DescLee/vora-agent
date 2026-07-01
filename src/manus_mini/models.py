@@ -99,7 +99,7 @@ class TraceEvent(BaseModel):
 class PlanStep(BaseModel):
     id: str = Field(default_factory=lambda: new_id("step"))
     description: str
-    intent: Literal["research", "code", "automation", "report"]
+    intent: Literal["chat", "research", "code", "automation", "report"]
     status: Literal["pending", "running", "done", "skipped", "failed"] = "pending"
 
 

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+DEFAULT_LLM_TIMEOUT_SECONDS = 120
+
+
 def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
     env_path = Path(path)
     loaded: dict[str, str] = {}
@@ -52,7 +55,7 @@ class AppConfig:
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
-    llm_timeout_seconds: int = 30
+    llm_timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS
 
     @classmethod
     def from_env(cls, env_path: str | Path = ".env") -> "AppConfig":
@@ -70,11 +73,12 @@ class AppConfig:
                 return explicit_env[key] or default
             return loaded_env.get(key, default)
 
-        timeout_value = resolve("LLM_TIMEOUT_SECONDS", "30")
+        default_timeout = str(DEFAULT_LLM_TIMEOUT_SECONDS)
+        timeout_value = resolve("LLM_TIMEOUT_SECONDS", default_timeout)
         try:
             timeout_seconds = int(timeout_value)
         except ValueError:
-            timeout_seconds = 30
+            timeout_seconds = DEFAULT_LLM_TIMEOUT_SECONDS
 
         return cls(
             llm_provider=resolve("LLM_PROVIDER", "mock").strip().lower() or "mock",
