@@ -159,10 +159,7 @@ def format_llm_activity(events: list[TraceEvent]) -> str:
     for event in events:
         if event.phase != "llm":
             continue
-        preview = event.data.get("content_preview")
-        if not preview:
-            continue
-        lines.append(f"- {format_display_value(str(preview), limit=220)}")
+        lines.append("- 已返回")
     if not lines:
         return "LLM 返回\n- 暂无模型文本。"
     return "\n".join(["LLM 返回", *lines[-5:]])
@@ -192,9 +189,7 @@ def format_llm_tool_rounds(task: TaskState, events: list[TraceEvent], limit: int
 
 def format_llm_tool_round(llm_event: TraceEvent, following_events: list[TraceEvent], task: TaskState, iteration) -> str:
     title = f"LLM 回合 {iteration}" if iteration else "LLM 回合"
-    lines = [title, "LLM 返回"]
-    preview = llm_event.data.get("content_preview")
-    lines.append(f"- {format_display_value(str(preview), limit=220)}" if preview else "- 暂无模型文本。")
+    lines = [title, "LLM 返回", "- 已返回"]
 
     tool_calls = [call for call in llm_event.data.get("tool_calls", []) or [] if isinstance(call, dict)]
     if tool_calls:
@@ -302,10 +297,7 @@ def format_tool_batch_lines(
                 continue
             status = format_tool_return_status(event.data)
             summary = event.data.get("summary") or event.message
-            preview = event.data.get("content_preview") or ""
             line = f"- 结果 {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
-            if preview:
-                line += f"\n  返回预览：{format_display_value(str(preview))}"
             lines.append(line)
     if not lines:
         lines.append(f"- 结果 {default_prefix} 等待工具返回。")
@@ -321,8 +313,6 @@ def format_tool_batch_lines(
         if observation is not None and tool_call_id not in event_by_call_id:
             status = "成功" if observation.ok else "失败"
             result_line = f"- 结果 {prefix} {tool_call_id} {status}: {redact_sensitive_text(observation.summary)}"
-            if observation.content:
-                result_line += f"\n  返回预览：{redact_sensitive_text(_short_text(observation.content))}"
             lines.append(result_line)
     return [*call_lines, *lines]
 
@@ -359,10 +349,7 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
         tool_call_id = event.data.get("tool_call_id", "unknown")
         status = format_tool_return_status(event.data)
         summary = event.data.get("summary") or event.message
-        preview = event.data.get("content_preview") or ""
         line = f"- {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
-        if preview:
-            line += f"\n  返回预览：{format_display_value(str(preview))}"
         tool_return_lines.append(line)
 
     if not tool_return_lines:
@@ -388,8 +375,6 @@ def format_observation_return_lines(observations: list[Observation]) -> list[str
         summary = redact_sensitive_text(observation.summary)
         tool_call_id = observation.tool_call_id or "unknown"
         line = f"- {tool_call_id} {status}: {summary}"
-        if observation.content:
-            line += f"\n  返回预览：{redact_sensitive_text(_short_text(observation.content))}"
         lines.append(line)
     return lines
 
@@ -445,12 +430,7 @@ def format_event_summary(event: TraceEvent) -> str:
                 calls.append(f"{name}({tool_call_id})")
             if calls:
                 return f"LLM：准备调用：{', '.join(calls)}"
-        preview = event.data.get("content_preview")
-        if preview:
-            return f"LLM：返回内容 {_short_text(str(preview), limit=80)}"
-        details = format_event_details(event.data)
-        suffix = f"（{details}）" if details else ""
-        return f"LLM：{event.message}{suffix}"
+        return "LLM：已返回"
 
     if event.phase == "tool":
         tool_name = event.data.get("tool_name")

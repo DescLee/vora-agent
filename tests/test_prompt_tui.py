@@ -274,7 +274,7 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "第 1 批（1 个工具）" in process
     assert "调用 1.1 read_file(call-read) path: README.md" in process
     assert "结果 1.1 read_file(call-read) 已返回: read README.md" in process
-    assert "# demo project" in process
+    assert "# demo project" not in process
     assert "最近过程（折叠）" in process
 
 
@@ -315,7 +315,8 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
     schedule_index = process.index("工具调度")
     batch_index = process.index("第 1 批（1 个工具）")
     assert llm_index < schedule_index < batch_index
-    assert "我需要先确认 README 内容。" in process
+    assert "我需要先确认 README 内容。" not in process
+    assert "已返回" in process
     assert "调用 1.1 read_file(call-read) path: README.md" in process
     assert "结果 1.1 read_file(call-read) 成功: read README.md" in process
 
@@ -454,7 +455,8 @@ def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
     process = format_process(session)
 
     assert "LLM 返回" in process
-    assert "我需要先确认项目结构，所以准备读取文件列表。" in process
+    assert "我需要先确认项目结构，所以准备读取文件列表。" not in process
+    assert "返回内容" not in process
 
 
 def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) -> None:
@@ -481,7 +483,7 @@ def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) 
     assert "read_file(call-read) 已返回" in process
     assert "read_file(call-read) 失败" not in process
     assert "x" * 260 not in process
-    assert "…" in process
+    assert "返回预览" not in process
 
 
 def test_format_inline_args_uses_readable_user_facing_style() -> None:
@@ -567,7 +569,7 @@ def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp
     assert "工具返回" in process
     assert "call-read" in process
     assert "read README.md" in process
-    assert "# demo project" in process
+    assert "# demo project" not in process
 
 
 def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path) -> None:
@@ -930,6 +932,7 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
     assert "LLM 回合" in tui.output.text
     assert "工具调度" in tui.output.text
     assert "最近过程（折叠）" in tui.output.text
+    assert "返回预览" not in tui.output.text
 
 
 def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> None:
