@@ -8,10 +8,16 @@ from pathlib import Path
 from prompt_toolkit.application import Application
 from prompt_toolkit.filters import has_focus
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import HSplit
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout.containers import HSplit, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.layout.screen import Point
+from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, TraceEvent
@@ -449,6 +455,210 @@ def line_number_for_position(line_starts: list[int], position: int) -> int:
     return max(0, min(line_index, len(line_starts) - 1))
 
 
+def build_display_line_starts(text: str, width: int) -> list[int]:
+    width = max(1, width)
+    starts = [0]
+    column = 0
+    for index, character in enumerate(text):
+        if character == "\n":
+            column = 0
+            if index + 1 < len(text):
+                starts.append(index + 1)
+            continue
+
+        character_width = max(0, get_cwidth(character))
+        if column > 0 and column + character_width > width:
+            starts.append(index)
+            column = 0
+        column += character_width
+    return starts
+
+
+def wrap_text_for_display(text: str, width: int) -> tuple[str, list[int]]:
+    width = max(1, width)
+    lines: list[str] = []
+    starts: list[int] = [0]
+    current: list[str] = []
+    column = 0
+
+    for index, character in enumerate(text):
+        if character == "\n":
+            lines.append("".join(current))
+            current = []
+            column = 0
+            if index + 1 < len(text):
+                starts.append(index + 1)
+            continue
+
+        character_width = max(0, get_cwidth(character))
+        if column > 0 and column + character_width > width:
+            lines.append("".join(current))
+            starts.append(index)
+            current = []
+            column = 0
+        current.append(character)
+        column += character_width
+
+    lines.append("".join(current))
+    return "\n".join(lines), starts
+
+
+class ScrollPositionBuffer:
+    def __init__(self, view: "ScrollableOutputView") -> None:
+        self.view = view
+
+    @property
+    def cursor_position(self) -> int:
+        return self.view.cursor_position
+
+    @cursor_position.setter
+    def cursor_position(self, value: int) -> None:
+        self.view.cursor_position = value
+
+
+class ScrollPositionDocument:
+    def __init__(self, view: "ScrollableOutputView") -> None:
+        self.view = view
+
+    @property
+    def cursor_position_row(self) -> int:
+        return self.view.scroll_top
+
+
+class ScrollableTextControl(FormattedTextControl):
+    def __init__(self, view: "ScrollableOutputView") -> None:
+        self.view = view
+        super().__init__(
+            view.get_rendered_text,
+            focusable=True,
+            show_cursor=False,
+            get_cursor_position=view.get_cursor_position,
+        )
+
+    def mouse_handler(self, mouse_event: MouseEvent):
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self.view.scroll(-5)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self.view.scroll(5)
+            return None
+        return super().mouse_handler(mouse_event)
+
+
+class ScrollableOutputView:
+    def __init__(self, text: str, style: str = "") -> None:
+        self._text = text
+        self._rendered_text = text
+        self.display_line_starts = build_line_starts(text)
+        self.display_width: int | None = None
+        self.scroll_top = 0
+        self.follow_bottom = True
+        self.buffer = ScrollPositionBuffer(self)
+        self.document = ScrollPositionDocument(self)
+        self.control = ScrollableTextControl(self)
+        self.window = Window(
+            content=self.control,
+            wrap_lines=False,
+            always_hide_cursor=True,
+            right_margins=[ScrollbarMargin(display_arrows=True)],
+            get_vertical_scroll=lambda _: self.scroll_top,
+            style=style,
+        )
+
+    def __pt_container__(self) -> Window:
+        return self.window
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @text.setter
+    def text(self, value: str) -> None:
+        self.set_text(value)
+
+    @property
+    def cursor_position(self) -> int:
+        if self.is_at_bottom():
+            return len(self._text)
+        index = max(0, min(self.scroll_top, len(self.display_line_starts) - 1))
+        return self.display_line_starts[index]
+
+    @cursor_position.setter
+    def cursor_position(self, value: int) -> None:
+        self.ensure_render_cache()
+        if value <= 0:
+            self.scroll_to_start()
+            return
+        if value >= len(self._text):
+            self.scroll_to_end()
+            return
+        self.scroll_top = line_number_for_position(self.display_line_starts, value)
+        self.follow_bottom = False
+
+    def set_text(self, text: str, follow_bottom: bool | None = None) -> None:
+        was_at_bottom = self.is_at_bottom()
+        self._text = text
+        self.display_width = None
+        self.ensure_render_cache()
+        should_follow = was_at_bottom if follow_bottom is None else follow_bottom
+        if should_follow:
+            self.scroll_to_end()
+        else:
+            self.scroll_top = min(self.scroll_top, self.max_scroll_top())
+            self.follow_bottom = False
+
+    def get_rendered_text(self) -> str:
+        self.ensure_render_cache()
+        return self._rendered_text
+
+    def get_cursor_position(self) -> Point:
+        self.ensure_render_cache()
+        line_count = max(1, len(self.display_line_starts))
+        return Point(x=0, y=max(0, min(self.scroll_top, line_count - 1)))
+
+    def ensure_render_cache(self) -> None:
+        width = self.get_display_width()
+        if self.display_width == width:
+            return
+        self.display_width = width
+        self._rendered_text, self.display_line_starts = wrap_text_for_display(self._text, width)
+        self.scroll_top = min(self.scroll_top, self.max_scroll_top())
+
+    def get_display_width(self) -> int:
+        render_info = self.window.render_info
+        if render_info is not None and render_info.window_width > 1:
+            return render_info.window_width - 1
+        return 80
+
+    def get_visible_height(self) -> int:
+        render_info = self.window.render_info
+        if render_info is not None and render_info.window_height > 0:
+            return render_info.window_height
+        return 20
+
+    def max_scroll_top(self) -> int:
+        return max(0, len(self.display_line_starts) - self.get_visible_height())
+
+    def is_at_bottom(self) -> bool:
+        self.ensure_render_cache()
+        return self.follow_bottom or self.scroll_top >= self.max_scroll_top()
+
+    def scroll(self, line_delta: int) -> None:
+        self.ensure_render_cache()
+        self.scroll_top = max(0, min(self.scroll_top + line_delta, self.max_scroll_top()))
+        self.follow_bottom = self.scroll_top >= self.max_scroll_top()
+
+    def scroll_to_start(self) -> None:
+        self.ensure_render_cache()
+        self.scroll_top = 0
+        self.follow_bottom = False
+
+    def scroll_to_end(self) -> None:
+        self.ensure_render_cache()
+        self.scroll_top = self.max_scroll_top()
+        self.follow_bottom = True
+
+
 class PromptTui:
     def __init__(self, cwd: Path | None = None) -> None:
         self.manager = SessionManager(cwd or Path.cwd())
@@ -459,15 +669,10 @@ class PromptTui:
         self.follow_output = True
         initial_output = format_welcome(self.manager.runtime.default_limits)
         self.output_line_starts = build_line_starts(initial_output)
-        self.output = TextArea(
-            text=initial_output,
-            read_only=True,
-            scrollbar=True,
-            focusable=True,
-            wrap_lines=True,
-            style="class:panel",
-        )
-        self.output.buffer.cursor_position = len(self.output.text)
+        self.output_display_width: int | None = None
+        self.output_display_line_starts = self.output_line_starts
+        self.output = ScrollableOutputView(initial_output, style="class:panel")
+        self.output.scroll_to_end()
         self.messages = self.output
         self.artifact = self.output
         self.input = TextArea(
@@ -522,6 +727,16 @@ class PromptTui:
         @key_bindings.add("end")
         def _output_end(event) -> None:
             self.scroll_output_to_end()
+            event.app.layout.focus(self.output)
+
+        @key_bindings.add(Keys.ScrollDown)
+        def _output_wheel_down(event) -> None:
+            self.scroll_output(5)
+            event.app.layout.focus(self.output)
+
+        @key_bindings.add(Keys.ScrollUp)
+        def _output_wheel_up(event) -> None:
+            self.scroll_output(-5)
             event.app.layout.focus(self.output)
 
         body = HSplit(
@@ -649,33 +864,40 @@ class PromptTui:
 
     def set_output_text(self, text: str, force_follow: bool = False) -> None:
         should_follow_bottom = force_follow or self.is_output_at_bottom()
-        self.output.text = text
         self.output_line_starts = build_line_starts(text)
+        self.output_display_width = None
+        self.output.set_text(text, follow_bottom=should_follow_bottom)
+        self.output_display_line_starts = self.output.display_line_starts
         if should_follow_bottom:
             self.scroll_output_to_end()
         else:
             self.follow_output = False
 
     def is_output_at_bottom(self) -> bool:
-        return self.output.buffer.cursor_position >= len(self.output.text)
+        return self.output.is_at_bottom()
 
     def scroll_output(self, line_delta: int) -> None:
-        if not self.output_line_starts:
-            return
-
-        current_line = line_number_for_position(self.output_line_starts, self.output.buffer.cursor_position)
-        target_line = max(0, min(current_line + line_delta, len(self.output_line_starts) - 1))
-        self.output.buffer.cursor_position = self.output_line_starts[target_line]
+        self.output.scroll(line_delta)
+        self.output_display_line_starts = self.output.display_line_starts
         self.follow_output = self.is_output_at_bottom()
         self.app.invalidate()
 
+    def get_output_scroll_line_starts(self) -> list[int]:
+        self.output.ensure_render_cache()
+        self.output_display_width = self.output.display_width
+        self.output_display_line_starts = self.output.display_line_starts
+        return self.output_display_line_starts
+
+    def get_output_display_width(self) -> int:
+        return self.output.get_display_width()
+
     def scroll_output_to_start(self) -> None:
-        self.output.buffer.cursor_position = 0
+        self.output.scroll_to_start()
         self.follow_output = False
         self.app.invalidate()
 
     def scroll_output_to_end(self) -> None:
-        self.output.buffer.cursor_position = len(self.output.text)
+        self.output.scroll_to_end()
         self.follow_output = True
         self.app.invalidate()
 

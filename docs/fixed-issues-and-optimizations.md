@@ -153,6 +153,24 @@
   - PageUp/PageDown 步长从 10 行提升到 30 行。
 - 验证：测试覆盖完成态完整过程历史包含首尾 trace，并覆盖大输出快速翻页。
 
+### 3.3.3 项目输出完成后触控板/鼠标滚轮无法向上滚动
+
+- 现象：任务输出完成后，键盘 `PageUp` 可以让展示区向上翻页，但在 iTerm2 中使用触控板或鼠标滚轮向上滑动时，展示区没有反应，用户感觉“项目输出完就向上滚动不了了”。
+- 真实根因：
+  - `PageUp` 走的是全局键盘快捷键路径，会直接调用 `scroll_output(-30)`。
+  - iTerm2 的触控板/鼠标滚轮会发送 xterm SGR mouse event，经 `prompt_toolkit` 解析为 `Keys.Vt100MouseEvent`，再派发到鼠标坐标所在控件的 `mouse_handler`。
+  - 自定义工作展示区从 `TextArea` 换成 `FormattedTextControl` 后，虽然键盘滚动逻辑可用，但控件本身没有处理 `MouseEventType.SCROLL_UP / SCROLL_DOWN`，所以滚轮事件命中了展示区后被返回 `NotImplemented`，没有改变滚动位置。
+- 修复：
+  - 新增 `ScrollableTextControl`，继承 `FormattedTextControl`。
+  - 在控件级 `mouse_handler` 中处理滚轮事件：
+    - `SCROLL_UP` 调用 `view.scroll(-5)`。
+    - `SCROLL_DOWN` 调用 `view.scroll(5)`。
+  - 保留键盘 `PageUp/PageDown/Home/End` 逻辑，与鼠标/触控板共享同一个 `scroll_top` 状态。
+- 验证：
+  - 单元测试覆盖 `MouseEventType.SCROLL_UP / SCROLL_DOWN` 会改变展示区 `scroll_top`。
+  - PTY 实跑当前 TUI：使用 mock 任务生成完整输出后，发送真实 xterm SGR 滚轮上滑事件 `\x1b[<64;40;10M`，展示区从“最终产物”滚回“执行过程”；再发送 `\x1b[<65;40;10M`，展示区回到底部“最终产物”。
+  - 全量测试：`121 passed`；静态检查：`ruff check src tests` 通过。
+
 ### 3.4 过程内容视觉噪声偏重
 
 - 现象：过程区内容较多时，视觉重量和正文接近，影响阅读最终结果。

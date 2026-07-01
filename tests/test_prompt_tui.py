@@ -1,10 +1,14 @@
 import asyncio
 from pathlib import Path
 
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
 from manus_mini.models import Message, Observation, SessionState, TaskState
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
     PromptTui,
+    build_display_line_starts,
     build_line_starts,
     format_artifact,
     format_current_action,
@@ -726,6 +730,80 @@ def test_line_start_index_maps_positions_without_resplitting_text() -> None:
     assert line_number_for_position(line_starts, 0) == 0
     assert line_number_for_position(line_starts, 8) == 1
     assert line_number_for_position(line_starts, len(text)) == 2
+
+
+def test_display_line_starts_include_soft_wrapped_rows() -> None:
+    assert build_display_line_starts("abcdefghij", width=4) == [0, 4, 8]
+    assert build_display_line_starts("abcd\nefghij", width=4) == [0, 5, 9]
+
+
+def test_output_scroll_uses_soft_wrapped_display_lines() -> None:
+    tui = PromptTui()
+    text = "x" * 400
+    tui.output.get_display_width = lambda: 40  # type: ignore[method-assign]
+    tui.output.get_visible_height = lambda: 1  # type: ignore[method-assign]
+    tui.set_output_text(text, force_follow=True)
+
+    tui.scroll_output(-5)
+
+    assert tui.output.scroll_top == 4
+    assert tui.output.buffer.cursor_position == 160
+
+    tui.scroll_output(-5)
+
+    assert tui.output.scroll_top == 0
+    assert tui.output.buffer.cursor_position == 0
+
+
+def test_output_view_can_scroll_freely_from_bottom_to_top() -> None:
+    tui = PromptTui()
+    tui.output.get_display_width = lambda: 20  # type: ignore[method-assign]
+    tui.output.get_visible_height = lambda: 5  # type: ignore[method-assign]
+    tui.set_output_text("x" * 2_000, force_follow=True)
+
+    assert tui.output.scroll_top == tui.output.max_scroll_top()
+
+    for _ in range(100):
+        tui.scroll_output(-5)
+
+    assert tui.output.scroll_top == 0
+    assert tui.output.buffer.cursor_position == 0
+
+    for _ in range(100):
+        tui.scroll_output(5)
+
+    assert tui.output.scroll_top == tui.output.max_scroll_top()
+    assert tui.output.buffer.cursor_position == len(tui.output.text)
+
+
+def test_output_view_handles_mouse_wheel_events() -> None:
+    tui = PromptTui()
+    tui.output.get_display_width = lambda: 20  # type: ignore[method-assign]
+    tui.output.get_visible_height = lambda: 5  # type: ignore[method-assign]
+    tui.set_output_text("x" * 2_000, force_follow=True)
+    start = tui.output.scroll_top
+
+    tui.output.control.mouse_handler(
+        MouseEvent(
+            position=Point(x=10, y=3),
+            event_type=MouseEventType.SCROLL_UP,
+            button=MouseButton.NONE,
+            modifiers=frozenset(),
+        )
+    )
+
+    assert tui.output.scroll_top == start - 5
+
+    tui.output.control.mouse_handler(
+        MouseEvent(
+            position=Point(x=10, y=3),
+            event_type=MouseEventType.SCROLL_DOWN,
+            button=MouseButton.NONE,
+            modifiers=frozenset(),
+        )
+    )
+
+    assert tui.output.scroll_top == start
 
 
 def test_output_scroll_uses_cached_line_index_for_large_content() -> None:
