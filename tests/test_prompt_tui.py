@@ -105,6 +105,7 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     assert "外层工程循环上限：3 轮" in welcome
     assert "ReAct 上限：20 轮" in welcome
     assert "Reflection 上限：3 轮" in welcome
+    assert "单轮运行超时" not in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
     assert "/save-context" in welcome
@@ -164,6 +165,24 @@ def test_output_fragments_style_process_section_with_dim_text() -> None:
 
     assert "class:process" in process_fragment[0]
     assert "class:process" not in artifact_fragment[0]
+
+
+def test_output_fragments_color_diff_additions_and_removals_in_process_section() -> None:
+    text = "\n\n".join(
+        [
+            "────────────────────────────────────────\n执行过程\nLLM 回合 1\n- 1 replace_in_file(call) 变更预览:\n  --- a/app.py\n  +++ b/app.py\n  @@ -1 +1 @@\n  -old\n  +new\n  context",
+            "────────────────────────────────────────\n最终产物\n+not diff",
+        ]
+    )
+
+    fragments = style_output_fragments(text)
+    styles_by_text = {fragment_text.strip(): style for style, fragment_text in fragments if fragment_text.strip()}
+
+    assert styles_by_text["--- a/app.py"] == "class:process.diff.header"
+    assert styles_by_text["+++ b/app.py"] == "class:process.diff.header"
+    assert styles_by_text["-old"] == "class:process.diff.remove"
+    assert styles_by_text["+new"] == "class:process.diff.add"
+    assert styles_by_text["+not diff"] == ""
 
 
 def test_format_process_renders_trace_events(tmp_path: Path) -> None:
@@ -241,7 +260,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert "最新动态 ReAct：第 1 轮开始" in status
+    assert "● 最新 ReAct：第 1 轮开始" in status
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -581,7 +600,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert "最新动态 反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in status
+    assert "● 最新 反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in status
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -1021,12 +1040,13 @@ def test_format_status_does_not_say_running_after_done_or_failed(tmp_path: Path)
 
     task.status = "done"
     done_status = format_status(session)
-    assert done_status.startswith("已完成")
+    assert done_status.startswith("状态 已完成")
     assert "正在执行" not in done_status
 
     task.status = "failed"
     failed_status = format_status(session)
-    assert failed_status.startswith("执行失败")
+    assert failed_status.startswith("状态 执行失败")
+    assert not failed_status.startswith("✔")
     assert "正在执行" not in failed_status
 
 
@@ -1102,7 +1122,7 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert "用户问题\n总结一下项目" in tui.output.text
     assert "执行过程" in tui.output.text
     assert "当前步骤" in tui.output.text
-    assert tui.status.text.startswith("正在执行")
+    assert tui.status.text.startswith("状态 正在执行")
     assert "running..." not in tui.status.text
 
 
@@ -1371,7 +1391,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert "最新动态 ReAct：event 40" in tui.status.text
+    assert "● 最新 ReAct：event 40" in tui.status.text
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:
@@ -1390,7 +1410,7 @@ def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: 
 
         await stream_task
         assert tui.is_running is False
-        assert tui.status.text.startswith("已结束")
+        assert tui.status.text.startswith("状态 已结束")
 
     asyncio.run(run())
 
@@ -1407,7 +1427,7 @@ def test_stream_session_status_shows_done_when_task_is_done(tmp_path: Path) -> N
 
         await tui.stream_session(session)
 
-        assert tui.status.text.startswith("已完成")
+        assert tui.status.text.startswith("状态 已完成")
 
     asyncio.run(run())
 

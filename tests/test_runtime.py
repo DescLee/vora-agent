@@ -198,6 +198,9 @@ def test_runtime_project_question_does_not_become_chat_only_when_planner_mislabe
     assert result.active_task is not None
     assert runtime.react_loop.llm.tool_names[0]
     assert any("用户说“当前项目”“这个项目”“这个工程”时，指的就是当前工作目录" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("先定位目标模块和最小相关文件" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("没有读取原文件前，不要凭空改写已有文件" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("最终答复要说明改了什么、验证了什么" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert "当前工作目录里的项目" in result.messages[-1].content
 
 
@@ -1532,22 +1535,22 @@ def test_runtime_logs_successful_read_file_content_in_logs(tmp_path: Path) -> No
     assert "secret file content" in log_text
 
 
-def test_runtime_stops_when_total_runtime_limit_is_exceeded(tmp_path: Path) -> None:
+def test_runtime_has_no_total_runtime_limit(tmp_path: Path) -> None:
     class SlowReflectionLoop:
         def run(self, task: TaskState, session: SessionState) -> ReflectionResult:  # noqa: ARG002
             sleep(0.03)
-            return ReflectionResult(accepted=True, content="too late", reason="accepted")
+            return ReflectionResult(accepted=True, content="completed after waiting", reason="accepted")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(default_limits=LoopLimits(max_runtime_seconds=0), llm=ScriptedLLM())
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.reflection_loop = SlowReflectionLoop()
 
     result = runtime.on_user_message("写报告", session)
 
     assert result.active_task is not None
-    assert result.active_task.status == "failed"
-    assert result.active_task.errors[-1].code == "RUNTIME_TIMEOUT"
-    assert "运行超时" in result.messages[-1].content
+    assert result.active_task.status == "done"
+    assert result.active_task.errors == []
+    assert "completed after waiting" in result.messages[-1].content
 
 
 def test_runtime_report_redacts_secrets_from_process_and_observations(tmp_path: Path) -> None:

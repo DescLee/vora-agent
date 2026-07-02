@@ -229,7 +229,6 @@ class LoopLimits(BaseModel):
     max_react_iterations: int = 8
     max_reflection_rounds: int = 5
     max_tool_retries: int = 2
-    max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
 ```
 
@@ -239,7 +238,6 @@ class LoopLimits(BaseModel):
 - `max_react_iterations=8`：单个计划步骤最多 8 次 LLM/tool_calls 循环，降低调研类任务过早触顶概率。
 - `max_reflection_rounds=5`：质量反馈最多 5 轮，允许更多局部修正但仍避免反复重写。
 - `max_tool_retries=2`：单个工具失败最多重试 2 次。
-- `max_runtime_seconds=180`：单轮用户消息最多运行 3 分钟。
 - `max_estimated_tokens=128_000`：用于上下文预算估算，实际可按模型配置覆盖。
 
 ### 5.5 PlanStep
@@ -322,7 +320,7 @@ V1 的 Loop Engineering 明确分为三层：
 
 1. ReAct 工具循环：LLM 思考是否需要工具，返回 `tool_calls`；Agent 调用工具并把观察结果交回 LLM；循环直到 LLM 不再需要工具并产出草稿结果。
 2. Reflection 质量反馈循环：专门的 Reflector 评判草稿结果是否满足目标，并决定接受、局部更新、重新生成内容或重新生成计划。
-3. 工程兜底循环：Runtime 统一处理最大迭代次数、token 成本、运行时长、工具异常、模型异常和重试降级。
+3. 工程兜底循环：Runtime 统一处理最大迭代次数、token 成本、工具异常、模型异常和重试降级。
 
 ### 6.1 三层循环总览
 
@@ -391,10 +389,9 @@ def on_user_message(content: str, session: SessionState) -> SessionState:
 - 中层 Reflection 循环：`task.limits.max_reflection_rounds`。
 - 内层 ReAct 工具循环：`task.limits.max_react_iterations`。
 
-同时还需要限制工具重试次数、运行时长和上下文预算：
+同时还需要限制工具重试次数和上下文预算：
 
 - `task.limits.max_tool_retries`：单个工具调用最大重试次数。
-- `task.limits.max_runtime_seconds`：单轮用户消息最大运行时长。
 - `task.limits.max_estimated_tokens`：上下文预算上限。
 
 工程兜底策略：

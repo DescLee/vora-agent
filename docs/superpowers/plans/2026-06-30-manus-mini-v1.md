@@ -249,7 +249,6 @@ class LoopLimits(BaseModel):
     max_react_iterations: int = 8
     max_reflection_rounds: int = 5
     max_tool_retries: int = 2
-    max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
 
 

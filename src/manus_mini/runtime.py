@@ -5,7 +5,6 @@ import tempfile
 from inspect import signature
 from datetime import datetime
 from pathlib import Path
-from time import monotonic
 
 from manus_mini.logging import EventLogger, project_runs_dir
 from manus_mini.context import (
@@ -24,10 +23,6 @@ from manus_mini.llm import LLMClient
 def format_runtime_exception(error: Exception) -> str:
     message = str(error).strip() or error.__class__.__name__
     return f"执行失败：{message}"
-
-
-def format_runtime_timeout(limit_seconds: int) -> str:
-    return f"运行超时：本轮执行超过 {limit_seconds} 秒限制，已停止并保留当前过程。"
 
 
 class AgentRuntime:
@@ -104,7 +99,6 @@ class AgentRuntime:
         session.active_task = task
         interrupted = False
         try:
-            started_at = monotonic()
             last_result = ""
             estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
             self.logger.record(
@@ -122,9 +116,6 @@ class AgentRuntime:
             )
 
             for _ in range(task.limits.max_engineering_steps):
-                if self._runtime_exceeded(started_at, task.limits.max_runtime_seconds):
-                    self._mark_runtime_timeout(task)
-                    break
                 task.step_count += 1
                 self._mark_plan_running(task)
                 task.status = "reflecting"
@@ -188,9 +179,6 @@ class AgentRuntime:
                     if session.pending_confirmation is not None and not session.pending_confirmation.approved:
                         task.status = "waiting_confirmation"
                         task.result = session.pending_confirmation.prompt or session.pending_confirmation.summary or "需要用户确认写入"
-                        break
-                    if self._runtime_exceeded(started_at, task.limits.max_runtime_seconds):
-                        self._mark_runtime_timeout(task)
                         break
                     if reflection.accepted:
                         self._mark_plan_done(task)
@@ -350,27 +338,6 @@ class AgentRuntime:
                 "recent_observations": len(bundle.recent_observations),
             },
         )
-
-    def _runtime_exceeded(self, started_at: float, max_runtime_seconds: int) -> bool:
-        return monotonic() - started_at > max_runtime_seconds
-
-    def _mark_runtime_timeout(self, task: TaskState) -> None:
-        task.errors.append(
-            AgentError(
-                code="RUNTIME_TIMEOUT",
-                message=f"runtime exceeded {task.limits.max_runtime_seconds} seconds",
-                retryable=True,
-            )
-        )
-        task.trace_events.append(
-            TraceEvent(
-                phase="runtime",
-                message="Runtime timeout reached",
-                data={"max_runtime_seconds": task.limits.max_runtime_seconds},
-            )
-        )
-        task.result = format_runtime_timeout(task.limits.max_runtime_seconds)
-        task.status = "failed"
 
     def _mark_user_cancelled(self, task: TaskState) -> None:
         task.errors.append(

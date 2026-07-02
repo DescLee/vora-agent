@@ -128,6 +128,8 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
     assert "文档写作" in prompt
     assert "深度行业研究报告" in prompt
     assert "工具使用要克制" in prompt
+    assert "计划最多 4 步" in prompt
+    assert "每一步必须带可验证产出" in prompt
     assert "避免重复 list_files/read_file" in prompt
     assert "当前项目基本信息" in prompt
     assert f"项目名：{tmp_path.name}" in prompt
@@ -159,6 +161,7 @@ def test_planner_sends_identity_and_project_overview_to_llm(tmp_path: Path) -> N
     assert "你叫 manus-mini" in system_prompt
     assert "项目代码目录结构" in system_prompt
     assert "工具使用要克制" in system_prompt
+    assert "先定位目标模块，再决定是否读取文件" in system_prompt
     assert "src/：核心实现代码" in system_prompt
 
 
@@ -279,6 +282,8 @@ def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> Non
     assert result.decision == "local_update"
     assert result.reason == "回答忽略了当前工作目录项目上下文"
     assert "项目代码目录结构" in llm.messages[0][0].content
+    assert "草稿只给泛泛建议、没有落到用户目标或项目事实时，不能 accept" in llm.messages[0][0].content
+    assert "reason 需要指出下一步应补什么" in llm.messages[0][0].content
 
 
 def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None:

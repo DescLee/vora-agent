@@ -19,7 +19,6 @@ class LoopLimits(BaseModel):
     max_tool_calls_per_iteration: int = 5
     max_tool_retries: int = 3
     max_tool_timeout_seconds: int = 30
-    max_runtime_seconds: int = 180
     max_estimated_tokens: int = 128_000
 
 
@@ -62,7 +61,6 @@ class AgentError(BaseModel):
         "MAX_STEPS_REACHED",
         "MAX_REACT_ITERATIONS_REACHED",
         "MAX_REFLECTION_ROUNDS_REACHED",
-        "RUNTIME_TIMEOUT",
         "TOKEN_BUDGET_EXCEEDED",
         "TOOL_TIMEOUT",
         "TOOL_RETRY_EXHAUSTED",
