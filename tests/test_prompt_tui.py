@@ -102,9 +102,9 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     welcome = format_welcome(task.limits)
 
     assert "欢迎使用 Manus Mini" in welcome
-    assert "外层工程循环上限：3 轮" in welcome
-    assert "ReAct 上限：20 轮" in welcome
-    assert "Reflection 上限：3 轮" in welcome
+    assert "工程循环上限：3 轮" in welcome
+    assert "ReAct 循环上限：20 轮" in welcome
+    assert "Reflection 循环上限：3 轮" in welcome
     assert "单轮运行超时" not in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
@@ -154,13 +154,13 @@ def test_output_fragments_style_process_section_with_dim_text() -> None:
     text = "\n\n".join(
         [
             "────────────────────────────────────────\n用户问题\n总结项目",
-            "────────────────────────────────────────\n执行过程\n当前步骤\n- 调用工具",
+            "────────────────────────────────────────\n执行过程\n步骤概览\n- 调用工具",
             "────────────────────────────────────────\n最终产物\n结果正文\n报告",
         ]
     )
 
     fragments = style_output_fragments(text)
-    process_fragment = next(fragment for fragment in fragments if "当前步骤" in fragment[1])
+    process_fragment = next(fragment for fragment in fragments if "步骤概览" in fragment[1])
     artifact_fragment = next(fragment for fragment in fragments if "报告" in fragment[1])
 
     assert "class:process" in process_fragment[0]
@@ -280,7 +280,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -333,12 +333,12 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
 
     process = format_process(session)
 
-    assert "当前步骤" in process
+    assert "步骤概览" in process
     assert "第 2 步" in process
     assert "执行计划" in process
     assert "[已完成] 扫描工作目录并识别项目结构" in process
     assert "[进行中] 读取关键文档" in process
-    assert "当前动作" in process
+    assert "动作" in process
     assert "工具调度" in process
     assert "共 1 个批次" in process
     assert "第 1 批（1 个工具）" in process
@@ -620,7 +620,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -641,7 +641,7 @@ def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> N
     process = format_process(session)
 
     assert "阶段：调用工具" in process
-    assert "当前动作：准备调用工具 read_file(call-read)" in process
+    assert "动作：准备调用工具 read_file(call-read)" in process
 
 
 def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp_path: Path) -> None:
@@ -725,7 +725,7 @@ def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
     assert "总结项目" in transcript
     assert "对话记录" not in transcript
     assert "执行过程" in transcript
-    assert "当前步骤" in transcript
+    assert "步骤概览" in transcript
     assert "Tool list_files finished: ok" in transcript
     assert "产物" not in transcript
 
@@ -1046,7 +1046,7 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
     assert "当前 准备调用工具 list_files(call-list)" not in status
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
@@ -1140,7 +1140,7 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert tui.input.text == ""
     assert "用户问题\n总结一下项目" in tui.output.text
     assert "执行过程" in tui.output.text
-    assert "当前步骤" in tui.output.text
+    assert "步骤概览" in tui.output.text
     assert tui.status.text.startswith("状态 正在执行")
     assert "running..." not in tui.status.text
 
@@ -1249,7 +1249,7 @@ def test_prompt_tui_initial_output_shows_welcome_instead_of_empty_artifact() -> 
     tui = PromptTui()
 
     assert "欢迎使用 Manus Mini" in tui.output.text
-    assert "外层工程循环上限" in tui.output.text
+    assert "工程循环上限" in tui.output.text
     assert "当前产物会显示在这里" not in tui.output.text
 
 
@@ -1410,7 +1410,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert tui.status.text == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
+    assert tui.status.text == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

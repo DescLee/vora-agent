@@ -66,11 +66,11 @@ def render_task_report(task: TaskState, user_input: str, chunk_size: int = 4000)
     sections = [
         "# Manus Mini Run",
         "",
-        "## 1. 用户输入",
+        "## 1. 用户目标",
         "",
         *markdown_chunks(safe_user_input, chunk_size=chunk_size),
         "",
-        "## 2. 执行过程",
+        "## 2. 执行步骤",
         "",
     ]
 
@@ -85,9 +85,9 @@ def render_task_report(task: TaskState, user_input: str, chunk_size: int = 4000)
                 ]
             )
     else:
-        sections.extend(["暂无执行过程。", ""])
+        sections.extend(["暂未记录执行步骤。", ""])
 
-    sections.extend(["## 3. 工具观察", ""])
+    sections.extend(["## 3. 工具调用", ""])
     if task.observations:
         for index, observation in enumerate(task.observations, start=1):
             title = f"### 3.{index} {observation.tool_call_id or 'unknown'}"
@@ -104,13 +104,13 @@ def render_task_report(task: TaskState, user_input: str, chunk_size: int = 4000)
                 ]
             )
     else:
-        sections.extend(["暂无工具观察。", ""])
+        sections.extend(["暂未调用任何工具。", ""])
 
     sections.extend(
         [
-            "## 4. 最终产物",
+            "## 4. 输出产物",
             "",
-            *markdown_chunks(redact_sensitive_text(task.result or "暂无最终产物。"), chunk_size=chunk_size),
+            *markdown_chunks(redact_sensitive_text(task.result or "暂未生成产物。"), chunk_size=chunk_size),
             "",
         ]
     )
@@ -130,7 +130,7 @@ def render_run_summary(task: TaskState, user_input: str) -> str:
             "",
             "## Result",
             "",
-            redact_sensitive_text(task.result or "暂无结果。"),
+            redact_sensitive_text(task.result or "暂未生成结果。"),
         ]
     )
 

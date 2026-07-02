@@ -20,7 +20,7 @@ def format_messages(
     if omit_last_agent and messages and messages[-1].role == "agent":
         messages = messages[:-1]
     if not messages:
-        return "等待输入..."
+        return "在下方输入你的指令，开始对话..."
     lines: list[str] = []
     for message in messages:
         lines.append(format_message_block(message))
@@ -51,7 +51,7 @@ def format_message_block(message: Message) -> str:
 
 def format_tool_message_summary(content: str) -> str:
     paragraphs = [paragraph.strip() for paragraph in content.split("\n\n") if paragraph.strip()]
-    summary = paragraphs[0] if paragraphs else "[工具结果]"
+    summary = paragraphs[0] if paragraphs else "[工具已执行]"
     if _tool_message_has_file_content(paragraphs):
         label = _extract_tool_content_label(summary)
         if label:
@@ -96,7 +96,7 @@ def format_process(
 ) -> str:
     task = session.active_task
     if task is None:
-        return "当前步骤\n等待用户输入。"
+        return "当前步骤\n等待你的输入。"
 
     trace_events = task.trace_events
     if visible_trace_count is not None:
@@ -114,10 +114,10 @@ def format_task_overview(task: TaskState) -> str:
     current = f"第 {max(task.step_count, 0)} 步" if task.step_count else "准备中"
     return "\n".join(
         [
-            "当前步骤",
-            f"- 任务：{task.goal}",
+            "步骤概览",
+            f"- 目标：{task.goal}",
             f"- 阶段：{format_phase_label(task)}",
-            f"- 当前动作：{format_current_action(task)}",
+            f"- 动作：{format_current_action(task)}",
             f"- 进度：{current}",
             f"- 状态：{task.status}",
         ]
@@ -522,21 +522,21 @@ def format_welcome(limits: LoopLimits) -> str:
             "",
             "你可以在这里连续对话，让 Agent 读取项目、调用工具、生成报告或写入文件。",
             "",
-            "运行设置",
-            f"- 外层工程循环上限：{limits.max_engineering_steps} 轮",
-            f"- ReAct 上限：{limits.max_react_iterations} 轮",
-            f"- Reflection 上限：{limits.max_reflection_rounds} 轮",
-            f"- 单工具重试上限：{limits.max_tool_retries} 次",
-            f"- 单工具超时：{limits.max_tool_timeout_seconds} 秒",
+            "当前限制",
+            f"- 工程循环上限：{limits.max_engineering_steps} 轮",
+            f"- ReAct 循环上限：{limits.max_react_iterations} 轮",
+            f"- Reflection 循环上限：{limits.max_reflection_rounds} 轮",
+            f"- 工具重试上限：{limits.max_tool_retries} 次",
+            f"- 工具超时上限：{limits.max_tool_timeout_seconds} 秒",
             "",
-            "操作",
-            "- Enter 发送",
+            "操作说明",
+            "- Enter 发送消息",
             "- Shift+Enter 换行",
-            "- 输入 `压缩上下文` 或 `/compact` 可手动压缩上下文",
-            "- 输入 `/save-context` 可在项目根目录保存当前上下文快照",
-            "- 输入 `/help` 可查看全部指令",
-            "- Tab 切换输入区和输出区",
-            "- Ctrl-C 退出",
+            "- 输入 `压缩上下文` 或 `/compact` 手动压缩上下文",
+            "- 输入 `/save-context` 保存当前上下文快照",
+            "- 输入 `/help` 查看全部指令",
+            "- Tab 切换焦点区域",
+            "- Ctrl-C 退出程序",
         ]
     )
 
@@ -613,11 +613,11 @@ def format_phase_label(task: TaskState) -> str:
 def format_status(session: SessionState, is_running: bool | None = None) -> str:
     task = session.active_task
     if task is None:
-        return "idle | Enter 发送 | Shift+Enter 换行 | Ctrl-C 退出"
+        return "就绪 | Enter 发送消息 | Shift+Enter 换行 | Ctrl-C 退出"
 
     state_label = format_status_label(task, is_running=is_running)
 
-    return f"状态 {state_label} | Enter 发送 | Shift+Enter 换行"
+    return f"状态 {state_label} | Enter 发送消息 | Shift+Enter 换行"
 
 
 def format_context_usage(session: SessionState) -> str:
@@ -771,7 +771,7 @@ def _looks_like_standalone_process_text(text: str) -> bool:
         stripped = line.strip()
         if not stripped:
             continue
-        return stripped.startswith(("当前步骤", "执行计划", "LLM 回合", "工具调度"))
+        return stripped.startswith(("步骤概览", "执行计划", "LLM 回合", "工具调度"))
     return False
 
 

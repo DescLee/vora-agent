@@ -253,15 +253,15 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     content = artifact_path.read_text(encoding="utf-8")
 
     assert "# Manus Mini Run" in content
-    assert "## 1. 用户输入" in content
+    assert "## 1. 用户目标" in content
     assert "读取 a.md" in content
-    assert "## 2. 执行过程" in content
+    assert "## 2. 执行步骤" in content
     assert "### 2.1" in content
     assert "ReAct iteration" in content
-    assert "## 3. 工具观察" in content
+    assert "## 3. 工具调用" in content
     assert "call-read-a" in content
     assert "hello world" in content
-    assert "## 4. 最终产物" in content
+    assert "## 4. 输出产物" in content
     assert result.messages[-1].content in content
     summary_dir = tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}"
     summary_files = list(summary_dir.glob("summary-*.md"))
