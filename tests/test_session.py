@@ -1,8 +1,10 @@
 from pathlib import Path
 
 from manus_mini.models import Message
+from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.session_store import SessionStore
+from support import ScriptedLLM
 
 
 def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
@@ -15,7 +17,7 @@ def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
 
 def test_session_manager_handles_user_message(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
-    manager = SessionManager(cwd=tmp_path)
+    manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
     session = manager.handle_user_message("读取 a.md")
 
@@ -26,7 +28,7 @@ def test_session_manager_handles_user_message(tmp_path: Path) -> None:
 
 
 def test_session_manager_saves_session_after_turn(tmp_path: Path) -> None:
-    manager = SessionManager(cwd=tmp_path)
+    manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
     session = manager.handle_user_message("你好")
     loaded = SessionStore(tmp_path).load(session.session_id)

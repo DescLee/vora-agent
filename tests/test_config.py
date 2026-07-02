@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from manus_mini.config import AppConfig, load_dotenv
-from manus_mini.llm import MockLLMClient, OpenAICompatibleLLMClient, get_default_llm_client
+from manus_mini.llm import OpenAICompatibleLLMClient, get_default_llm_client
 
 
 def clear_llm_env_vars(monkeypatch) -> None:
@@ -81,13 +83,12 @@ def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) 
     assert config.llm_timeout_seconds == 120
 
 
-def test_get_default_llm_client_uses_mock_when_not_configured(tmp_path: Path, monkeypatch) -> None:
+def test_get_default_llm_client_requires_explicit_provider(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
     monkeypatch.chdir(tmp_path)
 
-    client = get_default_llm_client()
-
-    assert isinstance(client, MockLLMClient)
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER must be set to openai-compatible"):
+        get_default_llm_client()
 
 
 def test_get_default_llm_client_uses_openai_compatible(monkeypatch) -> None:

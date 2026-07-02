@@ -6,7 +6,7 @@ from time import perf_counter, sleep
 
 import pytest
 
-from manus_mini.llm import LLMResult, MockLLMClient
+from manus_mini.llm import LLMResult
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop, format_tool_result_message
 from manus_mini.reflection import ReflectionLoop, ReflectionResult
@@ -16,12 +16,13 @@ from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.tools.base import ToolResult
 from manus_mini.tools.registry import ToolRegistry
+from support import ScriptedLLM
 
 
 def test_runtime_turns_user_request_into_agent_reply(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
 
     result = runtime.on_user_message("读取 a.md", session)
 
@@ -50,7 +51,7 @@ def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> 
 
     (tmp_path / "README.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.react_loop.llm = ToolThenAnswerLLM()
 
     result = runtime.on_user_message("读取 README.md", session)
@@ -63,16 +64,56 @@ def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> 
 
 
 def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
+    class ChatLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            self.tool_names.append(list(tool_names))
+            return LLMResult(content="LLM chat reply")
+
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = ChatLLM()
 
     result = runtime.on_user_message("你好，今天状态怎么样？", session)
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
     assert result.active_task.plan[0].intent == "chat"
+    assert runtime.react_loop.llm.calls >= 1
+    assert runtime.react_loop.llm.tool_names[0] == []
+    assert any(event.phase == "reflection" for event in result.active_task.trace_events)
     assert not [event for event in result.active_task.trace_events if event.phase == "tool"]
-    assert "你好" in result.messages[-1].content
+    assert result.messages[-1].content == "LLM chat reply"
+
+
+def test_runtime_cli_usage_error_passes_through_reflection(tmp_path: Path) -> None:
+    class CliIssueLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            self.tool_names.append(list(tool_names))
+            return LLMResult(content="正确用法是 `manus-mini remove <session_id>`")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = CliIssueLLM()
+
+    result = runtime.on_user_message("manus-mini list remove session-45dc2367524b 这个报错什么意思", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.active_task.plan
+    assert all(step.intent != "chat" for step in result.active_task.plan)
+    assert runtime.react_loop.llm.calls >= 1
+    assert any(event.phase == "reflection" for event in result.active_task.trace_events)
+    assert "remove <session_id>" in result.messages[-1].content or "正确用法" in result.messages[-1].content
 
 
 def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
@@ -81,7 +122,7 @@ def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname = \"manus-mini\"\n", encoding="utf-8")
     (tmp_path / "docs" / "v1-technical-design.md").write_text("三层 Agent Loop、工具调度、长期记忆。", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
 
     result = runtime.on_user_message("请你获取一下当前项目，并说明下它的作用", session)
 
@@ -119,7 +160,7 @@ def test_runtime_injects_project_code_overview_before_project_requests(tmp_path:
     (tmp_path / "tests" / "test_runtime.py").write_text("def test_x(): pass", encoding="utf-8")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.react_loop.llm = OverviewAwareLLM()
 
     result = runtime.on_user_message("请你看下当前项目代码结构，先帮我判断应该看哪些文件", session)
@@ -132,7 +173,7 @@ def test_runtime_injects_project_code_overview_before_project_requests(tmp_path:
 def test_runtime_output_file_records_input_process_observations_and_result_in_chunks(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"))
+    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"), llm=ScriptedLLM())
 
     result = runtime.on_user_message("读取 a.md", session)
 
@@ -160,7 +201,7 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
 
 def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"))
+    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"), llm=ScriptedLLM())
 
     result = runtime.on_user_message("写一个报告", session)
 
@@ -170,7 +211,7 @@ def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path
 
 
 def test_runtime_defaults_to_temp_reporter_output_dir_under_pytest(tmp_path: Path) -> None:
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
 
     assert runtime.reporter.output_dir == Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
 
@@ -185,7 +226,7 @@ def test_react_loop_forces_final_answer_when_budget_is_zero(tmp_path: Path) -> N
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="循环测试", cwd=tmp_path, limits=LoopLimits(max_react_iterations=0))
 
-    result = ReActLoop(MockLLMClient(), ToolRegistry()).run(task, session)
+    result = ReActLoop(ScriptedLLM(), ToolRegistry()).run(task, session)
 
     assert result == "报告草稿：循环测试"
     assert any(
@@ -674,7 +715,7 @@ def test_react_loop_sanitizes_llm_supplied_workspace_argument(tmp_path: Path) ->
 
 
 def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) -> None:
-    manager = SessionManager(tmp_path, runtime=AgentRuntime())
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
     first_turn = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
 
@@ -693,7 +734,7 @@ def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) ->
 
 
 def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
-    manager = SessionManager(tmp_path, runtime=AgentRuntime(dry_run=True))
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(dry_run=True, llm=ScriptedLLM()))
 
     session = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
 
@@ -723,7 +764,7 @@ def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: P
 
 def test_runtime_respects_engineering_step_limit(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=1))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=1), llm=ScriptedLLM())
 
     result = runtime.on_user_message("写一个报告", session)
 
@@ -737,7 +778,7 @@ def test_runtime_converts_agent_exception_to_failed_message(tmp_path: Path) -> N
             raise RuntimeError("LLM HTTP 400: bad request")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.reflection_loop = FailingReflectionLoop()
 
     result = runtime.on_user_message("写一个报告", session)
@@ -750,7 +791,7 @@ def test_runtime_converts_agent_exception_to_failed_message(tmp_path: Path) -> N
 
 def test_runtime_forces_final_answer_after_react_iteration_limit(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(default_limits=LoopLimits(max_react_iterations=0))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_react_iterations=0), llm=ScriptedLLM())
 
     result = runtime.on_user_message("读取 a.md", session)
 
@@ -763,7 +804,7 @@ def test_runtime_forces_final_answer_after_react_iteration_limit(tmp_path: Path)
 def test_runtime_marks_token_budget_exceeded_error_code(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("x" * 500))
-    runtime = AgentRuntime(default_limits=LoopLimits(max_estimated_tokens=1))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_estimated_tokens=1), llm=ScriptedLLM())
 
     result = runtime.on_user_message("再补充一点", session)
 
@@ -778,6 +819,7 @@ def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: 
     runtime = AgentRuntime(
         default_limits=LoopLimits(max_estimated_tokens=100),
         logger=EventLogger(tmp_path / "runs", enabled=True),
+        llm=ScriptedLLM(),
     )
 
     result = runtime.on_user_message("继续", session)
@@ -801,7 +843,7 @@ def test_runtime_exposes_active_task_before_reflection_runs(tmp_path: Path) -> N
             return ReflectionResult(accepted=True, content="ok", reason="accepted")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.reflection_loop = InspectingReflectionLoop()
 
     result = runtime.on_user_message("写报告", session)
@@ -818,7 +860,7 @@ def test_runtime_updates_plan_step_statuses_during_execution(tmp_path: Path) -> 
             return ReflectionResult(accepted=True, content="ok", reason="accepted")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.reflection_loop = InspectingReflectionLoop()
 
     result = runtime.on_user_message("写报告", session)
@@ -838,7 +880,7 @@ def test_runtime_replans_with_llm_planner_after_reflection_requests_replan(tmp_p
             return ReflectionResult(accepted=False, content="草稿", reason="needs more structure", decision="replan")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.reflection_loop = ReplanReflectionLoop()
 
     class PlanStepPlanner:
@@ -912,7 +954,7 @@ def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
             raise ValueError("malformed output")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.react_loop.llm = BrokenLLM()
 
     result = runtime.on_user_message("写报告", session)
@@ -944,7 +986,7 @@ def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tm
             )
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=3))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=3), llm=ScriptedLLM())
     fake_react = FakeReactLoop()
     runtime.reflection_loop.react_loop = fake_react
 
@@ -972,7 +1014,7 @@ def test_runtime_fallback_summary_includes_recent_tool_observations(tmp_path: Pa
             raise ValueError("malformed output")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.react_loop.llm = BrokenLLM()
 
     result = runtime.on_user_message("请检查项目", session)
@@ -983,7 +1025,7 @@ def test_runtime_fallback_summary_includes_recent_tool_observations(tmp_path: Pa
 
 
 def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
     session = SessionState.create(cwd=tmp_path)
 
     result = runtime.on_user_message("写一个报告", session)
@@ -1084,7 +1126,7 @@ def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path:
             return LLMResult(content="完成")
 
     (tmp_path / "README.md").write_text("hello world", encoding="utf-8")
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = ToolThenAnswerLLM()
     session = SessionState.create(cwd=tmp_path)
 
@@ -1109,7 +1151,7 @@ def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             raise KeyboardInterrupt
 
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = InterruptingLLM()
     session = SessionState.create(cwd=tmp_path)
 
@@ -1141,7 +1183,7 @@ def test_runtime_logs_successful_read_file_content_in_logs(tmp_path: Path) -> No
                 )
             return LLMResult(content="读取完成")
 
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True))
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = ReadReadmeLLM()
     session = SessionState.create(cwd=tmp_path)
 
@@ -1170,7 +1212,7 @@ def test_runtime_stops_when_total_runtime_limit_is_exceeded(tmp_path: Path) -> N
             return ReflectionResult(accepted=True, content="too late", reason="accepted")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(default_limits=LoopLimits(max_runtime_seconds=0))
+    runtime = AgentRuntime(default_limits=LoopLimits(max_runtime_seconds=0), llm=ScriptedLLM())
     runtime.reflection_loop = SlowReflectionLoop()
 
     result = runtime.on_user_message("写报告", session)
@@ -1202,7 +1244,7 @@ def test_runtime_report_redacts_secrets_from_process_and_observations(tmp_path: 
             return ReflectionResult(accepted=True, content="final token sk-live-secret", reason="accepted")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"))
+    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"), llm=ScriptedLLM())
     runtime.reflection_loop = SecretReflectionLoop()
 
     result = runtime.on_user_message("我的 api_key 是 sk-live-secret", session)

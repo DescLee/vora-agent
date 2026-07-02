@@ -19,6 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("session_id")
     resume_parser.add_argument("--cwd", type=Path, default=Path.cwd())
 
+    remove_parser = subparsers.add_parser("remove", help="remove a saved session")
+    remove_parser.add_argument("session_id")
+    remove_parser.add_argument("--cwd", type=Path, default=Path.cwd())
+
     tui_parser = subparsers.add_parser("tui", help="start the interactive TUI")
     tui_parser.add_argument("--cwd", type=Path, default=Path.cwd())
     tui_parser.add_argument("--dry-run", action="store_true")
@@ -38,6 +42,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "resume":
         _run_resume(args.cwd, args.session_id)
+        return
+    if args.command == "remove":
+        _run_remove(args.cwd, args.session_id)
         return
     if args.command == "tui" or args.command is None:
         _run_tui(
@@ -74,6 +81,20 @@ def _run_resume(cwd: Path, session_id: str) -> None:
         options=PromptTuiOptions(cwd=cwd, limits=limits),
         initial_session=session,
     ).run()
+
+
+def _run_remove(cwd: Path, session_id: str) -> None:
+    """Remove a saved session by its session_id.
+
+    If the session exists, deletes it and prints a confirmation message.
+    If not found, prints an error message and exits with non-zero status.
+    """
+    store = SessionStore(cwd)
+    if store.delete(session_id):
+        print(f"Session '{session_id}' has been removed.")
+    else:
+        print(f"Error: session '{session_id}' not found.")
+        raise SystemExit(1)
 
 
 def _run_tui(

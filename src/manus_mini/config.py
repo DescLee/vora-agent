@@ -51,7 +51,7 @@ def _strip_inline_comment(value: str) -> str:
 
 @dataclass(slots=True)
 class AppConfig:
-    llm_provider: str = "mock"
+    llm_provider: str = ""
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
@@ -81,7 +81,7 @@ class AppConfig:
             timeout_seconds = DEFAULT_LLM_TIMEOUT_SECONDS
 
         return cls(
-            llm_provider=resolve("LLM_PROVIDER", "mock").strip().lower() or "mock",
+            llm_provider=resolve("LLM_PROVIDER", "").strip().lower(),
             llm_base_url=resolve("LLM_BASE_URL", "").strip(),
             llm_api_key=resolve("LLM_API_KEY", "").strip(),
             llm_model=resolve("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",

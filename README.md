@@ -15,16 +15,15 @@ pip install -e ".[dev]"
 项目会自动读取根目录下的 `.env` 文件。当前支持：
 
 ```env
-LLM_PROVIDER=mock
-LLM_BASE_URL=
-LLM_API_KEY=
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=http://localhost:1234/v1
+LLM_API_KEY=your-api-key
 LLM_MODEL=gpt-4o-mini
 LLM_TIMEOUT_SECONDS=120
 ```
 
 说明：
 
-- `LLM_PROVIDER=mock`：使用内置 Mock LLM，适合本地开发和测试。
 - `LLM_PROVIDER=openai-compatible`：使用 OpenAI-compatible `/chat/completions` 接口。
 - `LLM_BASE_URL`：例如 `http://localhost:1234/v1`
 - `LLM_API_KEY`：接口鉴权用 key

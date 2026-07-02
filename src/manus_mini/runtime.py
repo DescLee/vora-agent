@@ -20,6 +20,7 @@ from manus_mini.planner import Planner
 from manus_mini.reflection import ReflectionLoop
 from manus_mini.reporter import Reporter
 from manus_mini.react import ReActLoop
+from manus_mini.llm import LLMClient
 
 
 def format_runtime_exception(error: Exception) -> str:
@@ -39,12 +40,13 @@ class AgentRuntime:
         reporter: Reporter | None = None,
         dry_run: bool = False,
         memory_manager: MemoryManager | None = None,
+        llm: LLMClient | None = None,
     ) -> None:
         self.default_limits = default_limits or LoopLimits()
         self.logger = logger or EventLogger(Path("runs"))
-        self.react_loop = ReActLoop(dry_run=dry_run, logger=self.logger)
+        self.react_loop = ReActLoop(llm=llm, dry_run=dry_run, logger=self.logger)
         self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, logger=self.logger)
-        self.planner = Planner()
+        self.planner = Planner(llm=llm)
         self.reporter = reporter or Reporter(self._default_reporter_output_dir())
         self.dry_run = dry_run
         self.memory_manager = memory_manager or MemoryManager(":memory:")
@@ -99,8 +101,6 @@ class AgentRuntime:
         session.active_task = task
         interrupted = False
         try:
-            if self._is_chat_only_task(task):
-                return self._complete_chat_task(content, session, task)
             started_at = monotonic()
             last_result = ""
             estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
@@ -271,40 +271,6 @@ class AgentRuntime:
         for step in task.plan:
             if step.status != "skipped":
                 step.status = "done"
-
-    def _is_chat_only_task(self, task: TaskState) -> bool:
-        return bool(task.plan) and all(step.intent == "chat" for step in task.plan)
-
-    def _complete_chat_task(self, content: str, session: SessionState, task: TaskState) -> SessionState:
-        for step in task.plan:
-            step.status = "done"
-        task.step_count = 1
-        task.status = "done"
-        task.result = self._chat_reply(content)
-        task.trace_events.append(
-            TraceEvent(
-                phase="llm",
-                message="Planner routed message to direct chat",
-                data={"content_preview": task.result, "tool_calls": []},
-            )
-        )
-        self.logger.record(
-            session.session_id,
-            task.run_id,
-            {
-                "type": "result",
-                "status": task.status,
-                "chat_only": True,
-            },
-        )
-        session.messages.append(Message.agent(task.result))
-        session.active_task = task
-        return session
-
-    def _chat_reply(self, content: str) -> str:
-        if any(keyword in content for keyword in ["你好", "您好", "hello", "hi"]):
-            return "你好，我在。你可以直接继续说需求；如果需要我查看当前项目或文件，再明确告诉我。"
-        return f"我先按普通对话理解，不读取本地文件。你刚才说的是：{content}"
 
     def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
         if self.memory_manager is None:

@@ -108,7 +108,7 @@ class ReActLoop:
         dry_run: bool = False,
         logger: EventLogger | None = None,
     ) -> None:
-        self.llm = llm or get_default_llm_client()
+        self.llm = llm
         self.registry = registry or ToolRegistry()
         self.scheduler = ToolScheduler(self.registry)
         self.dry_run = dry_run
@@ -117,11 +117,10 @@ class ReActLoop:
         self.logger = logger
 
     def run(self, task: TaskState, session: SessionState) -> str:
+        system_prompt = self._system_prompt_for_task(task)
+        tool_names = [] if self._is_chat_only_task(task) else self.registry.names()
         messages = [
-            Message.system(
-                "你是本地项目分析 Agent。用户要求了解当前项目时，必须先使用 list_files 查看项目结构，"
-                "再用 read_file 读取 README、pyproject 或 docs 中的关键设计文档，最后用中文总结项目作用。"
-            )
+            Message.system(system_prompt)
         ]
         messages.extend(self._conversation_context(task, session))
 
@@ -134,7 +133,7 @@ class ReActLoop:
                 )
             )
             validate_tool_call_pairs(messages)
-            llm_result = self._complete_with_rule_fallback(messages, task, session.session_id)
+            llm_result = self._complete_with_rule_fallback(messages, task, session.session_id, tool_names=tool_names)
             llm_result = self._normalize_tool_call_ids(llm_result, iteration_index)
             task.trace_events.append(
                 TraceEvent(
@@ -211,6 +210,9 @@ class ReActLoop:
                 return "需要用户确认写入"
 
         return self._force_final_answer(messages, task, session)
+
+    def _is_chat_only_task(self, task: TaskState) -> bool:
+        return bool(task.plan) and all(step.intent == "chat" for step in task.plan)
 
     def _record_llm_usage(self, task: TaskState, llm_result: LLMResult) -> None:
         usage = extract_usage(llm_result.source_response)
@@ -310,9 +312,16 @@ class ReActLoop:
             )
         return llm_result.content or "已达到工具循环上限，保留当前最佳结果。"
 
-    def _complete_with_rule_fallback(self, messages: list[Message], task: TaskState, session_id: str) -> LLMResult:
+    def _complete_with_rule_fallback(
+        self,
+        messages: list[Message],
+        task: TaskState,
+        session_id: str,
+        tool_names: list[str] | None = None,
+    ) -> LLMResult:
         try:
-            request_payload = {"messages": self._loggable_messages(messages), "tool_names": self.registry.names()}
+            resolved_tool_names = tool_names if tool_names is not None else self.registry.names()
+            request_payload = {"messages": self._loggable_messages(messages), "tool_names": resolved_tool_names}
             if self.logger is not None:
                 self.logger.record(
                     session_id,
@@ -323,7 +332,7 @@ class ReActLoop:
                         "request": request_payload,
                     },
                 )
-            result = self.llm.complete_with_tools(messages, self.registry.names())
+            result = self._resolve_llm().complete_with_tools(messages, resolved_tool_names)
             if self.logger is not None:
                 self.logger.record(
                     session_id,
@@ -344,7 +353,10 @@ class ReActLoop:
                     {
                         "type": "llm_response",
                         "iteration": len([event for event in task.trace_events if event.phase == "react"]),
-                        "request": {"messages": self._loggable_messages(messages), "tool_names": self.registry.names()},
+                        "request": {
+                            "messages": self._loggable_messages(messages),
+                            "tool_names": tool_names if tool_names is not None else self.registry.names(),
+                        },
                         "response": {"error": str(error) or error.__class__.__name__, "fallback": True},
                     },
                 )
@@ -363,6 +375,22 @@ class ReActLoop:
 
     def _loggable_messages(self, messages: list[Message]) -> list[dict]:
         return openai_messages(messages)
+
+    def _resolve_llm(self) -> LLMClient:
+        if self.llm is None:
+            self.llm = get_default_llm_client()
+        return self.llm
+
+    def _system_prompt_for_task(self, task: TaskState) -> str:
+        if self._is_chat_only_task(task):
+            return (
+                "你是一个本地终端里的中文助手。"
+                "对于闲聊、问候和轻量问题，请直接给出自然、简洁的回复，不要调用工具。"
+            )
+        return (
+            "你是本地项目分析 Agent。用户要求了解当前项目时，必须先使用 list_files 查看项目结构，"
+            "再用 read_file 读取 README、pyproject 或 docs 中的关键设计文档，最后用中文总结项目作用。"
+        )
 
     def _rule_fallback_content(self, task: TaskState, messages: list[Message], reason: str = "") -> str:
         user_messages = [message.content for message in messages if message.role == "user"]

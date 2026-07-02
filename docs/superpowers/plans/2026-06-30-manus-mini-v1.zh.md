@@ -553,7 +553,7 @@ pytest tests/test_runtime.py -v
 创建 `src/manus_mini/llm.py`：
 
 - `LLMResult`
-- `MockLLMClient.complete_with_tools(messages, tool_names)`
+- `LLMClient.complete_with_tools(messages, tool_names)`
 
 行为：
 
@@ -779,4 +779,4 @@ git commit -m "feat: add logs and artifact reporter"
 类型一致性：
 
 - `LoopLimits`、`SessionState`、`TaskState`、`Message`、`ToolCall`、`ContextSegment` 在后续任务使用前已经定义。
-- Runtime 使用的 `TaskState.create`、`SessionState.create`、`ToolRegistry`、`ToolScheduler`、`MockLLMClient` 都在前置任务中定义。
+- Runtime 使用的 `TaskState.create`、`SessionState.create`、`ToolRegistry`、`ToolScheduler`、`LLMClient` 都在前置任务中定义。

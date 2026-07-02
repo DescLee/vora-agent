@@ -410,7 +410,7 @@
 ### 7.1 增加 `.env` 配置
 
 - 优化：支持通过 `.env` 配置 LLM 请求地址、API key、模型、超时时间和 provider。
-- 验证：测试覆盖 `.env` 读取、export 前缀、行内注释和默认 mock provider。
+- 验证：测试覆盖 `.env` 读取、export 前缀、行内注释和显式 provider 配置。
 
 ### 7.2 OpenAI-compatible tool call 格式不完整
 
@@ -423,11 +423,18 @@
 - 修复：解析 LLM 响应时检查 choices、message、tool_calls、function name、arguments JSON 等结构；异常统一包装为 `LLMRequestError`。
 - 验证：测试覆盖 HTTP error、malformed success response、缺少工具名、非 object 参数。
 
-### 7.4 MockLLM 支持项目介绍和 helloworld 演示
+### 7.4 测试提示词支持项目介绍和 helloworld 演示
 
-- 优化：MockLLM 支持“获取当前项目并说明作用”和“新建 helloworld.py”这类面试演示场景。
-- 价值：不配置真实 LLM 时，也能稳定演示核心 ReAct + tool flow。
+- 优化：测试用 LLM stub 支持“获取当前项目并说明作用”和“新建 helloworld.py”这类演示场景。
+- 价值：在不依赖真实外部 LLM 的测试场景中，也能稳定演示核心 ReAct + tool flow。
 - 验证：runtime 测试和手工命令验证通过。
+
+### 7.5 移除默认 mock provider
+
+- 现象：早期代码在未配置 `LLM_PROVIDER` 时会默认回落到 mock provider，容易让本地运行和生产配置混淆。
+- 修复：删除内置 `MockLLMClient` 和默认 mock 回退，`get_default_llm_client()` 现在只接受显式的 `openai-compatible` provider。
+- 影响：运行时必须显式配置真实 provider，测试则改为各自注入专用 stub，不再共享默认 mock。
+- 验证：测试覆盖未配置 provider 时直接报错，以及显式 `openai-compatible` 配置可正常创建客户端。
 
 ### 7.5 LLM 请求默认超时时间偏短
 
@@ -662,7 +669,7 @@ ruff check src tests
 补充手工验证：
 
 ```bash
-LLM_PROVIDER=mock LLM_BASE_URL= LLM_API_KEY= python - <<'PY'
+LLM_PROVIDER=openai-compatible LLM_BASE_URL=http://localhost:1234/v1 LLM_API_KEY=your-api-key python - <<'PY'
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from manus_mini.runtime import AgentRuntime

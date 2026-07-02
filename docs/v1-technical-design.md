@@ -37,7 +37,7 @@
 - `sqlite-utils` 或标准库 `sqlite3`：保存长期记忆和会话索引。第一版也可用 JSONL 起步，但接口需保持可替换。
 - `pytest`：单元测试。
 - `ruff`：格式与静态检查。
-- LLM SDK：可抽象为 `LLMClient`，第一版允许先用 mock 或 OpenAI-compatible client。
+- LLM SDK：可抽象为 `LLMClient`，运行时通过显式 provider 配置接入 OpenAI-compatible client。
 
 ## 3. 总体架构
 
@@ -968,7 +968,7 @@ class LLMClient(Protocol):
 
 建议提供两个实现：
 
-- `MockLLMClient`：用于测试和无网络演示。
+- 测试 LLM stub：用于测试和无网络演示。
 - `OpenAICompatibleClient`：用于真实模型调用。
 
 Planner、Reflector、Reporter 都依赖 `LLMClient` 接口，不直接依赖具体 SDK。
@@ -1011,7 +1011,7 @@ class AgentError(BaseModel):
 - `TOOL_TIMEOUT`：按工具重试策略重试，仍失败则降级或跳过。
 - `TOOL_RETRY_EXHAUSTED`：记录工具失败，交给 Reflection 决定替代路径。
 - `INVALID_LLM_OUTPUT`：重试结构化输出，仍失败则使用规则 fallback。
-- `LLM_ERROR`：使用 mock/rule fallback 或失败退出。
+- `LLM_ERROR`：使用 rule fallback 或失败退出。
 
 ## 13. 测试策略
 

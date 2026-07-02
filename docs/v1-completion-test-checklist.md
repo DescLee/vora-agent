@@ -39,7 +39,7 @@ ruff check src tests: passed
 
 | Harness 点位 | 当前体现 | 作用 | 完成度 |
 |---|---|---|---:|
-| Mock LLM harness | `src/manus_mini/llm.py` 中的 `MockLLMClient`；`tests/conftest.py` 默认设置 `LLM_PROVIDER=mock` | 固定模型输出，稳定复现 tool calls、项目介绍、文件写入等演示路径，避免测试依赖真实 API | 已完成 |
+| Test LLM harness | `tests/support.py` 中的测试用 LLM stub；测试通过显式注入 provider 或 stub | 固定模型输出，稳定复现 tool calls、项目介绍、文件写入等演示路径，避免测试依赖真实 API | 已完成 |
 | Runtime harness | `AgentRuntime.on_user_message()` 可直接接收 `SessionState` 和用户输入 | 绕过 TUI，直接验证一次用户请求如何转成任务、工具调用、产物和 Agent 回复 | 已完成 |
 | Loop 注入 harness | `ReflectionLoop(react_loop=...)`、`ReActLoop(llm, registry)`、`runtime.reflection_loop = Fake...` | 用 Fake/Stub 替换 LLM、ReAct、Reflection，测试异常、超时、边界和失败路径 | 已完成 |
 | Tool harness | `ToolRegistry(tools=[...])` 和 `ToolScheduler` | 测试可注册临时工具，验证并行、依赖、未知工具、失败重试和资源冲突，不依赖真实业务工具 | 已完成 |

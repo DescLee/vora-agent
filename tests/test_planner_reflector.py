@@ -39,6 +39,17 @@ def test_planner_classifies_small_talk_as_chat(tmp_path: Path) -> None:
     assert "直接回复" in steps[0].description
 
 
+def test_planner_treats_cli_usage_errors_as_report_tasks(tmp_path: Path) -> None:
+    planner = Planner()
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("manus-mini list remove session-45dc2367524b 这个报错什么意思", session=session)
+
+    assert steps
+    assert all(step.intent != "chat" for step in steps)
+    assert any("正确用法" in step.description for step in steps)
+
+
 def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:
     class RecordingLLM:
         def __init__(self) -> None:

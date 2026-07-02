@@ -7,6 +7,7 @@ from manus_mini.react import ReActLoop
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.tools import ToolRegistry
+from support import ScriptedLLM
 
 
 def test_demo_research_flow_reads_docs_and_writes_report(tmp_path: Path) -> None:
@@ -71,7 +72,7 @@ def test_demo_code_flow_confirms_write_and_modifies_previous_artifact(tmp_path: 
                 )
             return LLMResult(content="version-2 saved")
 
-    manager = SessionManager(tmp_path, runtime=AgentRuntime())
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
     manager.runtime.react_loop.llm = WriteThenEditLLM()
     manager.runtime.reflection_loop.react_loop.llm = manager.runtime.react_loop.llm
 
@@ -105,7 +106,7 @@ def test_demo_automation_flow_formats_todo_list() -> None:
 def test_demo_memory_preference_is_injected_on_follow_up(tmp_path: Path) -> None:
     memory_manager = MemoryManager(tmp_path / "memory.db")
     memory_manager.add(scope="user", kind="preference", content="用户偏好：尽量用 Markdown。", tags=["preference", "markdown"])
-    runtime = AgentRuntime(memory_manager=memory_manager)
+    runtime = AgentRuntime(memory_manager=memory_manager, llm=ScriptedLLM())
     session = SessionState.create(cwd=tmp_path)
 
     result = runtime.on_user_message("请根据我的偏好输出一段建议", session)
@@ -115,7 +116,7 @@ def test_demo_memory_preference_is_injected_on_follow_up(tmp_path: Path) -> None
 
 
 def test_demo_long_session_compresses_context(tmp_path: Path) -> None:
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.default_limits.max_estimated_tokens = 70
     session = SessionState.create(cwd=tmp_path)
     session.messages.extend(Message.user(f"message {index}") for index in range(20))

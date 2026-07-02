@@ -4,7 +4,7 @@
 
 **Goal:** Build a runnable TUI AI Agent prototype with multi-turn sessions, three-layer loop engineering, parallel tool scheduling, long-term memory, context compression, safe file tools, logs, and focused tests.
 
-**Architecture:** The app is a Python package under `src/manus_mini`. `app.py` owns the Textual TUI, `runtime.py` owns the outer engineering loop, `react.py` owns tool-calling ReAct iterations, `reflection.py` owns quality feedback, `context.py` owns context budgeting/compression, `memory.py` owns local memory, and `tools/` owns tool contracts plus implementations. V1 uses mock LLM behavior by default so tests and demos run without network.
+**Architecture:** The app is a Python package under `src/manus_mini`. `app.py` owns the Textual TUI, `runtime.py` owns the outer engineering loop, `react.py` owns tool-calling ReAct iterations, `reflection.py` owns quality feedback, `context.py` owns context budgeting/compression, `memory.py` owns local memory, and `tools/` owns tool contracts plus implementations. V1 uses an explicitly configured LLM provider so tests and demos can inject their own transport.
 
 **Tech Stack:** Python 3.12+, Textual, Rich, Pydantic, pytest, ruff, sqlite3, asyncio.
 
@@ -21,7 +21,7 @@
 - Create `src/manus_mini/tools/file_tools.py`: list/read/write/append/mkdir tools with workspace path checks.
 - Create `src/manus_mini/tools/registry.py`: tool registry and default registration.
 - Create `src/manus_mini/scheduler.py`: dependency analysis and parallel batch planning.
-- Create `src/manus_mini/llm.py`: mock LLM client and structured result models.
+- Create `src/manus_mini/llm.py`: LLM client interface and structured result models.
 - Create `src/manus_mini/react.py`: ReAct tool loop.
 - Create `src/manus_mini/reflection.py`: reflection loop decisions.
 - Create `src/manus_mini/runtime.py`: outer engineering loop and failure handling.
@@ -1155,7 +1155,7 @@ pytest tests/test_runtime.py -v
 
 Expected: FAIL because runtime modules do not exist.
 
-- [ ] **Step 3: Implement mock LLM**
+- [ ] **Step 3: Implement LLM client**
 
 Create `src/manus_mini/llm.py`:
 
@@ -1172,7 +1172,7 @@ class LLMResult(BaseModel):
     tool_calls: list[ToolCall] = []
 
 
-class MockLLMClient:
+class TestLLMClient:
     def complete_with_tools(self, messages: list[dict[str, str]], tool_names: list[str]) -> LLMResult:
         text = "\n".join(message["content"] for message in messages)
         if "读取 a.md" in text:
@@ -1199,15 +1199,15 @@ Create `src/manus_mini/react.py`:
 ```python
 from __future__ import annotations
 
-from manus_mini.llm import MockLLMClient
+from manus_mini.llm import LLMClient
 from manus_mini.models import Message, Observation, SessionState, TaskState
 from manus_mini.scheduler import ToolScheduler
 from manus_mini.tools.registry import ToolRegistry
 
 
 class ReActLoop:
-    def __init__(self, llm: MockLLMClient | None = None) -> None:
-        self.llm = llm or MockLLMClient()
+    def __init__(self, llm: LLMClient | None = None) -> None:
+        self.llm = llm
         self.registry = ToolRegistry()
         self.scheduler = ToolScheduler()
 
@@ -1615,4 +1615,4 @@ Placeholder scan:
 Type consistency:
 
 - `LoopLimits`, `SessionState`, `TaskState`, `Message`, `ToolCall`, and `ContextSegment` are defined before later tasks use them.
-- Runtime uses `TaskState.create`, `SessionState.create`, `ToolRegistry`, `ToolScheduler`, and `MockLLMClient` as defined in earlier tasks.
+- Runtime uses `TaskState.create`, `SessionState.create`, `ToolRegistry`, `ToolScheduler`, and the configured `LLMClient` as defined in earlier tasks.

@@ -18,12 +18,14 @@ PLAN_INSTRUCTIONS = (
 
 class Planner:
     def __init__(self, llm: LLMClient | None = None) -> None:
-        self.llm = llm or get_default_llm_client()
+        self.llm = llm
 
     def build_plan(self, goal: str, session: SessionState) -> list[PlanStep]:
         normalized = goal.lower()
+        if _looks_like_cli_issue(goal, normalized):
+            return self._build_cli_issue_plan(goal)
         if _is_small_talk(goal, normalized):
-            return [PlanStep(description="直接回复用户，不读取本地文件", intent="chat")]
+            return [PlanStep(description="让 LLM 直接回复用户，不调用本地文件工具", intent="chat")]
 
         llm_plan = self._build_llm_plan(goal, session)
         if llm_plan:
@@ -34,7 +36,7 @@ class Planner:
     def _build_llm_plan(self, goal: str, session: SessionState) -> list[PlanStep]:
         messages = self._build_prompt_messages(goal, session)
         try:
-            result = self.llm.complete_with_tools(messages, [])
+            result = self._resolve_llm().complete_with_tools(messages, [])
         except (LLMRequestError, ValueError, TypeError, KeyError, IndexError):
             return []
         return self._parse_llm_plan(result.content)
@@ -91,6 +93,18 @@ class Planner:
             plan.append(PlanStep(description="分析用户目标并生成草稿结果", intent="report"))
 
         return plan
+
+    def _build_cli_issue_plan(self, goal: str) -> list[PlanStep]:
+        return [
+            PlanStep(description="识别命令结构和报错信息", intent="report"),
+            PlanStep(description="指出命令写法错误并给出正确用法", intent="report"),
+            PlanStep(description="如果需要，补充可直接执行的示例", intent="report"),
+        ]
+
+    def _resolve_llm(self) -> LLMClient:
+        if self.llm is None:
+            self.llm = get_default_llm_client()
+        return self.llm
 
 
 def _split_plan_line(line: str) -> tuple[str, str | None]:
@@ -159,4 +173,24 @@ def _is_small_talk(goal: str, normalized: str) -> bool:
     ]
     return any(keyword in normalized or keyword in stripped for keyword in small_talk_keywords) and not any(
         keyword in normalized or keyword in stripped for keyword in file_or_task_keywords
+    )
+
+
+def _looks_like_cli_issue(goal: str, normalized: str) -> bool:
+    combined = f"{goal}\n{normalized}".lower()
+    cli_keywords = [
+        "manus-mini",
+        "usage:",
+        "unrecognized arguments",
+        "error:",
+        "argparse",
+        "session_id",
+        "子命令",
+        "命令行",
+        "命令写法",
+    ]
+    if any(keyword in combined for keyword in cli_keywords):
+        return True
+    return any(token in combined for token in ["`", "➜", "$ ", "git:(main)"]) and any(
+        keyword in combined for keyword in ["remove", "list", "resume", "tui"]
     )
