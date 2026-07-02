@@ -120,7 +120,7 @@ def test_demo_long_session_compresses_context(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     session.messages.extend(Message.user(f"message {index}") for index in range(20))
 
-    result = runtime.on_user_message("继续总结", session)
+    result = runtime.on_user_message("继续", session)
 
     assert result.compression_snapshots
     assert any(message.role == "system" and "已压缩较早的上下文" in message.content for message in result.messages)

@@ -48,6 +48,17 @@ class SessionStore:
         summaries = [self._summary(path) for path in self.sessions_dir.glob("*.json")]
         return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
+    def delete(self, session_id: str) -> bool:
+        """Delete a saved session by its session_id.
+
+        Returns True if the session was found and deleted, False otherwise.
+        """
+        path = self._path_for(session_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def _summary(self, path: Path) -> SessionSummary:
         data = json.loads(path.read_text(encoding="utf-8"))
         session = SessionState.model_validate(data)

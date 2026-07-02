@@ -4,6 +4,7 @@ from pathlib import Path
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
+from manus_mini.memory import MemoryManager
 from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
@@ -55,6 +56,20 @@ def test_format_messages_collapses_tool_file_content_into_summary(tmp_path: Path
     assert "工具: [README.md 文件内容获取成功]" in rendered
     assert "# manus-mini" not in rendered
     assert "content:" not in rendered
+
+
+def test_format_messages_omits_internal_long_term_memory(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("请你看下项目"))
+    session.messages.append(Message.system("长期记忆:\n- 旧项目优化建议"))
+    session.messages.append(Message.agent("当前回答"))
+
+    rendered = format_messages(session)
+
+    assert "旧项目优化建议" not in rendered
+    assert "长期记忆" not in rendered
+    assert "请你看下项目" in rendered
+    assert "当前回答" in rendered
 
 
 def test_format_messages_adds_padding_and_background_marker_for_user_message(tmp_path: Path) -> None:
@@ -771,6 +786,27 @@ def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
     assert any("▶ 拒绝" in text for _, text in fragments)
 
 
+def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+    )
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+    started = []
+
+    tui.start_agent_turn = lambda content, confirmation_turn=False: started.append((content, confirmation_turn))  # type: ignore[method-assign]
+
+    tui.confirm_pending_confirmation()
+
+    assert tui.confirmation_in_progress is True
+    assert started == [("确认", True)]
+
+
 def test_format_status_context_usage_includes_active_task_process(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
@@ -909,6 +945,21 @@ def test_insert_newline_inserts_at_cursor() -> None:
 
     assert text == "第一行\n第二行"
     assert cursor == 4
+
+
+def test_fresh_tui_does_not_load_persistent_memories(tmp_path: Path) -> None:
+    persistent_memory = MemoryManager(tmp_path / ".manus-mini" / "memory.db")
+    persistent_memory.add(
+        scope="project",
+        kind="project_summary",
+        content="旧项目优化建议：历史数据不应进入新会话。",
+        tags=["project", "summary"],
+    )
+
+    tui = PromptTui(cwd=tmp_path)
+
+    assert tui.manager.memory_manager is not None
+    assert tui.manager.memory_manager.search("旧项目优化建议") == []
 
 
 def test_send_current_input_starts_background_turn_without_blocking(monkeypatch) -> None:

@@ -54,7 +54,7 @@ def format_messages(
     session: SessionState,
     omit_last_agent: bool = False,
 ) -> str:
-    messages = list(session.messages)
+    messages = [message for message in session.messages if not _is_internal_system_message(message)]
     if omit_last_agent and messages and messages[-1].role == "agent":
         messages = messages[:-1]
     if not messages:
@@ -63,6 +63,10 @@ def format_messages(
     for message in messages:
         lines.append(format_message_block(message))
     return "\n\n".join(lines)
+
+
+def _is_internal_system_message(message: Message) -> bool:
+    return message.role == "system" and message.content.startswith("长期记忆:")
 
 
 SECTION_SEPARATOR = "────────────────────────────────────────"
@@ -952,7 +956,11 @@ class PromptTui:
     ) -> None:
         resolved_options = options or PromptTuiOptions(cwd=cwd or Path.cwd(), limits=LoopLimits())
         self.options = resolved_options
-        memory_manager = MemoryManager(resolved_options.cwd / ".manus-mini" / "memory.db")
+        memory_manager = (
+            MemoryManager(resolved_options.cwd / ".manus-mini" / "memory.db")
+            if initial_session is not None
+            else MemoryManager(":memory:")
+        )
         self.manager = SessionManager(
             resolved_options.cwd,
             runtime=None,
@@ -967,6 +975,7 @@ class PromptTui:
         self.trace_reveal_batch_size = 3
         self.follow_output = True
         self.confirmation_selection = 0
+        self.confirmation_in_progress = False
         initial_output = (
             format_transcript(self.manager.current, show_process=False)
             if initial_session is not None and initial_session.messages
@@ -993,7 +1002,9 @@ class PromptTui:
         install_shift_enter_mapping()
         key_bindings = KeyBindings()
         input_focused = has_focus(self.input)
-        confirmation_active = Condition(lambda: self.manager.current.pending_confirmation is not None)
+        confirmation_active = Condition(
+            lambda: self.manager.current.pending_confirmation is not None and not self.confirmation_in_progress
+        )
 
         @key_bindings.add("enter", filter=input_focused & ~confirmation_active)
         def _send_message(_) -> None:
@@ -1128,13 +1139,13 @@ class PromptTui:
     def confirm_pending_confirmation(self) -> None:
         if self.manager.current.pending_confirmation is None:
             return
-        self.manager.current = self.manager.accept_pending_confirmation()
-        self.manager._save_current(self.manager.current)
+        self.confirmation_in_progress = True
+        self.is_running = True
         self.confirmation_selection = 0
-        self.status.text = format_status(self.manager.current)
-        self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
+        self.status.text = format_status(self.manager.current, is_running=True)
         self.app.layout.focus(self.input)
         self.app.invalidate()
+        self.start_agent_turn("确认", confirmation_turn=True)
 
     def reject_pending_confirmation(self) -> None:
         if self.manager.current.pending_confirmation is None:
@@ -1153,8 +1164,8 @@ class PromptTui:
         self.confirmation_selection = (self.confirmation_selection + delta) % 2
         self.app.invalidate()
 
-    def start_agent_turn(self, content: str) -> None:
-        self.app.create_background_task(self.run_agent_turn(content))
+    def start_agent_turn(self, content: str, confirmation_turn: bool = False) -> None:
+        self.app.create_background_task(self.run_agent_turn(content, confirmation_turn=confirmation_turn))
         self.app.create_background_task(self.poll_runtime_progress())
 
     async def poll_runtime_progress(self) -> None:
@@ -1244,7 +1255,7 @@ class PromptTui:
             style="class:confirmation",
         )
 
-    async def run_agent_turn(self, content: str) -> None:
+    async def run_agent_turn(self, content: str, confirmation_turn: bool = False) -> None:
         try:
             session = await asyncio.to_thread(self.manager.handle_user_message, content, False)
             await self.stream_session(session)
@@ -1258,6 +1269,11 @@ class PromptTui:
         except Exception as error:
             self.render_unexpected_error(error)
             return
+        finally:
+            if confirmation_turn:
+                self.confirmation_in_progress = False
+                self.status.text = format_status(self.manager.current, is_running=self.is_running)
+                self.app.invalidate()
 
     def insert_input_newline(self) -> None:
         text, cursor = insert_newline(self.input.text, self.input.buffer.cursor_position)
