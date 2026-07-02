@@ -937,6 +937,19 @@
   - Runtime 对真正等待用户选择/确认的反思结果直接收口返回当前草稿，不再跑到外层上限。
 - 验证：`tests/test_planner_reflector.py` 和 `tests/test_runtime.py` 覆盖 Planner 改写、Reflection 拒绝等待选择草稿、Runtime 等待外部选择时单步收口。
 
+### 9.33 测试误判和碎片读取导致 ReAct / Reflection 反复循环
+
+- 现象：真实运行中 LLM 连续调用工具直到达到循环上限；其中包含大量同一文件的小范围 `read_file(start_index, max_bytes=200)`，以及测试命令 `pytest ... | tail` 输出已经包含失败信息但 shell exit code 仍为 0，ReAct 误判为“测试已通过”并强制最终答复。
+- 根因：
+  - 写后验证只看 `ok=True` 和 `exit_code=0`，没有检查 stdout/stderr 中的 `FAILED`、`FAILURES`、`Traceback` 等失败标记。
+  - 写后验证在最新代码写入后只要曾经见过一次通过的测试，就忽略后续失败工具或被预算拒绝的工具，导致过早收口。
+  - `read_file` 去重只按完全相同的 `path/start_index/max_bytes` 指纹判断，不限制同一轮对同一文件发起多个相邻小切片读取。
+- 修复：
+  - ReAct 写后验证要求最新写入后的工具事件不能出现失败或错误码；测试类工具还必须同时满足 `ok=True`、`exit_code=0` 且输出中没有失败标记。
+  - Reflection 测试门禁使用同样的失败输出识别，避免管道吞掉测试失败码时误判 accept。
+  - 同一轮同一文件最多允许 2 个分片 `read_file`，更多小切片会返回 `READ_FILE_FRAGMENT_LIMIT_EXCEEDED`，提示改用更大的 `max_bytes` 或更精确的 grep/sed。
+- 验证：`tests/test_runtime.py` 覆盖管道输出失败时不强制收口，以及同一轮碎片读取限制；`tests/test_planner_reflector.py` 覆盖 Reflection 对失败输出标记的拒绝。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
@@ -971,7 +984,7 @@
 
 ```bash
 python -m pytest -q
-# 274 passed
+# 277 passed
 ```
 
 补充手工验证：

@@ -323,15 +323,19 @@ class ReActLoop:
                 latest_write_index = index
         if latest_write_index < 0:
             return False
+        has_passing_test = False
         for event in task.trace_events[latest_write_index + 1:]:
             if event.phase != "tool":
                 continue
             data = event.data
+            if _tool_event_failed(data):
+                return False
             if not _is_test_tool_event(data):
                 continue
-            if data.get("ok") is True and data.get("exit_code") == 0:
-                return True
-        return False
+            if not _test_tool_event_passed(data):
+                return False
+            has_passing_test = True
+        return has_passing_test
 
     def _force_final_answer(
         self,
@@ -555,8 +559,14 @@ class ReActLoop:
         tool_results: dict[str, ToolResult] = {}
         tool_call_count = 0
         planned_read_file_keys: set[tuple[str, str, int | None, int | None]] = set()
+        planned_read_fragment_counts: dict[tuple[str, str], int] = {}
         planned_fingerprints: dict[str, str] = {}
         for call in tool_calls:
+            fragmented_read = self._fragmented_read_file_result(call, planned_read_fragment_counts)
+            if fragmented_read is not None:
+                tool_results[call.id] = fragmented_read
+                self._record_tool_rejection(task, call, fragmented_read)
+                continue
             budget_error = self._tool_budget_error(call, task, tool_call_count)
             if budget_error is not None:
                 tool_results[call.id] = budget_error
@@ -586,6 +596,7 @@ class ReActLoop:
                 read_key = _read_file_key(call)
                 if read_key is not None:
                     planned_read_file_keys.add(read_key)
+                    _record_read_fragment(call, planned_read_fragment_counts)
                 fingerprint = _tool_call_fingerprint(call)
                 if fingerprint is not None:
                     planned_fingerprints[fingerprint] = call.id
@@ -613,8 +624,31 @@ class ReActLoop:
                 summary="tool call rejected by iteration budget",
                 error_code="TOOL_CALL_BUDGET_EXCEEDED",
                 data={"limit": task.limits.max_tool_calls_per_iteration},
-            )
+        )
         return None
+
+    def _fragmented_read_file_result(
+        self,
+        call,
+        planned_read_fragment_counts: dict[tuple[str, str], int],
+    ) -> ToolResult | None:
+        fragment_key = _read_file_fragment_key(call)
+        if fragment_key is None:
+            return None
+        if planned_read_fragment_counts.get(fragment_key, 0) < 2:
+            return None
+        path, _ = fragment_key
+        return ToolResult(
+            tool_name="read_file",
+            ok=False,
+            summary=f"read_file rejected: too many small fragments for {path}; use a larger max_bytes or targeted grep/sed command",
+            error_code="READ_FILE_FRAGMENT_LIMIT_EXCEEDED",
+            data={
+                "path": path,
+                "limit": 2,
+                "reason": "avoid repeated fragmented reads of the same file in one iteration",
+            },
+        )
 
     def _project_scope_error(self, call, task: TaskState) -> ToolResult | None:
         if call.name != "read_file" or not self._is_overview_goal(task.goal):
@@ -792,6 +826,23 @@ def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:
     return path, encoding, start_index, max_bytes
 
 
+def _read_file_fragment_key(call) -> tuple[str, str] | None:
+    read_key = _read_file_key(call)
+    if read_key is None:
+        return None
+    path, encoding, start_index, max_bytes = read_key
+    if start_index is None and max_bytes is None:
+        return None
+    return path, encoding
+
+
+def _record_read_fragment(call, planned_read_fragment_counts: dict[tuple[str, str], int]) -> None:
+    fragment_key = _read_file_fragment_key(call)
+    if fragment_key is None:
+        return
+    planned_read_fragment_counts[fragment_key] = planned_read_fragment_counts.get(fragment_key, 0) + 1
+
+
 def _tool_call_fingerprint(call) -> str | None:
     try:
         encoded_args = json.dumps(
@@ -891,6 +942,33 @@ def _is_test_tool_event(data: dict) -> bool:
         ]
     )
     return any(keyword in text for keyword in ["pytest", "unittest", "test", "go test", "cargo test", "npm test", "pnpm test", "yarn test", "ruff"])
+
+
+def _tool_event_failed(data: dict) -> bool:
+    if data.get("ok") is False:
+        return True
+    return bool(data.get("error_code")) and data.get("ok") is not True
+
+
+def _test_tool_event_passed(data: dict) -> bool:
+    return data.get("ok") is True and data.get("exit_code") == 0 and not _test_output_has_failure(data)
+
+
+def _test_output_has_failure(data: dict) -> bool:
+    text = "\n".join(str(data.get(key) or "") for key in ["summary", "stdout", "stderr"]).lower()
+    failure_markers = [
+        " failed",
+        "failed ",
+        "failures",
+        "error collecting",
+        "traceback",
+        "assertionerror",
+        "command exited 1",
+        "command exited 2",
+        "exit status 1",
+        "exit status 2",
+    ]
+    return any(marker in text for marker in failure_markers)
 
 
 def _optional_int_arg(args: dict, key: str) -> int | None:

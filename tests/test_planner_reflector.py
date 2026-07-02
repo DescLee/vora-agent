@@ -403,6 +403,42 @@ def test_reflection_rejects_code_change_when_latest_test_failed(tmp_path: Path) 
     assert "AssertionError" in decision.reason
 
 
+def test_reflection_rejects_code_change_when_test_output_contains_failure_markers(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"tests passed"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced app.py"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={
+                    "tool_name": "run_bash",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "================ FAILURES ================\nFAILED tests/test_app.py::test_app",
+                    "args": {"command": "python -m pytest tests/test_app.py -q | tail -40"},
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "regenerate"
+    assert "FAILED tests/test_app.py" in decision.reason
+
+
 def test_reflection_accepts_code_change_when_latest_test_passed(tmp_path: Path) -> None:
     class AcceptingLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002

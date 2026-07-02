@@ -448,7 +448,7 @@ def _is_test_event(data: dict) -> bool:
 
 
 def _test_event_passed(data: dict) -> bool:
-    return data.get("ok") is True and data.get("exit_code") == 0
+    return data.get("ok") is True and data.get("exit_code") == 0 and not _test_output_has_failure(data)
 
 
 def _looks_like_test_command(data: dict) -> bool:
@@ -482,3 +482,20 @@ def _format_test_failure(data: dict) -> str:
     elif summary:
         parts.append(summary)
     return " | ".join(parts) or "测试失败"
+
+
+def _test_output_has_failure(data: dict) -> bool:
+    text = "\n".join(str(data.get(key) or "") for key in ["summary", "stdout", "stderr"]).lower()
+    failure_markers = [
+        " failed",
+        "failed ",
+        "failures",
+        "error collecting",
+        "traceback",
+        "assertionerror",
+        "command exited 1",
+        "command exited 2",
+        "exit status 1",
+        "exit status 2",
+    ]
+    return any(marker in text for marker in failure_markers)

@@ -13,6 +13,7 @@ from manus_mini.reporter import Reporter
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.tools.base import ToolResult
+from manus_mini.tools.file_tools import ReplaceInFileTool
 from manus_mini.tools.registry import ToolRegistry
 from support import ScriptedLLM
 
@@ -855,6 +856,87 @@ def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_p
     list_events = [event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "list_files"]
     assert list_events == []
     assert any(event.message == "Code change validated; forcing final answer" for event in task.trace_events)
+
+
+def test_react_loop_does_not_validate_code_change_when_test_output_contains_failures(tmp_path: Path) -> None:
+    class FailingPipeRunBashTool:
+        name = "run_bash"
+        risk_level = "command"
+        requires_confirmation = False
+        is_read_only = False
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            return ToolResult(
+                tool_name="run_bash",
+                ok=True,
+                summary="command exited 0",
+                data={
+                    "exit_code": 0,
+                    "stdout": "================ FAILURES ================\nFAILED tests/test_app.py::test_app",
+                    "stderr": "",
+                },
+            )
+
+    class EditTestThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-replace", name="replace_in_file", args={"path": "app.py", "old_text": "old", "new_text": "new"})])
+            if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-test", name="run_bash", args={"command": "python -m pytest tests/test_app.py -q | tail -40"})])
+            return LLMResult(content="测试失败，继续修复。")
+
+    (tmp_path / "app.py").write_text("old", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
+    registry = ToolRegistry(tools=[ReplaceInFileTool(), FailingPipeRunBashTool()])
+    llm = EditTestThenAnswerLLM()
+
+    result = ReActLoop(llm, registry).run(task, session)
+
+    assert result == "测试失败，继续修复。"
+    assert llm.calls == 3
+    assert not any(event.message == "Code change validated; forcing final answer" for event in task.trace_events)
+
+
+def test_react_loop_limits_fragmented_read_file_calls_in_one_iteration(tmp_path: Path) -> None:
+    class ManySliceReadsLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id=f"call-read-{index}", name="read_file", args={"path": "big.txt", "start_index": index * 100, "max_bytes": 100})
+                        for index in range(5)
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    (tmp_path / "big.txt").write_text("x" * 1000, encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取文件片段", cwd=tmp_path)
+
+    result = ReActLoop(ManySliceReadsLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file" and "ok" in event.data
+    ]
+    assert [event.data.get("ok") for event in read_events] == [True, True, False, False, False]
+    assert all(event.data.get("error_code") == "READ_FILE_FRAGMENT_LIMIT_EXCEEDED" for event in read_events[2:])
 
 
 def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) -> None:
