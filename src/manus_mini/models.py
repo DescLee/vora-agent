@@ -61,6 +61,7 @@ class AgentError(BaseModel):
         "MAX_STEPS_REACHED",
         "MAX_REACT_ITERATIONS_REACHED",
         "MAX_REFLECTION_ROUNDS_REACHED",
+        "RUNTIME_TIMEOUT",
         "TOKEN_BUDGET_EXCEEDED",
         "TOOL_TIMEOUT",
         "TOOL_RETRY_EXHAUSTED",

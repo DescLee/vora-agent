@@ -355,6 +355,8 @@ def apply_code_test_gate(task: TaskState, decision: ReflectionDecision) -> Refle
 
 
 def _is_code_modification_task(task: TaskState) -> bool:
+    if _latest_code_change_event_index(task) >= 0:
+        return True
     normalized = task.goal.lower()
     has_change = any(keyword in normalized for keyword in CODE_CHANGE_KEYWORDS)
     has_code_target = any(keyword in normalized for keyword in CODE_TARGET_KEYWORDS)

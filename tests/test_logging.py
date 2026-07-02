@@ -107,6 +107,32 @@ def test_event_logger_compacts_duplicate_llm_payload_fields(tmp_path: Path) -> N
     assert row["response"] == response
 
 
+def test_event_logger_compacts_large_llm_request_messages(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "runs", enabled=True)
+    long_content = "x" * 5000
+
+    path = logger.record(
+        "session-1",
+        "run-1",
+        {
+            "type": "llm_request",
+            "stage": "react",
+            "request": {
+                "messages": [{"role": "system", "content": long_content}],
+                "tool_names": ["read_file"],
+            },
+        },
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    row = json.loads(raw.strip())
+    message = row["request"]["messages"][0]
+    assert len(raw) < 2500
+    assert message["content_preview"] == "x" * 1200
+    assert message["content_omitted"] is True
+    assert "content" not in message
+
+
 def test_event_logger_compacts_reflection_observation_content(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "runs", enabled=True)
 
@@ -133,6 +159,30 @@ def test_event_logger_compacts_reflection_observation_content(tmp_path: Path) ->
     assert "content" not in observation
     assert observation["content_preview"] == "x" * 500
     assert observation["content_omitted"] is True
+
+
+def test_event_logger_keeps_only_recent_reflection_observations(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "runs", enabled=True)
+    observations = [
+        {"tool_call_id": f"call-{index}", "ok": True, "summary": f"event {index}"}
+        for index in range(30)
+    ]
+
+    path = logger.record(
+        "session-1",
+        "run-1",
+        {
+            "type": "reflection",
+            "reflection_context": {"observations": observations},
+        },
+    )
+
+    row = json.loads(path.read_text(encoding="utf-8").strip())
+    compacted = row["reflection_context"]["observations"]
+    assert len(compacted) == 12
+    assert compacted[0]["tool_call_id"] == "call-18"
+    assert compacted[-1]["tool_call_id"] == "call-29"
+    assert row["reflection_context"]["observations_omitted"] == 18
 
 
 def test_reporter_writes_markdown_output(tmp_path: Path) -> None:

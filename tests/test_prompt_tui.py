@@ -178,11 +178,31 @@ def test_output_fragments_color_diff_additions_and_removals_in_process_section()
     fragments = style_output_fragments(text)
     styles_by_text = {fragment_text.strip(): style for style, fragment_text in fragments if fragment_text.strip()}
 
-    assert styles_by_text["--- a/app.py"] == "class:process.diff.header"
-    assert styles_by_text["+++ b/app.py"] == "class:process.diff.header"
-    assert styles_by_text["-old"] == "class:process.diff.remove"
-    assert styles_by_text["+new"] == "class:process.diff.add"
+    assert "bg:" in styles_by_text["-old"]
+    assert "#7f1d1d" in styles_by_text["-old"]
+    assert "bg:" in styles_by_text["+new"]
+    assert "#064e3b" in styles_by_text["+new"]
+    assert "bg:" in styles_by_text["--- a/app.py"]
+    assert "bg:" in styles_by_text["+++ b/app.py"]
     assert styles_by_text["+not diff"] == ""
+
+
+def test_output_fragments_color_diff_when_process_text_is_rendered_standalone() -> None:
+    fragments = style_output_fragments(
+        "LLM 回合 1\n"
+        "工具调度\n"
+        "- 1 replace_in_file(call) 变更预览:\n"
+        "  --- a/app.py\n"
+        "  +++ b/app.py\n"
+        "  @@ -1 +1 @@\n"
+        "  -old\n"
+        "  +new\n"
+    )
+
+    styles_by_text = {fragment_text.strip(): style for style, fragment_text in fragments if fragment_text.strip()}
+
+    assert "#7f1d1d" in styles_by_text["-old"]
+    assert "#064e3b" in styles_by_text["+new"]
 
 
 def test_format_process_renders_trace_events(tmp_path: Path) -> None:
@@ -260,7 +280,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert "● 最新 ReAct：第 1 轮开始" in status
+    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -600,7 +620,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert "● 最新 反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in status
+    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -766,7 +786,6 @@ def test_format_status_keeps_send_hint(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert "上下文 --" in status
     assert "Enter 发送" in status
     assert "Shift+Enter 换行" in status
 
@@ -780,7 +799,7 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert "上下文 25%" in status
+    assert "上下文 25%" not in status
     assert format_context_usage(session) == "上下文 25%"
 
 
@@ -852,10 +871,10 @@ def test_confirmation_fragments_color_diff_additions_and_removals() -> None:
 
     styles_by_text = {text.strip(): style for style, text in fragments if text.strip()}
 
-    assert styles_by_text["--- a/file.txt"] == "class:confirmation.diff.header"
-    assert styles_by_text["+++ b/file.txt"] == "class:confirmation.diff.header"
-    assert styles_by_text["-old"] == "class:confirmation.diff.remove"
-    assert styles_by_text["+new"] == "class:confirmation.diff.add"
+    assert "bg:" in styles_by_text["--- a/file.txt"]
+    assert "bg:" in styles_by_text["+++ b/file.txt"]
+    assert "#7f1d1d" in styles_by_text["-old"]
+    assert "#064e3b" in styles_by_text["+new"]
 
 
 def test_prompt_tui_refreshes_confirmation_when_pending_appears_during_run(tmp_path: Path) -> None:
@@ -982,7 +1001,7 @@ def test_format_status_describes_current_step_while_running(tmp_path: Path) -> N
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
     assert "状态 acting" not in status
-    assert "阶段 调用工具" in status
+    assert "阶段 调用工具" not in status
 
 
 def test_format_current_action_mentions_latest_tool_call_or_result(tmp_path: Path) -> None:
@@ -1027,8 +1046,8 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert "阶段 规划任务" in status
-    assert "当前 准备调用工具 list_files(call-list)" in status
+    assert status == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
+    assert "当前 准备调用工具 list_files(call-list)" not in status
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
 
@@ -1391,7 +1410,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert "● 最新 ReAct：event 40" in tui.status.text
+    assert tui.status.text == "状态 正在执行 | Enter 发送 | Shift+Enter 换行"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

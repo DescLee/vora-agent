@@ -738,6 +738,124 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
     assert command_events[1].data.get("blocked_duplicate") is True
 
 
+def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_path: Path) -> None:
+    class RootPathLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read",
+                            name="read_file",
+                            args={"path": str(tmp_path / "prompt_tui_formatting.py")},
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    source = tmp_path / "src" / "manus_mini" / "prompt_tui_formatting.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def format_status(): pass", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 TUI 状态栏", cwd=tmp_path)
+
+    result = ReActLoop(RootPathLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_event = next(event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "read_file")
+    assert read_event.data["ok"] is True
+    assert read_event.data["args"]["path"] == "src/manus_mini/prompt_tui_formatting.py"
+    assert read_event.data.get("path_rewritten") is True
+
+
+def test_react_loop_path_rewrite_ignores_noise_directories(tmp_path: Path) -> None:
+    class RootPathLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read",
+                            name="read_file",
+                            args={"path": "target.py"},
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    source = tmp_path / "src" / "target.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("print('src')", encoding="utf-8")
+    noisy = tmp_path / "node_modules" / "pkg" / "target.py"
+    noisy.parent.mkdir(parents=True)
+    noisy.write_text("print('dependency')", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取目标文件", cwd=tmp_path)
+
+    result = ReActLoop(RootPathLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_event = next(event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "read_file")
+    assert read_event.data["ok"] is True
+    assert read_event.data["args"]["path"] == "src/target.py"
+
+
+def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_path: Path) -> None:
+    class EditThenKeepWorkingLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-replace",
+                            name="replace_in_file",
+                            args={"path": "app.py", "old_text": "old", "new_text": "new"},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-test",
+                            name="run_bash",
+                            args={"command": "python -m pytest tests/test_app.py -q", "timeout_seconds": 30},
+                        )
+                    ]
+                )
+            if self.calls == 3:
+                return LLMResult(tool_calls=[ToolCall(id="call-list", name="list_files", args={"path": "."})])
+            return LLMResult(content="done")
+
+    (tmp_path / "app.py").write_text("old", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_app.py").write_text("def test_app():\n    assert True\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
+    llm = EditThenKeepWorkingLLM()
+
+    result = ReActLoop(llm, ToolRegistry()).run(task, session)
+
+    assert "测试" in result or "验证" in result or "完成" in result
+    assert llm.calls == 3
+    list_events = [event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "list_files"]
+    assert list_events == []
+    assert any(event.message == "Code change validated; forcing final answer" for event in task.trace_events)
+
+
 def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) -> None:
     class RetryReadLLM:
         def __init__(self) -> None:

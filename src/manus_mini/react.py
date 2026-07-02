@@ -171,6 +171,7 @@ class ReActLoop:
             messages.append(assistant_message_from_llm_result(llm_result))
             session.messages.append(assistant_message_from_llm_result(llm_result))
             known_tool_calls, tool_results = self._prepare_tool_calls(llm_result.tool_calls, task, session)
+            executable_call_by_id = {call.id: call for call in known_tool_calls}
             known_ids = {call.id for call in known_tool_calls}
             schedulable_calls = [
                 call.model_copy(update={"depends_on": [dependency for dependency in call.depends_on if dependency in known_ids]})
@@ -192,7 +193,8 @@ class ReActLoop:
 
             for call in llm_result.tool_calls:
                 tool_result = tool_results[call.id]
-                event_data = self._tool_event_data(iteration_index, call, tool_result)
+                event_call = executable_call_by_id.get(call.id, call)
+                event_data = self._tool_event_data(iteration_index, event_call, tool_result)
                 task.trace_events.append(
                     TraceEvent(
                         phase="tool",
@@ -212,6 +214,17 @@ class ReActLoop:
                 if pending is not None:
                     return pending.prompt or pending.summary or "需要用户确认写入"
                 return "需要用户确认写入"
+            if self._code_change_validated_after_latest_write(task):
+                return self._force_final_answer(
+                    messages,
+                    task,
+                    session,
+                    fallback="代码修改已完成，测试已通过。",
+                    trace_message="Code change validated; forcing final answer",
+                    trace_data={"iteration": iteration_index, "reason": "code_change_validated"},
+                    system_instruction="代码修改已经完成，且最近一次代码修改后的测试已通过。请直接输出最终结果，不要再请求任何工具。",
+                    llm_trace_message="LLM forced final answer after validated code change",
+                )
 
         return self._force_final_answer(messages, task, session)
 
@@ -275,6 +288,8 @@ class ReActLoop:
         fingerprint = _tool_call_fingerprint(call)
         if fingerprint is not None:
             data["fingerprint"] = fingerprint
+        if call.args.get("_path_rewritten") is True:
+            data["path_rewritten"] = True
         if tool_result.data.get("deduplicated"):
             data["deduplicated"] = True
             data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
@@ -298,24 +313,54 @@ class ReActLoop:
     def _estimated_context_tokens(self, messages: list[Message]) -> int:
         return estimate_message_tokens(messages)
 
-    def _force_final_answer(self, messages: list[Message], task: TaskState, session: SessionState) -> str:
+    def _code_change_validated_after_latest_write(self, task: TaskState) -> bool:
+        latest_write_index = -1
+        for index, event in enumerate(task.trace_events):
+            if event.phase != "tool":
+                continue
+            data = event.data
+            if data.get("tool_name") in {"write_file", "replace_in_file", "append_file", "make_directory"} and data.get("ok") is True:
+                latest_write_index = index
+        if latest_write_index < 0:
+            return False
+        for event in task.trace_events[latest_write_index + 1:]:
+            if event.phase != "tool":
+                continue
+            data = event.data
+            if not _is_test_tool_event(data):
+                continue
+            if data.get("ok") is True and data.get("exit_code") == 0:
+                return True
+        return False
+
+    def _force_final_answer(
+        self,
+        messages: list[Message],
+        task: TaskState,
+        session: SessionState,
+        fallback: str | None = None,
+        trace_message: str = "ReAct iteration limit reached; forcing final answer",
+        trace_data: dict | None = None,
+        system_instruction: str = "已达到工具循环上限。请基于现有上下文直接输出最终答案，不要再请求任何工具。",
+        llm_trace_message: str = "LLM forced final answer after ReAct limit",
+    ) -> str:
         task.trace_events.append(
             TraceEvent(
                 phase="react",
-                message="ReAct iteration limit reached; forcing final answer",
-                data={"max_react_iterations": task.limits.max_react_iterations},
+                message=trace_message,
+                data=trace_data or {"max_react_iterations": task.limits.max_react_iterations},
             )
         )
         final_messages = [
             *messages,
-            Message.system("已达到工具循环上限。请基于现有上下文直接输出最终答案，不要再请求任何工具。"),
+            Message.system(system_instruction),
         ]
         llm_result = self._complete_with_rule_fallback(final_messages, task, session.session_id)
         llm_result = self._normalize_tool_call_ids(llm_result, task.limits.max_react_iterations + 1)
         task.trace_events.append(
             TraceEvent(
                 phase="llm",
-                message="LLM forced final answer after ReAct limit",
+                message=llm_trace_message,
                 data={
                     "iteration": task.limits.max_react_iterations + 1,
                     "content_preview": llm_result.content[:500],
@@ -332,7 +377,7 @@ class ReActLoop:
                     data={"tool_call_count": len(llm_result.tool_calls)},
                 )
             )
-        return llm_result.content or "已达到工具循环上限，保留当前最佳结果。"
+        return llm_result.content or fallback or "已达到工具循环上限，保留当前最佳结果。"
 
     def _complete_with_rule_fallback(
         self,
@@ -825,6 +870,26 @@ def _find_successful_observation(task: TaskState | None, tool_call_id: str):
         if observation.tool_call_id == tool_call_id and observation.ok:
             return observation
     return None
+
+
+def _is_test_tool_event(data: dict) -> bool:
+    if data.get("tool_name") not in {"run_bash", "run_temp_script"}:
+        return False
+    if data.get("is_test") is True:
+        return True
+    args = data.get("args")
+    if not isinstance(args, dict):
+        args = {}
+    text = " ".join(
+        str(value).lower()
+        for value in [
+            *args.values(),
+            data.get("summary", ""),
+            data.get("stdout", ""),
+            data.get("stderr", ""),
+        ]
+    )
+    return any(keyword in text for keyword in ["pytest", "unittest", "test", "go test", "cargo test", "npm test", "pnpm test", "yarn test", "ruff"])
 
 
 def _optional_int_arg(args: dict, key: str) -> int | None:

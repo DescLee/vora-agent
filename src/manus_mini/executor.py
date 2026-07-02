@@ -4,10 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures import as_completed
 from difflib import unified_diff
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from manus_mini.models import PendingConfirmation, SessionState, TaskState, TraceEvent, ToolCall
 from manus_mini.tools.base import ToolPreview, ToolResult
+from manus_mini.tools.file_tools import NOISE_DIR_NAMES
 from manus_mini.tools.registry import ToolRegistry
 
 
@@ -17,7 +18,7 @@ MAX_DIFF_PREVIEW_CHARS = 4000
 
 
 def sanitize_tool_args(args: dict) -> dict:
-    return {key: value for key, value in dict(args).items() if key != "workspace"}
+    return {key: value for key, value in dict(args).items() if key != "workspace" and not str(key).startswith("_")}
 
 
 class Executor:
@@ -27,6 +28,7 @@ class Executor:
 
     def prepare_tool_call(self, call: ToolCall, session: SessionState) -> ToolCall:
         run_args = sanitize_tool_args(call.args)
+        run_args = self._rewrite_missing_source_path(call.name, run_args, session.cwd)
         run_args["workspace"] = session.cwd
         pending = session.pending_confirmation
         if pending is not None and pending.approved and pending.tool_name == call.name:
@@ -34,6 +36,31 @@ class Executor:
             if all(run_args.get(key) == value for key, value in pending_args.items()):
                 run_args["confirmed"] = True
         return call.model_copy(update={"args": run_args})
+
+    def _rewrite_missing_source_path(self, tool_name: str, args: dict, workspace: Path) -> dict:
+        if tool_name not in {"read_file", "list_files"}:
+            return args
+        raw_path = str(args.get("path") or "").strip()
+        if not raw_path:
+            return args
+        workspace_root = workspace.expanduser().resolve()
+        requested = _resolve_display_path(workspace_root, raw_path)
+        if requested.exists():
+            return args
+        basename = PurePosixPath(raw_path.replace("\\", "/")).name
+        if not basename or basename in {".", ".."}:
+            return args
+        matches = [
+            path
+            for path in workspace_root.rglob(basename)
+            if _is_rewrite_candidate(path, workspace_root, tool_name)
+        ]
+        if len(matches) != 1:
+            return args
+        rewritten = dict(args)
+        rewritten["path"] = matches[0].relative_to(workspace_root).as_posix()
+        rewritten["_path_rewritten"] = True
+        return rewritten
 
     def execute(self, call: ToolCall, session: SessionState, task: TaskState) -> ToolResult:
         max_attempts = max(1, task.limits.max_tool_retries + 1)
@@ -231,6 +258,25 @@ def _read_text_preview(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _resolve_display_path(workspace: Path, path: str) -> Path:
+    raw = Path(path).expanduser()
+    if raw.is_absolute():
+        return raw.resolve(strict=False)
+    return (workspace / raw).resolve(strict=False)
+
+
+def _is_rewrite_candidate(path: Path, workspace: Path, tool_name: str) -> bool:
+    if tool_name == "read_file" and not path.is_file():
+        return False
+    if tool_name == "list_files" and not (path.is_file() or path.is_dir()):
+        return False
+    try:
+        relative_parts = path.relative_to(workspace).parts
+    except ValueError:
+        return False
+    return not any(part in NOISE_DIR_NAMES for part in relative_parts[:-1])
 
 
 def _split_lines(content: str) -> list[str]:

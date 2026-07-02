@@ -214,7 +214,7 @@ class ReadFileTool(BaseTool):
                 )
             encoding = kwargs.get("encoding", "utf-8")
             try:
-                content = raw.decode(encoding)
+                content = raw.decode(encoding, errors="replace")
             except UnicodeDecodeError as error:
                 return ToolResult(
                     tool_name=self.name,
@@ -232,6 +232,7 @@ class ReadFileTool(BaseTool):
                     "bytes_read": len(raw),
                     "file_size": size,
                     "truncated": start_index + len(raw) < size,
+                    "decode_repaired": "\ufffd" in content,
                 },
             )
         if size > max_bytes:

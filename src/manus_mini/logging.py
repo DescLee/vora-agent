@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
+MAX_LOG_MESSAGE_CONTENT_CHARS = 1200
+MAX_REFLECTION_OBSERVATIONS = 12
+
+
 def default_manus_home() -> Path:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return Path(tempfile.gettempdir()) / "manus-mini" / ".manus-mini"
@@ -103,9 +107,54 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
     if compacted.get("type") == "llm_response":
         compacted.pop("request", None)
         compacted.pop("api_request_payload", None)
+    request = compacted.get("request")
+    if isinstance(request, dict):
+        compacted["request"] = compact_llm_payload(request)
+    response = compacted.get("response")
+    if isinstance(response, dict):
+        compacted["response"] = compact_llm_payload(response)
     reflection_context = compacted.get("reflection_context")
     if isinstance(reflection_context, dict):
         compacted["reflection_context"] = compact_reflection_context(reflection_context)
+    return compacted
+
+
+def compact_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    compacted = dict(payload)
+    messages = compacted.get("messages")
+    if isinstance(messages, list):
+        compacted["messages"] = [
+            compact_llm_message(message)
+            for message in messages
+            if isinstance(message, dict)
+        ]
+    choices = compacted.get("choices")
+    if isinstance(choices, list):
+        compacted["choices"] = [
+            compact_llm_choice(choice)
+            for choice in choices
+            if isinstance(choice, dict)
+        ]
+    return compacted
+
+
+def compact_llm_choice(choice: dict[str, Any]) -> dict[str, Any]:
+    compacted = dict(choice)
+    message = compacted.get("message")
+    if isinstance(message, dict):
+        compacted["message"] = compact_llm_message(message)
+    return compacted
+
+
+def compact_llm_message(message: dict[str, Any]) -> dict[str, Any]:
+    compacted = dict(message)
+    for key in ("content", "reasoning_content"):
+        content = compacted.get(key)
+        if not isinstance(content, str) or len(content) <= MAX_LOG_MESSAGE_CONTENT_CHARS:
+            continue
+        compacted[f"{key}_preview"] = content[:MAX_LOG_MESSAGE_CONTENT_CHARS]
+        compacted["content_omitted"] = True
+        compacted.pop(key, None)
     return compacted
 
 
@@ -113,9 +162,13 @@ def compact_reflection_context(context: dict[str, Any]) -> dict[str, Any]:
     compacted = dict(context)
     observations = compacted.get("observations")
     if isinstance(observations, list):
+        omitted = max(0, len(observations) - MAX_REFLECTION_OBSERVATIONS)
+        if omitted:
+            compacted["observations_omitted"] = omitted
+        visible_observations = observations[-MAX_REFLECTION_OBSERVATIONS:]
         compacted["observations"] = [
             compact_observation(observation)
-            for observation in observations
+            for observation in visible_observations
             if isinstance(observation, dict)
         ]
     return compacted

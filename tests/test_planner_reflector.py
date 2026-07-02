@@ -301,6 +301,41 @@ def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None
     assert "测试" in decision.reason
 
 
+def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_worded(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"looks good"}')
+
+    task = TaskState.create(goal="优化 TUI 状态栏展示", cwd=tmp_path)
+    task.plan = [PlanStep(description="调整 TUI 展示", intent="code")]
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool replace_in_file finished: ok",
+            data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced src/manus_mini/prompt_tui.py"},
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_bash finished: ok",
+            data={
+                "tool_name": "run_bash",
+                "ok": True,
+                "summary": "command exited 0",
+                "exit_code": 0,
+                "args": {"command": "python -m py_compile src/manus_mini/prompt_tui.py"},
+            },
+        )
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "local_update"
+    assert "测试" in decision.reason
+
+
 def test_reflection_rejects_code_change_when_latest_test_failed(tmp_path: Path) -> None:
     class AcceptingLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002

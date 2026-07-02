@@ -178,6 +178,19 @@ def test_read_file_reads_slice_from_start_index(tmp_path: Path) -> None:
     assert result.data["truncated"] is True
 
 
+def test_read_file_slice_tolerates_utf8_boundary_offset(tmp_path: Path) -> None:
+    (tmp_path / "unicode.txt").write_text("前缀\n工具调度\n后续", encoding="utf-8")
+    raw = (tmp_path / "unicode.txt").read_bytes()
+    start_index = raw.index("工具".encode("utf-8")) + 1
+
+    result = ReadFileTool().run(workspace=tmp_path, path="unicode.txt", start_index=start_index, max_bytes=12)
+
+    assert result.ok is True
+    assert result.error_code is None
+    assert "具" in result.content
+    assert result.data["start_index"] == start_index
+
+
 def test_read_file_rejects_start_index_beyond_file_size(tmp_path: Path) -> None:
     (tmp_path / "small.txt").write_text("abc", encoding="utf-8")
 

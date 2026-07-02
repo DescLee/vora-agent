@@ -613,22 +613,11 @@ def format_phase_label(task: TaskState) -> str:
 def format_status(session: SessionState, is_running: bool | None = None) -> str:
     task = session.active_task
     if task is None:
-        return f"idle | {format_context_usage(session)} | Enter 发送 | Shift+Enter 换行 | Ctrl-C 退出"
+        return "idle | Enter 发送 | Shift+Enter 换行 | Ctrl-C 退出"
 
     state_label = format_status_label(task, is_running=is_running)
-    phase_label = format_phase_label(task)
-    current_action = format_current_action(task)
-    latest_activity = format_latest_activity(task)
 
-    parts = [
-        f"状态 {state_label}",
-        f"➜ 阶段 {phase_label}",
-        f"▶ 当前 {current_action}",
-        f"● 最新 {latest_activity}",
-        format_context_usage(session),
-    ]
-    parts.extend(["Enter 发送", "Shift+Enter 换行"])
-    return " | ".join(parts)
+    return f"状态 {state_label} | Enter 发送 | Shift+Enter 换行"
 
 
 def format_context_usage(session: SessionState) -> str:
@@ -731,7 +720,7 @@ def wrap_text_for_display(text: str, width: int) -> tuple[str, list[int]]:
 
 def style_output_fragments(text: str) -> list[tuple[str, str]]:
     fragments: list[tuple[str, str]] = []
-    current_section = ""
+    current_section = "执行过程" if _looks_like_standalone_process_text(text) else ""
     pending_section_title = False
     in_process_diff = False
 
@@ -751,7 +740,7 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
                 in_process_diff = True
             elif in_process_diff:
                 if bare_line.startswith("  "):
-                    style = _diff_line_style(stripped_line, "process")
+                    style = _diff_line_style(stripped_line)
                 elif bare_line:
                     in_process_diff = False
         fragments.append((style, line))
@@ -761,14 +750,29 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
     return fragments
 
 
-def _diff_line_style(line: str, prefix: str) -> str:
+def _diff_line_style(line: str) -> str:
+    styles = {
+        "diff": "bg:#172026 #d7dedb",
+        "header": "bg:#1f2937 #cbd5e1",
+        "add": "bg:#064e3b #d1fae5",
+        "remove": "bg:#7f1d1d #fee2e2",
+    }
     if line.startswith("+++") or line.startswith("---"):
-        return f"class:{prefix}.diff.header"
+        return styles["header"]
     if line.startswith("+"):
-        return f"class:{prefix}.diff.add"
+        return styles["add"]
     if line.startswith("-"):
-        return f"class:{prefix}.diff.remove"
-    return f"class:{prefix}.diff"
+        return styles["remove"]
+    return styles["diff"]
+
+
+def _looks_like_standalone_process_text(text: str) -> bool:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped.startswith(("当前步骤", "执行计划", "LLM 回合", "工具调度"))
+    return False
 
 
 def style_confirmation_fragments(text: str) -> list[tuple[str, str]]:
@@ -783,7 +787,7 @@ def style_confirmation_fragments(text: str) -> list[tuple[str, str]]:
         if not in_diff:
             fragments.append(("class:confirmation.body", line))
             continue
-        fragments.append((_diff_line_style(bare_line, "confirmation"), line))
+        fragments.append((_diff_line_style(bare_line), line))
     if not fragments:
         fragments.append(("", ""))
     return fragments

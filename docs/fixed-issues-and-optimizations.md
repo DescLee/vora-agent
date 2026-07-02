@@ -878,6 +878,42 @@
   - Reflection 阶段明确空泛草稿不能 accept，`reason` 必须指出下一步应补什么，例如读取范围、修正结论或运行验证。
 - 验证：`tests/test_planner_reflector.py` 和 `tests/test_runtime.py` 覆盖新提示词约束会进入实际 LLM 上下文。
 
+### 9.27 TUI diff 背景色未生效
+
+- 现象：代码 diff 在 TUI 中仍只显示普通文本，没有按新增/删除行展示绿色或红色背景。
+- 根因：diff 输出有时作为普通 process 文本进入渲染链路，原来的样式识别只覆盖了部分结构化片段；同时样式使用不够直接，终端主题下不容易看出背景。
+- 修复：
+  - `style_output_fragments()` 对独立 process 文本也执行 diff 行识别。
+  - 新增行使用绿色背景，删除行使用红色背景，并同步覆盖确认预览中的 diff 展示。
+- 验证：`tests/test_prompt_tui.py` 覆盖新增/删除行背景色，以及普通 process 文本中的 diff 高亮。
+
+### 9.28 历史会话中的 `RUNTIME_TIMEOUT` 导致 `manus-mini list` 崩溃
+
+- 现象：移除单轮运行总时长限制后，旧 session 里保存过 `RUNTIME_TIMEOUT` 错误码，`manus-mini list` 读取历史会话时触发 Pydantic Literal 校验失败。
+- 根因：运行时错误码删除过于激进，没有考虑历史 JSON 兼容。
+- 修复：运行时不再生成 `RUNTIME_TIMEOUT`，但 `AgentError.code` 保留该取值用于历史会话反序列化。
+- 验证：`tests/test_session_store.py` 覆盖旧会话 JSON 可被正常列出。
+
+### 9.29 日志复盘发现的路径猜测、测试门禁和日志膨胀问题
+
+- 现象：真实运行日志中模型先读取了仓库根目录下不存在的 `prompt_tui.py` / `prompt_tui_formatting.py`，随后重复读取、grep、sed；代码修改后只做语法检查就被反思接受，且 JSONL 单行可达数万字符。
+- 根因：
+  - LLM 会根据文件名猜路径，但项目源码实际在 `src/manus_mini/`。
+  - Reflection 原先主要通过任务文案识别代码修改，遇到“优化 TUI 展示”这类 UI 表述时可能漏判。
+  - LLM request/response 与 reflection observations 中保存了过多正文和重复上下文。
+- 修复：
+  - Executor 对 `read_file` / `list_files` 的不存在路径做唯一文件名纠偏，并在 trace 中记录 `path_rewritten`。
+  - ReAct 在最近一次代码写入后检测到测试通过时直接请求最终答复，避免继续无意义工具循环。
+  - Reflection 只要看到成功代码写入事件，就要求写后测试通过；语法检查不再被当作测试通过。
+  - EventLogger 压缩 LLM 大消息内容，并限制 reflection context 只保留最近观察。
+- 验证：`tests/test_runtime.py`、`tests/test_logging.py`、`tests/test_planner_reflector.py` 覆盖路径纠偏、写后验证收口、日志压缩和反思门禁。
+
+### 9.30 `read_file` 分片读取落在 UTF-8 字符中间会失败
+
+- 现象：读取大文件分片时，如果 `start_index` 正好落在中文等多字节字符中间，工具返回 `DECODE_ERROR`，模型容易继续尝试相近偏移并浪费轮次。
+- 修复：仅对 `start_index` 分片读取启用容错解码，完整文件读取仍保持严格解码。
+- 验证：`tests/test_tools.py` 覆盖 UTF-8 边界偏移仍可返回可用内容。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
@@ -912,7 +948,7 @@
 
 ```bash
 python -m pytest -q
-# 260 passed
+# 269 passed
 ```
 
 补充手工验证：
@@ -948,3 +984,37 @@ message= 已在工作目录下新建 helloworld.py，内容为 `print('hello wor
 exists= True
 content= print('hello world')
 ```
+
+## 12. V2 优化方向
+
+V2 不再优先堆更多工具，而是先提升真实长任务的稳定性、可恢复性和成本可控性。
+
+### 12.1 执行效率
+
+- 建立文件定位索引：对源码、测试、文档维护轻量索引，LLM 请求不存在路径时优先从索引纠偏，减少 `list_files` / `grep` 循环。
+- 增强工具结果复用：同一 run 内对等价读取、扫描、测试结果建立摘要缓存，下一轮优先引用缓存摘要。
+- 增加收口判定：当任务已修改代码并通过相关测试，或问题分析已覆盖关键证据时，ReAct 主动要求最终答复。
+
+### 12.2 质量门禁
+
+- 代码任务按语言和文件类型推断默认验证命令，例如 Python 项目优先 `pytest`，前端项目优先 `pnpm test` / `pnpm lint`。
+- 区分“语法检查”“lint”“单测”“集成测试”，Reflection 不把语法检查误判成完整测试。
+- 对失败测试生成结构化摘要，下一轮优先修失败点，不重新扫描无关文件。
+
+### 12.3 日志与可观测性
+
+- JSONL 主日志保持轻量，只保留决策、摘要、耗时和错误码；完整大 payload 后续可落到按需 sidecar 文件。
+- 为每个 run 输出自动复盘摘要：总耗时、LLM 轮次、工具次数、失败工具、重复调用、最终验证命令。
+- TUI 增加运行诊断视图，快速看到“为什么继续跑 / 为什么收口 / 当前阻塞点”。
+
+### 12.4 TUI 体验
+
+- diff 展示继续增强：支持文件名分组、hunk 折叠、当前修改摘要和测试结果并列展示。
+- 状态栏保持短文本，但提供可展开的运行详情，避免把阶段、动作、最新动态全部挤在一行。
+- 对长输出默认折叠，只突出错误、测试结论和用户需要决策的内容。
+
+### 12.5 会话兼容与迁移
+
+- 为 session JSON 增加显式 schema version。
+- 对历史错误码、字段迁移和缺失字段提供集中 migration 层，避免未来模型变更再次影响 `list/resume`。
+- 增加旧版本 session fixture，作为兼容性回归测试。
