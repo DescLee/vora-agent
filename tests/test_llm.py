@@ -5,6 +5,7 @@ import pytest
 
 from manus_mini.config import AppConfig
 from manus_mini.llm import LLMRequestError, OpenAICompatibleLLMClient, extract_usage, infer_model_context_limit, openai_messages, tool_schema
+from manus_mini.tools import ToolRegistry
 from manus_mini.models import Message
 
 
@@ -179,8 +180,11 @@ def test_tool_schema_exposes_file_tool_limits() -> None:
     assert "limit" in list_schema["properties"]
     assert "max_bytes" in read_schema["properties"]
     assert "max_bytes" in write_schema["properties"]
+    assert "allow_full_rewrite" in write_schema["properties"]
     assert replace_schema["required"] == ["path", "old_text", "new_text"]
     assert "expected_replacements" in replace_schema["properties"]
+    assert "before_text" in replace_schema["properties"]
+    assert "after_text" in replace_schema["properties"]
 
 
 def test_tool_schema_exposes_shell_tools() -> None:
@@ -191,7 +195,14 @@ def test_tool_schema_exposes_shell_tools() -> None:
     assert "command" in bash_schema["properties"]
     assert script_schema["required"] == ["content"]
     assert "content" in script_schema["properties"]
+    assert "is_test" in script_schema["properties"]
     assert "timeout_seconds" in script_schema["properties"]
+
+
+def test_tool_schema_is_loaded_from_registered_tool() -> None:
+    registry_schema = ToolRegistry().get("replace_in_file").parameters_schema()
+
+    assert tool_schema("replace_in_file") == registry_schema
 
 
 def test_infer_model_context_limit_supports_deepseek_family() -> None:

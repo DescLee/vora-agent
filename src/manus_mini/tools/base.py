@@ -42,6 +42,9 @@ class ToolProtocol(Protocol):
     def resource_keys(self, **kwargs: Any) -> list[str]:
         ...
 
+    def parameters_schema(self) -> dict[str, Any]:
+        ...
+
 
 Tool = ToolProtocol
 
@@ -70,6 +73,9 @@ class BaseTool(ABC):
 
     def describe_preview(self, **kwargs: Any) -> str:
         return self.name
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": True}
 
 
 def resolve_workspace_path(workspace: Path, path: str | Path) -> Path:

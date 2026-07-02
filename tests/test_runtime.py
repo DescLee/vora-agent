@@ -678,6 +678,63 @@ def test_react_loop_skips_duplicate_read_file_calls_in_same_iteration(tmp_path: 
     assert read_events[1].data.get("deduplicated") is True
 
 
+def test_react_loop_skips_duplicate_list_files_calls_across_iterations(tmp_path: Path) -> None:
+    class RepeatingListLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-list-1", name="list_files", args={"path": "."})])
+            if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-list-2", name="list_files", args={"path": "."})])
+            return LLMResult(content="ok")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="重复列目录", cwd=tmp_path)
+
+    result = ReActLoop(RepeatingListLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    list_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "list_files"
+    ]
+    assert list_events[0].data.get("summary") == "found 1 files"
+    assert list_events[1].data.get("summary") == "list_files skipped: duplicate request already completed"
+    assert list_events[1].data.get("deduplicated") is True
+
+
+def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: Path) -> None:
+    class RepeatingCommandLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-bash-1", name="run_bash", args={"command": "printf x >> marker.txt"})])
+            if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-bash-2", name="run_bash", args={"command": "printf x >> marker.txt"})])
+            return LLMResult(content="ok")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="重复执行命令", cwd=tmp_path)
+
+    result = ReActLoop(RepeatingCommandLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    assert (tmp_path / "marker.txt").read_text(encoding="utf-8") == "x"
+    command_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "run_bash"
+    ]
+    assert [event.data.get("error_code") for event in command_events] == [None, "DUPLICATE_TOOL_CALL_BLOCKED"]
+    assert command_events[1].data.get("blocked_duplicate") is True
+
+
 def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) -> None:
     class RetryReadLLM:
         def __init__(self) -> None:

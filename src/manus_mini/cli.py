@@ -72,6 +72,7 @@ def _run_list(cwd: Path) -> None:
     sessions = store.list_sessions()
     if not sessions:
         print("No saved sessions.")
+        print(f"Session directory: {store.sessions_dir}")
         return
     for summary in sessions:
         print(

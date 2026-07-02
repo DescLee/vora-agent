@@ -372,18 +372,40 @@
   - 新增 `run_bash` 工具，在当前 workspace 中执行简短 bash 命令，并返回 exit code、stdout、stderr 和超时状态。
   - 新增 `run_temp_script` 工具，把 Agent 生成的 bash 脚本写入系统临时目录，执行完成后自动删除脚本文件。
   - 两个工具都设置为 `command` 风险等级，默认超时并截断输出，避免长时间阻塞和日志体积失控。
-  - LLM tool schema 暴露 `command`、`content`、`timeout_seconds` 和 `output_limit` 参数。
+  - LLM tool schema 暴露 `command`、`content`、`is_test`、`timeout_seconds` 和 `output_limit` 参数。
 - 验证：测试覆盖 bash 成功/失败、临时脚本成功/失败后删除，以及工具注册和 schema 暴露。
+
+### 5.11.1 命令工具安全边界收紧
+
+- 现象：`run_bash` / `run_temp_script` 具备真实命令执行能力，如果直接继承完整宿主环境或允许明显高风险命令，容易扩大误操作影响面。
+- 修复：
+  - 命令执行使用受控环境变量，只保留 `PATH`、`HOME`、`PWD`、`LANG`、`LC_ALL` 和必要的 `PYTHONPATH`，避免把 `LLM_API_KEY` 等敏感环境变量暴露给命令。
+  - 增加高风险命令拒绝策略，拦截 `sudo`、`rm -rf /`、`mkfs`、`dd if=`、`shutdown`、`reboot` 等模式。
+  - `run_bash` 和 `run_temp_script` 共用同一套拒绝规则。
+  - 命令被拒绝时保留真实工具名，便于 trace 中区分 `run_bash` 和 `run_temp_script`。
+- 验证：测试覆盖危险命令拒绝、临时脚本危险内容拒绝、命令输出中不包含敏感环境变量，以及拒绝结果的 tool name 正确。
 
 ### 5.12 代码修改任务增加测试门禁
 
 - 现象：代码修改类任务以前只依赖 LLM/reflection 判断草稿是否满足目标，可能在未执行测试或测试失败时提前接受结果。
 - 修复：
   - 执行阶段系统提示要求代码修改、修复、生成或删除任务先准备测试命令或临时测试脚本，修改后必须运行测试。
+  - `run_temp_script` 支持 `is_test=true`，用于明确标记代码修改验证脚本；普通临时脚本不会因为工具名相同就自动算作测试门禁。
   - `run_bash` / `run_temp_script` 的 exit code、stdout 和 stderr 会进入 trace event。
-  - Reflection 对代码修改任务增加硬门禁：未执行测试时返回 `local_update`，测试失败时返回 `regenerate` 并把失败摘要回传，最近测试通过时才允许 `accept`。
+  - Reflection 对代码修改任务增加硬门禁：最近一次代码写入、局部替换或目录创建之后，必须至少执行一次测试，且这些测试事件全部通过才允许 `accept`。
+  - 如果最新代码修改之后任一测试失败，返回 `regenerate` 并把失败摘要回传；只有修改前的失败测试不会永久阻塞后续已修复并重新通过的结果。
   - 失败信息会通过 runtime 的下一轮修复提示进入上下文，直到测试通过或达到循环上限。
-- 验证：测试覆盖未执行测试不接受、测试失败不接受、测试通过才接受。
+- 验证：测试覆盖未执行测试不接受、最新修改后的任一测试失败不接受、修改前失败但修改后测试通过可接受。
+
+### 5.13 重复工具调用抑制
+
+- 现象：部分 LLM 在连续多轮 ReAct 中会返回相同函数名和相同参数的 `tool_calls`，导致同一工具反复执行，同样的观察结果也被重复塞回上下文。
+- 修复：
+  - ReAct 为工具调用生成稳定指纹：`tool_name + canonical args`，并去掉 `workspace`、`confirmed` 等运行时参数。
+  - `read_file`、`list_files` 等读类工具遇到重复指纹时复用已有成功观察，不再真实执行，也不重复回传完整内容。
+  - `write_file`、`replace_in_file`、`run_bash`、`run_temp_script` 等写入或命令类工具遇到重复指纹时返回 `DUPLICATE_TOOL_CALL_BLOCKED`，避免重复写入或重复执行命令。
+  - 同一轮内的重复调用和跨轮重复调用都记录 `fingerprint`、`source_tool_call_id`、`deduplicated` 或 `blocked_duplicate`，方便后续排查。
+- 验证：测试覆盖跨轮重复 `list_files` 跳过复用，以及跨轮重复 `run_bash` 被阻断且命令只执行一次。
 
 ## 6. 文件工具与 workspace 安全
 
@@ -425,6 +447,16 @@
   - `replace_in_file` 不需要人工确认，安全性由精确旧文本匹配、替换次数校验和 workspace/protected path 保护保证。
   - 执行提示要求修改已有文件时优先使用 `replace_in_file`，只有创建新文件或必须整体重写时才使用 `write_file`。
 - 验证：测试覆盖唯一替换、找不到旧文本、多处匹配保护、显式多处替换、等长原地写入、长度变化原子替换、无变化跳过、工具注册和 LLM schema。
+
+### 6.3.2 局部替换增加上下文校验并收紧全量重写
+
+- 现象：仅依赖短 `old_text` 时，重复片段可能导致替换目标不够明确；同时 `write_file` 仍可能被模型用于覆盖已有大文件，造成卡顿。
+- 修复：
+  - `replace_in_file` 新增 `before_text` 和 `after_text`，要求旧文本前后上下文精确匹配后才替换。
+  - 上下文不匹配时返回 `CONTEXT_MISMATCH`，并返回旧文本出现次数，方便下一轮修正。
+  - `write_file` 覆盖已有大文件时默认返回 `FULL_REWRITE_REQUIRES_ALLOW`，提示优先使用 `replace_in_file`。
+  - 确实需要整体重写时，必须显式传入 `allow_full_rewrite=true`。
+- 验证：测试覆盖上下文定位替换、上下文不匹配拒绝、大文件全量覆盖默认拒绝，以及显式允许后可整体重写。
 
 ### 6.4 list_files 未尊重 `.gitignore`
 
@@ -581,6 +613,12 @@
 - 修复：没有传入历史 session 时，`PromptTui` 使用内存型 `MemoryManager`；只有恢复历史 session 时才接入磁盘记忆库。
 - 价值：新会话默认更“干净”，也避免测试场景把长期记忆写进工作区。
 - 验证：测试覆盖新建 TUI 不会读取已有磁盘长期记忆。
+
+### 8.11 CLI 历史目录可见性
+
+- 现象：`manus-mini list --cwd <目录>` 无历史时只显示 `No saved sessions.`，用户不知道它实际读取的是哪个项目隔离目录。
+- 修复：无历史时同步输出 `Session directory: <path>`，直接展示当前 `cwd` 对应的 sessions 路径。
+- 验证：测试覆盖无历史时输出实际 session directory。
 
 ## 9. 日志与脱敏
 
@@ -776,6 +814,30 @@
   - reflection observation 的完整正文改为 `content_preview` 和 `content_omitted`，避免长文件内容重复写入日志。
 - 验证：测试覆盖 LLM 响应日志不再包含重复 payload 字段，以及 reflection observation 正文被压缩为预览。
 
+### 9.21 本地运行产物清理
+
+- 现象：项目目录下残留 `.pytest_cache`、`.ruff_cache`、`__pycache__` 和 `outputs/`，虽然已被 `.gitignore` 忽略，但会影响本地扫描、Agent 目录判断和人工查看。
+- 修复：清理项目内运行产物，保留 `.gitignore` 规则继续防止后续误入库。
+- 验证：清理后使用 `find` 检查项目三层内不再存在 `.pytest_cache`、`.ruff_cache`、`__pycache__`、`*.pyc`、`outputs`、`runs`。
+
+### 9.22 工具 schema 下沉到工具实现
+
+- 现象：LLM tool schema 原来集中写在 `llm.py`，而工具实现分散在各 tool 文件，参数变更时容易出现 schema 与实际实现漂移。
+- 修复：
+  - `BaseTool` 增加 `parameters_schema()`。
+  - 默认工具在各自类中声明 schema。
+  - `llm.tool_schema(name)` 改为从 `ToolRegistry` 中读取对应工具的 `parameters_schema()`。
+- 验证：测试覆盖 `tool_schema("replace_in_file")` 与注册工具自身 schema 完全一致。
+
+### 9.23 TUI 格式化逻辑拆分
+
+- 现象：`prompt_tui.py` 超过 1400 行，同时包含文本格式化、滚动视图、按键绑定和 TUI 状态机，后续维护成本高。
+- 修复：
+  - 新增 `prompt_tui_formatting.py`，承载 transcript、process、status、markdown 渲染、软换行、样式片段等纯格式化逻辑。
+  - `prompt_tui.py` 保留 TUI 控件、状态和事件循环逻辑。
+  - `prompt_tui.py` 继续 re-export 原有格式化函数，保持测试和外部导入兼容。
+- 验证：`tests/test_prompt_tui.py` 全部通过。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
@@ -810,7 +872,7 @@
 
 ```bash
 pytest -q
-# 244 passed
+# 257 passed
 
 ruff check src tests
 # All checks passed!

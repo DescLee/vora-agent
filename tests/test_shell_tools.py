@@ -24,6 +24,31 @@ def test_run_bash_reports_non_zero_exit_code(tmp_path: Path) -> None:
     assert "bad" in result.data["stderr"]
 
 
+def test_run_bash_rejects_dangerous_commands(tmp_path: Path) -> None:
+    result = RunBashTool().run(workspace=tmp_path, command="sudo rm -rf /")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REJECTED"
+    assert "rejected" in result.summary
+
+
+def test_run_bash_uses_sanitized_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "secret-key")
+
+    result = RunBashTool().run(workspace=tmp_path, command="env")
+
+    assert result.ok is True
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
+    result = RunTempScriptTool().run(workspace=tmp_path, content="rm -rf /\n")
+
+    assert result.ok is False
+    assert result.tool_name == "run_temp_script"
+    assert result.error_code == "COMMAND_REJECTED"
+
+
 def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:
     result = RunTempScriptTool().run(
         workspace=tmp_path,

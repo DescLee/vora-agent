@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import PurePosixPath
 from time import monotonic
 
@@ -16,6 +17,9 @@ from manus_mini.tools.registry import ToolRegistry
 
 MAX_TOOL_RESULT_PATHS = 20
 MAX_TOOL_RESULT_CONTENT_CHARS = 4000
+RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
+REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
+REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 OVERVIEW_GOAL_KEYWORDS = (
     "优化建议",
     "建议",
@@ -268,9 +272,17 @@ class ReActLoop:
             "summary": tool_result.summary,
             "error_code": tool_result.error_code,
         }
+        fingerprint = _tool_call_fingerprint(call)
+        if fingerprint is not None:
+            data["fingerprint"] = fingerprint
         if tool_result.data.get("deduplicated"):
             data["deduplicated"] = True
             data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
+            data["fingerprint"] = tool_result.data.get("fingerprint") or fingerprint
+        if tool_result.data.get("blocked_duplicate"):
+            data["blocked_duplicate"] = True
+            data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
+            data["fingerprint"] = tool_result.data.get("fingerprint") or fingerprint
         if call.name in {"run_bash", "run_temp_script"}:
             data["exit_code"] = tool_result.data.get("exit_code")
             data["stdout"] = tool_result.data.get("stdout", "")[:500]
@@ -425,7 +437,7 @@ class ReActLoop:
                 "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
                 "修改已有文件时优先使用 replace_in_file 做精确局部替换；只有创建新文件或必须整体重写时才使用 write_file。",
                 "如果任务涉及代码修改、修复、生成或删除，开始阶段必须先准备可执行测试命令或临时测试脚本；修改后必须运行测试。",
-                "测试脚本优先使用 run_temp_script，执行完会自动删除；也可以用 run_bash 执行项目已有测试命令。",
+                "测试脚本优先使用 run_temp_script 并传入 is_test=true，执行完会自动删除；也可以用 run_bash 执行项目已有测试命令。",
                 "如果测试失败，必须根据 stdout/stderr 修复后重新运行，直到测试全部通过或达到循环上限。",
                 "最终用中文给出直接、可执行的结果。",
                 "",
@@ -495,6 +507,7 @@ class ReActLoop:
         tool_results: dict[str, ToolResult] = {}
         tool_call_count = 0
         planned_read_file_keys: set[tuple[str, str, int | None, int | None]] = set()
+        planned_fingerprints: dict[str, str] = {}
         for call in tool_calls:
             budget_error = self._tool_budget_error(call, task, tool_call_count)
             if budget_error is not None:
@@ -514,6 +527,10 @@ class ReActLoop:
             if duplicate_planned_read is not None:
                 tool_results[call.id] = duplicate_planned_read
                 continue
+            repeat_result = self._repeat_tool_call_result(call, task, planned_fingerprints)
+            if repeat_result is not None:
+                tool_results[call.id] = repeat_result
+                continue
 
             tool_call_count += 1
 
@@ -521,6 +538,9 @@ class ReActLoop:
                 read_key = _read_file_key(call)
                 if read_key is not None:
                     planned_read_file_keys.add(read_key)
+                fingerprint = _tool_call_fingerprint(call)
+                if fingerprint is not None:
+                    planned_fingerprints[fingerprint] = call.id
                 known_tool_calls.append(self._with_runtime_tool_args(call, session))
                 continue
             tool_results[call.id] = ToolResult(
@@ -623,6 +643,37 @@ class ReActLoop:
             },
         )
 
+    def _repeat_tool_call_result(
+        self,
+        call,
+        task: TaskState,
+        planned_fingerprints: dict[str, str],
+    ) -> ToolResult | None:
+        fingerprint = _tool_call_fingerprint(call)
+        if fingerprint is None:
+            return None
+        planned_call_id = planned_fingerprints.get(fingerprint)
+        if planned_call_id is not None:
+            return _duplicate_tool_result(
+                call,
+                fingerprint=fingerprint,
+                source_tool_call_id=planned_call_id,
+                scope="current_iteration",
+            )
+        for event in reversed(task.trace_events):
+            if event.phase != "tool":
+                continue
+            if event.data.get("fingerprint") != fingerprint or event.data.get("ok") is not True:
+                continue
+            return _duplicate_tool_result(
+                call,
+                fingerprint=fingerprint,
+                source_tool_call_id=str(event.data.get("tool_call_id") or ""),
+                scope="previous_iteration",
+                task=task,
+            )
+        return None
+
     def _observation_by_tool_call_id(self, task: TaskState, tool_call_id: str):
         if not tool_call_id:
             return None
@@ -693,11 +744,96 @@ def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:
     return path, encoding, start_index, max_bytes
 
 
+def _tool_call_fingerprint(call) -> str | None:
+    try:
+        encoded_args = json.dumps(
+            _canonical_tool_args(call.name, sanitize_tool_args(call.args)),
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return None
+    return f"{call.name}:{encoded_args}"
+
+
+def _canonical_tool_args(tool_name: str, args: dict) -> dict:
+    canonical: dict = {}
+    for key, value in args.items():
+        if key in RUNTIME_ARG_KEYS:
+            continue
+        if key == "path" and isinstance(value, str):
+            canonical[key] = _normalize_relative_path(value)
+            continue
+        canonical[key] = value
+    if tool_name == "read_file":
+        canonical.setdefault("encoding", "utf-8")
+        for key in ("start_index", "max_bytes"):
+            if key in canonical:
+                canonical[key] = _optional_int_value(canonical[key])
+    if tool_name == "list_files":
+        canonical.setdefault("path", ".")
+        canonical["path"] = _normalize_relative_path(str(canonical["path"]))
+        if "limit" in canonical:
+            canonical["limit"] = _optional_int_value(canonical["limit"])
+    return canonical
+
+
+def _duplicate_tool_result(
+    call,
+    fingerprint: str,
+    source_tool_call_id: str,
+    scope: str,
+    task: TaskState | None = None,
+) -> ToolResult | None:
+    if call.name in REPEAT_CACHEABLE_TOOLS:
+        observation = _find_successful_observation(task, source_tool_call_id)
+        return ToolResult(
+            tool_name=call.name,
+            ok=True,
+            summary=f"{call.name} skipped: duplicate request already completed",
+            content=observation.content if observation is not None else "",
+            data={
+                "deduplicated": True,
+                "fingerprint": fingerprint,
+                "source_tool_call_id": source_tool_call_id,
+                "scope": scope,
+            },
+        )
+    if call.name in REPEAT_BLOCKED_TOOLS:
+        return ToolResult(
+            tool_name=call.name,
+            ok=False,
+            summary=f"{call.name} blocked: duplicate tool call already completed",
+            error_code="DUPLICATE_TOOL_CALL_BLOCKED",
+            data={
+                "blocked_duplicate": True,
+                "fingerprint": fingerprint,
+                "source_tool_call_id": source_tool_call_id,
+                "scope": scope,
+            },
+        )
+    return None
+
+
+def _find_successful_observation(task: TaskState | None, tool_call_id: str):
+    if task is None or not tool_call_id:
+        return None
+    for observation in reversed(task.observations):
+        if observation.tool_call_id == tool_call_id and observation.ok:
+            return observation
+    return None
+
+
 def _optional_int_arg(args: dict, key: str) -> int | None:
     if key not in args:
         return None
+    return _optional_int_value(args[key])
+
+
+def _optional_int_value(value) -> int | None:
     try:
-        return int(args[key])
+        return int(value)
     except (TypeError, ValueError):
         return None
 

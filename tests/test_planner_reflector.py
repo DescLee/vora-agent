@@ -350,3 +350,98 @@ def test_reflection_accepts_code_change_when_latest_test_passed(tmp_path: Path) 
     decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
 
     assert decision.decision == "accept"
+
+
+def test_reflection_rejects_code_change_when_any_test_after_latest_write_failed(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"tests passed"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced app.py"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_temp_script finished: failed",
+                data={
+                    "tool_name": "run_temp_script",
+                    "ok": False,
+                    "summary": "command exited 1",
+                    "exit_code": 1,
+                    "stderr": "FAILED test_old_case",
+                    "is_test": True,
+                },
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={
+                    "tool_name": "run_bash",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "ruff passed",
+                    "args": {"command": "ruff check src tests"},
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "regenerate"
+    assert "FAILED test_old_case" in decision.reason
+
+
+def test_reflection_ignores_failed_tests_before_latest_write_when_new_tests_pass(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"tests passed"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool run_temp_script finished: failed",
+                data={
+                    "tool_name": "run_temp_script",
+                    "ok": False,
+                    "summary": "command exited 1",
+                    "exit_code": 1,
+                    "stderr": "FAILED before fix",
+                    "is_test": True,
+                },
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced app.py"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_temp_script finished: ok",
+                data={
+                    "tool_name": "run_temp_script",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "1 passed",
+                    "is_test": True,
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "accept"

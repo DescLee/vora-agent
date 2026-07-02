@@ -238,6 +238,39 @@ def test_write_file_rejects_oversized_content(tmp_path: Path) -> None:
     assert not (tmp_path / "large.txt").exists()
 
 
+def test_write_file_rejects_large_existing_file_rewrite_without_explicit_allow(tmp_path: Path) -> None:
+    target = tmp_path / "large.py"
+    target.write_text("x" * 5000, encoding="utf-8")
+
+    result = WriteFileTool().run(
+        workspace=tmp_path,
+        path="large.py",
+        content="y" * 5000,
+        confirmed=True,
+    )
+
+    assert result.ok is False
+    assert result.error_code == "FULL_REWRITE_REQUIRES_ALLOW"
+    assert "replace_in_file" in result.summary
+    assert target.read_text(encoding="utf-8") == "x" * 5000
+
+
+def test_write_file_allows_large_existing_file_rewrite_when_explicitly_allowed(tmp_path: Path) -> None:
+    target = tmp_path / "large.py"
+    target.write_text("x" * 5000, encoding="utf-8")
+
+    result = WriteFileTool().run(
+        workspace=tmp_path,
+        path="large.py",
+        content="y" * 5000,
+        confirmed=True,
+        allow_full_rewrite=True,
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "y" * 5000
+
+
 def test_replace_in_file_replaces_unique_text_with_confirmation(tmp_path: Path) -> None:
     target = tmp_path / "app.py"
     target.write_text("def hello():\n    return 'old'\n", encoding="utf-8")
@@ -300,6 +333,40 @@ def test_replace_in_file_allows_expected_multiple_replacements(tmp_path: Path) -
     assert result.ok is True
     assert result.data["replacements"] == 2
     assert target.read_text(encoding="utf-8") == "value = 2\nvalue = 2\n"
+
+
+def test_replace_in_file_uses_before_and_after_context_to_pick_match(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("first = value\nsecond = value\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        before_text="second = ",
+        old_text="value",
+        after_text="\n",
+        new_text="updated",
+    )
+
+    assert result.ok is True
+    assert result.data["replacements"] == 1
+    assert target.read_text(encoding="utf-8") == "first = value\nsecond = updated\n"
+
+
+def test_replace_in_file_rejects_when_context_does_not_match(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("first = value\nsecond = value\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        before_text="missing = ",
+        old_text="value",
+        new_text="updated",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "CONTEXT_MISMATCH"
+    assert result.data["old_text_occurrences"] == 2
 
 
 def test_replace_in_file_uses_in_place_strategy_for_equal_length_change(tmp_path: Path) -> None:

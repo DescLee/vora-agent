@@ -17,11 +17,11 @@
 - Modify: `src/manus_mini/tools/registry.py`
 - Test: `tests/test_shell_tools.py`
 
-- [ ] Write failing tests for `run_bash` success/failure and `run_temp_script` cleanup.
-- [ ] Run `pytest tests/test_shell_tools.py -q` and confirm failures.
-- [ ] Implement shell tools with timeout, output truncation, workspace cwd, exit code metadata, and script cleanup.
-- [ ] Register the tools.
-- [ ] Run `pytest tests/test_shell_tools.py -q`.
+- [x] Write failing tests for `run_bash` success/failure and `run_temp_script` cleanup.
+- [x] Run `pytest tests/test_shell_tools.py -q` and confirm failures.
+- [x] Implement shell tools with timeout, output truncation, workspace cwd, exit code metadata, and script cleanup.
+- [x] Register the tools.
+- [x] Run `pytest tests/test_shell_tools.py -q`.
 
 ### Task 2: Reflection Test Gate
 
@@ -30,17 +30,17 @@
 - Modify: `src/manus_mini/react.py`
 - Test: `tests/test_reflection.py` or existing reflection tests.
 
-- [ ] Write failing tests for code modification tasks: no test run rejects accept, failed test rejects accept, passing test allows accept.
-- [ ] Run targeted tests and confirm failures.
-- [ ] Add test-gate helpers in reflection and include failure summaries in follow-up context.
-- [ ] Update execution prompt to require tests at the start of code-modification work.
-- [ ] Run targeted tests.
+- [x] Write failing tests for code modification tasks: no test run rejects accept, failed test rejects accept, passing test allows accept.
+- [x] Run targeted tests and confirm failures.
+- [x] Add test-gate helpers in reflection and include failure summaries in follow-up context.
+- [x] Update execution prompt to require tests at the start of code-modification work.
+- [x] Run targeted tests.
 
 ### Task 3: Regression Sweep
 
 **Files:**
 - Test: existing suite.
 
-- [ ] Run `pytest -q`.
-- [ ] Run `ruff check src tests`.
-- [ ] Update `docs/fixed-issues-and-optimizations.md` with the completed feature and verification baseline.
+- [x] Run `pytest -q`.
+- [x] Run `ruff check src tests`.
+- [x] Update `docs/fixed-issues-and-optimizations.md` with the completed feature and verification baseline.

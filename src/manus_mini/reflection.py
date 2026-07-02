@@ -292,6 +292,7 @@ def _parse_json_object(content: str) -> dict:
 
 
 COMMAND_TEST_TOOLS = {"run_bash", "run_temp_script"}
+CODE_CHANGE_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory"}
 CODE_CHANGE_KEYWORDS = (
     "修改",
     "修复",
@@ -342,12 +343,13 @@ TEST_COMMAND_KEYWORDS = (
 def apply_code_test_gate(task: TaskState, decision: ReflectionDecision) -> ReflectionDecision:
     if decision.decision != "accept" or not _is_code_modification_task(task):
         return decision
-    latest_test = _latest_test_event(task)
-    if latest_test is None:
+    test_events = _test_events_after_latest_code_change(task)
+    if not test_events:
         return ReflectionDecision("local_update", "代码修改任务尚未执行测试脚本或测试命令，需先补充并运行测试。")
-    if latest_test.get("ok") is True and latest_test.get("exit_code") == 0:
+    failed_test = next((event for event in test_events if not _test_event_passed(event)), None)
+    if failed_test is None:
         return decision
-    return ReflectionDecision("regenerate", f"测试未通过：{_format_test_failure(latest_test)}")
+    return ReflectionDecision("regenerate", f"测试未通过：{_format_test_failure(failed_test)}")
 
 
 def _is_code_modification_task(task: TaskState) -> bool:
@@ -359,24 +361,57 @@ def _is_code_modification_task(task: TaskState) -> bool:
     return has_change and has_code_target
 
 
-def _latest_test_event(task: TaskState) -> dict | None:
-    for event in reversed(task.trace_events):
+def _test_events_after_latest_code_change(task: TaskState) -> list[dict]:
+    latest_code_change_index = _latest_code_change_event_index(task)
+    events: list[dict] = []
+    for index, event in enumerate(task.trace_events):
+        if index <= latest_code_change_index or event.phase != "tool":
+            continue
+        data = event.data
+        if _is_test_event(data):
+            events.append(data)
+    return events
+
+
+def _latest_code_change_event_index(task: TaskState) -> int:
+    for index in range(len(task.trace_events) - 1, -1, -1):
+        event = task.trace_events[index]
         if event.phase != "tool":
             continue
         data = event.data
-        tool_name = data.get("tool_name")
-        if tool_name not in COMMAND_TEST_TOOLS:
-            continue
-        if tool_name == "run_temp_script" or _looks_like_test_command(data):
-            return data
-    return None
+        if data.get("tool_name") in CODE_CHANGE_TOOLS and data.get("ok") is True:
+            return index
+    return -1
+
+
+def _is_test_event(data: dict) -> bool:
+    tool_name = data.get("tool_name")
+    if tool_name not in COMMAND_TEST_TOOLS:
+        return False
+    if data.get("is_test") is True:
+        return True
+    if tool_name == "run_temp_script" and "args" not in data:
+        return True
+    return _looks_like_test_command(data)
+
+
+def _test_event_passed(data: dict) -> bool:
+    return data.get("ok") is True and data.get("exit_code") == 0
 
 
 def _looks_like_test_command(data: dict) -> bool:
     args = data.get("args")
     if not isinstance(args, dict):
-        return False
-    text = " ".join(str(value).lower() for value in args.values())
+        args = {}
+    text = " ".join(
+        str(value).lower()
+        for value in [
+            *args.values(),
+            data.get("summary", ""),
+            data.get("stdout", ""),
+            data.get("stderr", ""),
+        ]
+    )
     return any(keyword in text for keyword in TEST_COMMAND_KEYWORDS)
 
 

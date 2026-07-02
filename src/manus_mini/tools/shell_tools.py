@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -10,6 +12,14 @@ from manus_mini.tools.base import BaseTool, ToolResult
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_OUTPUT_LIMIT = 12_000
+FORBIDDEN_COMMAND_PATTERNS = (
+    r"\bsudo\b",
+    r"\brm\s+-rf\s+/",
+    r"\bmkfs\b",
+    r"\bdd\s+if=",
+    r"\bshutdown\b",
+    r"\breboot\b",
+)
 
 
 class RunBashTool(BaseTool):
@@ -22,6 +32,18 @@ class RunBashTool(BaseTool):
         command = str(kwargs.get("command", "")).strip()
         return f"Run bash command: {_short(command)}"
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Bash command to run from the workspace root."},
+                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs: Any) -> ToolResult:
         command = str(kwargs.get("command", "")).strip()
         if not command:
@@ -31,6 +53,9 @@ class RunBashTool(BaseTool):
                 summary="missing required argument: command",
                 error_code="INVALID_TOOL_PARAMS",
             )
+        rejection = _command_rejection(command, tool_name=self.name)
+        if rejection is not None:
+            return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
         timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
@@ -53,6 +78,24 @@ class RunTempScriptTool(BaseTool):
         filename = str(kwargs.get("filename") or "agent-script.sh")
         return f"Run temporary script: {filename}"
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Bash script content. The script is deleted after execution."},
+                "filename": {"type": "string", "default": "agent-check.sh"},
+                "is_test": {
+                    "type": "boolean",
+                    "description": "Set true when the temporary script is a validation test gate for code changes.",
+                    "default": False,
+                },
+                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs: Any) -> ToolResult:
         content = kwargs.get("content")
         if content is None:
@@ -62,6 +105,9 @@ class RunTempScriptTool(BaseTool):
                 summary="missing required argument: content",
                 error_code="INVALID_TOOL_PARAMS",
             )
+        rejection = _command_rejection(str(content), tool_name=self.name)
+        if rejection is not None:
+            return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
         timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
@@ -101,6 +147,7 @@ def _run_command(
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
+            env=_safe_command_env(cwd),
         )
     except subprocess.TimeoutExpired as error:
         stdout = _coerce_output(error.stdout)
@@ -143,6 +190,34 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _command_rejection(command_text: str, tool_name: str) -> ToolResult | None:
+    normalized = command_text.strip()
+    for pattern in FORBIDDEN_COMMAND_PATTERNS:
+        if re.search(pattern, normalized):
+            return ToolResult(
+                tool_name=tool_name,
+                ok=False,
+                summary=f"command rejected by safety policy: {pattern}",
+                error_code="COMMAND_REJECTED",
+                data={"pattern": pattern},
+            )
+    return None
+
+
+def _safe_command_env(cwd: Path) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+        "HOME": str(cwd),
+        "PWD": str(cwd),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", os.environ.get("LANG", "C.UTF-8")),
+    }
+    pythonpath = os.environ.get("PYTHONPATH")
+    if pythonpath:
+        env["PYTHONPATH"] = pythonpath
+    return env
 
 
 def _safe_script_filename(filename: str) -> str:

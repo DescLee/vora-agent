@@ -20,6 +20,16 @@ def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, caps
     assert "上一轮问题" in out
 
 
+def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    main(["list", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "No saved sessions." in out
+    assert str(SessionStore(tmp_path).sessions_dir) in out
+
+
 def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)

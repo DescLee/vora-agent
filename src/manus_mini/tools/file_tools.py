@@ -13,6 +13,7 @@ from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult, resolve_wor
 DEFAULT_LIST_LIMIT = 500
 DEFAULT_MAX_READ_BYTES = 1_000_000
 DEFAULT_MAX_WRITE_BYTES = 1_000_000
+FULL_REWRITE_WARNING_BYTES = 4_096
 NOISE_DIR_NAMES = {
     ".cache",
     ".dart_tool",
@@ -75,6 +76,25 @@ class ListFilesTool(BaseTool):
     def preview(self, **kwargs) -> ToolPreview:
         return super().preview(**kwargs)
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative directory or file path inside the workspace. Use '.' for project root.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of paths to return.",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 2000,
+                },
+            },
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path", ".")
@@ -128,6 +148,32 @@ class ReadFileTool(BaseTool):
 
     def preview(self, **kwargs) -> ToolPreview:
         return super().preview(**kwargs)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path inside the workspace, for example README.md.",
+                },
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes to read. When start_index is provided, this is the chunk length.",
+                    "default": DEFAULT_MAX_READ_BYTES,
+                    "minimum": 1,
+                },
+                "start_index": {
+                    "type": "integer",
+                    "description": "Optional zero-based byte offset. Use with max_bytes to read a slice of a large file.",
+                    "default": 0,
+                    "minimum": 0,
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        }
 
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
@@ -358,6 +404,29 @@ class WriteFileTool(BaseTool):
     def preview(self, **kwargs) -> ToolPreview:
         return super().preview(**kwargs)
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative output file path inside the workspace."},
+                "content": {"type": "string", "description": "File content to write."},
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes allowed for the written content.",
+                    "default": DEFAULT_MAX_WRITE_BYTES,
+                    "minimum": 1,
+                },
+                "allow_full_rewrite": {
+                    "type": "boolean",
+                    "description": "Set true only when replacing a large existing file is intentional; otherwise use replace_in_file.",
+                    "default": False,
+                },
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path")
@@ -400,6 +469,19 @@ class WriteFileTool(BaseTool):
                 summary=f"content too large: {len(encoded)} bytes exceeds {max_bytes} bytes",
                 error_code="CONTENT_TOO_LARGE",
             )
+        if (
+            target.exists()
+            and target.is_file()
+            and target.stat().st_size >= FULL_REWRITE_WARNING_BYTES
+            and not bool(kwargs.get("allow_full_rewrite", False))
+        ):
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"existing file {relative_path} is large; use replace_in_file or pass allow_full_rewrite=true",
+                error_code="FULL_REWRITE_REQUIRES_ALLOW",
+                data={"file_size": target.stat().st_size, "threshold": FULL_REWRITE_WARNING_BYTES},
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(encoded)
         return ToolResult(
@@ -433,6 +515,39 @@ class ReplaceInFileTool(BaseTool):
     def preview(self, **kwargs) -> ToolPreview:
         return super().preview(**kwargs)
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative file path inside the workspace."},
+                "old_text": {"type": "string", "description": "Exact existing text to replace."},
+                "new_text": {"type": "string", "description": "Replacement text."},
+                "before_text": {
+                    "type": "string",
+                    "description": "Optional exact text that must appear immediately before old_text.",
+                },
+                "after_text": {
+                    "type": "string",
+                    "description": "Optional exact text that must appear immediately after old_text.",
+                },
+                "expected_replacements": {
+                    "type": "integer",
+                    "description": "Exact number of occurrences expected. Defaults to 1 to avoid accidental broad edits.",
+                    "default": 1,
+                    "minimum": 1,
+                },
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes allowed for the resulting file content.",
+                    "default": DEFAULT_MAX_WRITE_BYTES,
+                    "minimum": 1,
+                },
+            },
+            "required": ["path", "old_text", "new_text"],
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path")
@@ -461,14 +576,26 @@ class ReplaceInFileTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary=f"decode failed with {encoding}: {error}", error_code="DECODE_ERROR")
         old_value = str(old_text)
         new_value = str(new_text)
-        actual_replacements = content.count(old_value)
-        if actual_replacements == 0:
+        before_value = str(kwargs.get("before_text") or "")
+        after_value = str(kwargs.get("after_text") or "")
+        matches = _find_contextual_matches(content, old_value, before_text=before_value, after_text=after_value)
+        old_text_occurrences = content.count(old_value)
+        actual_replacements = len(matches)
+        if old_text_occurrences == 0:
             return ToolResult(
                 tool_name=self.name,
                 ok=False,
                 summary=f"old_text not found in {relative_path}",
                 error_code="OLD_TEXT_NOT_FOUND",
                 data={"actual_replacements": 0},
+            )
+        if actual_replacements == 0:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"context did not match old_text in {relative_path}",
+                error_code="CONTEXT_MISMATCH",
+                data={"old_text_occurrences": old_text_occurrences, "actual_replacements": 0},
             )
         expected_replacements = _positive_int(kwargs.get("expected_replacements"), 1)
         if actual_replacements != expected_replacements:
@@ -480,7 +607,7 @@ class ReplaceInFileTool(BaseTool):
                 data={"expected_replacements": expected_replacements, "actual_replacements": actual_replacements},
             )
 
-        updated = content.replace(old_value, new_value, expected_replacements)
+        updated = _replace_matches(content, matches, old_value, new_value)
         if updated == content:
             return ToolResult(
                 tool_name=self.name,
@@ -503,7 +630,7 @@ class ReplaceInFileTool(BaseTool):
             )
 
         if len(old_bytes) == len(new_bytes) and actual_replacements == 1:
-            offset = content.encode(encoding).find(old_bytes)
+            offset = len(content[: matches[0]].encode(encoding))
             with target.open("r+b") as handle:
                 handle.seek(offset)
                 handle.write(new_bytes)
@@ -539,6 +666,24 @@ class AppendFileTool(BaseTool):
     def describe_preview(self, **kwargs: Any) -> str:
         path = kwargs.get("path", "<missing>")
         return f"Append {path}"
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative output file path inside the workspace."},
+                "content": {"type": "string", "description": "Text to append."},
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes allowed for the resulting content.",
+                    "default": DEFAULT_MAX_WRITE_BYTES,
+                    "minimum": 1,
+                },
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        }
 
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
@@ -585,6 +730,16 @@ class MakeDirectoryTool(BaseTool):
         path = kwargs.get("path", "<missing>")
         return f"Create directory {path}"
 
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative directory path inside the workspace."}
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        }
+
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path")
@@ -618,3 +773,33 @@ def _atomic_write_bytes(target: Path, content: bytes) -> None:
         os.replace(tmp_path, target)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _find_contextual_matches(content: str, old_text: str, before_text: str = "", after_text: str = "") -> list[int]:
+    if old_text == "":
+        return []
+    matches: list[int] = []
+    start = 0
+    while True:
+        index = content.find(old_text, start)
+        if index < 0:
+            return matches
+        before_ok = not before_text or content[:index].endswith(before_text)
+        after_start = index + len(old_text)
+        after_ok = not after_text or content[after_start:].startswith(after_text)
+        if before_ok and after_ok:
+            matches.append(index)
+        start = index + len(old_text)
+
+
+def _replace_matches(content: str, matches: list[int], old_text: str, new_text: str) -> str:
+    if not matches:
+        return content
+    parts: list[str] = []
+    cursor = 0
+    for index in matches:
+        parts.append(content[cursor:index])
+        parts.append(new_text)
+        cursor = index + len(old_text)
+    parts.append(content[cursor:])
+    return "".join(parts)
