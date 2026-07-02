@@ -44,11 +44,26 @@ def test_demo_research_flow_reads_docs_and_writes_report(tmp_path: Path) -> None
 def test_demo_code_flow_confirms_write_and_modifies_previous_artifact(tmp_path: Path) -> None:
     class WriteThenEditLLM:
         def __init__(self) -> None:
-            self.calls = 0
+            self.initial_writes = 0
+            self.edits = 0
 
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
-            self.calls += 1
-            if self.calls in {1, 2}:
+            system_text = " ".join(
+                getattr(message, "content", "")
+                for message in messages
+                if getattr(message, "role", "") == "system"
+            )
+            if "反思审查器" in system_text:
+                return LLMResult(content='{"decision":"accept","reason":"demo draft accepted"}')
+            if not tool_names:
+                return LLMResult(content="1. 执行文件写入 | code")
+            user_text = " ".join(
+                getattr(message, "content", "")
+                for message in messages
+                if getattr(message, "role", "") == "user"
+            )
+            if "第二版" not in user_text and self.initial_writes < 2:
+                self.initial_writes += 1
                 return LLMResult(
                     tool_calls=[
                         ToolCall(
@@ -58,9 +73,10 @@ def test_demo_code_flow_confirms_write_and_modifies_previous_artifact(tmp_path: 
                         )
                     ]
                 )
-            if self.calls == 3:
+            if "第二版" not in user_text:
                 return LLMResult(content="version-1 saved")
-            if self.calls in {4, 5}:
+            if self.edits < 2:
+                self.edits += 1
                 return LLMResult(
                     tool_calls=[
                         ToolCall(

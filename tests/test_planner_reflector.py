@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from manus_mini.llm import LLMResult
-from manus_mini.models import AgentError, LoopLimits, SessionState, TaskState
+from manus_mini.models import AgentError, LoopLimits, PlanStep, SessionState, TaskState, TraceEvent
 from manus_mini.planner import Planner, build_planner_system_prompt
 from manus_mini.reflection import ReflectionLoop
 from manus_mini.reflector import Reflector
@@ -279,3 +279,74 @@ def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> Non
     assert result.decision == "local_update"
     assert result.reason == "回答忽略了当前工作目录项目上下文"
     assert "项目代码目录结构" in llm.messages[0][0].content
+
+
+def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"looks good"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "local_update"
+    assert "测试" in decision.reason
+
+
+def test_reflection_rejects_code_change_when_latest_test_failed(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"looks good"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_temp_script finished: failed",
+            data={
+                "tool_name": "run_temp_script",
+                "ok": False,
+                "summary": "command exited 2",
+                "error_code": "COMMAND_FAILED",
+                "exit_code": 2,
+                "stderr": "AssertionError: expected fixed behavior",
+            },
+        )
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "regenerate"
+    assert "AssertionError" in decision.reason
+
+
+def test_reflection_accepts_code_change_when_latest_test_passed(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"tests passed"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_temp_script finished: ok",
+            data={
+                "tool_name": "run_temp_script",
+                "ok": True,
+                "summary": "command exited 0",
+                "exit_code": 0,
+                "stdout": "3 passed",
+            },
+        )
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "accept"

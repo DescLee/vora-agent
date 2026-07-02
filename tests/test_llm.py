@@ -180,6 +180,17 @@ def test_tool_schema_exposes_file_tool_limits() -> None:
     assert "max_bytes" in write_schema["properties"]
 
 
+def test_tool_schema_exposes_shell_tools() -> None:
+    bash_schema = tool_schema("run_bash")
+    script_schema = tool_schema("run_temp_script")
+
+    assert bash_schema["required"] == ["command"]
+    assert "command" in bash_schema["properties"]
+    assert script_schema["required"] == ["content"]
+    assert "content" in script_schema["properties"]
+    assert "timeout_seconds" in script_schema["properties"]
+
+
 def test_infer_model_context_limit_supports_deepseek_family() -> None:
     assert infer_model_context_limit("deepseek-v4-flash") == 1_000_000
     assert infer_model_context_limit("deepseek-v4-pro") == 1_000_000

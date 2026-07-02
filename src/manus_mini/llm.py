@@ -176,6 +176,27 @@ def tool_schema(name: str) -> dict[str, Any]:
             "required": ["path"],
             "additionalProperties": False,
         },
+        "run_bash": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Bash command to run from the workspace root."},
+                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+        "run_temp_script": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Bash script content. The script is deleted after execution."},
+                "filename": {"type": "string", "default": "agent-check.sh"},
+                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
     }
     return schemas.get(name, {"type": "object", "properties": {}, "additionalProperties": True})
 

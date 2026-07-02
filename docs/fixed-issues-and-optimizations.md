@@ -366,6 +366,25 @@
   - 文件读取、项目分析、写作、修改等任务仍走正常工具链。
 - 验证：测试覆盖闲聊不产生 tool trace，且文件读取仍能调用 `read_file`。
 
+### 5.11 Bash 执行与临时脚本能力
+
+- 优化：
+  - 新增 `run_bash` 工具，在当前 workspace 中执行简短 bash 命令，并返回 exit code、stdout、stderr 和超时状态。
+  - 新增 `run_temp_script` 工具，把 Agent 生成的 bash 脚本写入系统临时目录，执行完成后自动删除脚本文件。
+  - 两个工具都设置为 `command` 风险等级，默认超时并截断输出，避免长时间阻塞和日志体积失控。
+  - LLM tool schema 暴露 `command`、`content`、`timeout_seconds` 和 `output_limit` 参数。
+- 验证：测试覆盖 bash 成功/失败、临时脚本成功/失败后删除，以及工具注册和 schema 暴露。
+
+### 5.12 代码修改任务增加测试门禁
+
+- 现象：代码修改类任务以前只依赖 LLM/reflection 判断草稿是否满足目标，可能在未执行测试或测试失败时提前接受结果。
+- 修复：
+  - 执行阶段系统提示要求代码修改、修复、生成或删除任务先准备测试命令或临时测试脚本，修改后必须运行测试。
+  - `run_bash` / `run_temp_script` 的 exit code、stdout 和 stderr 会进入 trace event。
+  - Reflection 对代码修改任务增加硬门禁：未执行测试时返回 `local_update`，测试失败时返回 `regenerate` 并把失败摘要回传，最近测试通过时才允许 `accept`。
+  - 失败信息会通过 runtime 的下一轮修复提示进入上下文，直到测试通过或达到循环上限。
+- 验证：测试覆盖未执行测试不接受、测试失败不接受、测试通过才接受。
+
 ## 6. 文件工具与 workspace 安全
 
 ### 6.1 write_file 执行失败：`'workspace'`
@@ -813,7 +832,7 @@
 
 ```bash
 pytest -q
-# 228 passed
+# 237 passed
 
 ruff check src tests
 # All checks passed!

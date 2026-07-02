@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from manus_mini.tools.base import ToolProtocol
 from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, WriteFileTool
+from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 
 class ToolRegistry:
@@ -15,6 +16,8 @@ class ToolRegistry:
             WriteFileTool(),
             AppendFileTool(),
             MakeDirectoryTool(),
+            RunBashTool(),
+            RunTempScriptTool(),
         )
         for tool in default_tools:
             self.register(tool)

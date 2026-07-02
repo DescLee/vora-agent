@@ -70,7 +70,26 @@ class ScriptedLLM:
                 ]
             )
 
-        if create_hello_world_query and "wrote helloworld.py" in tool_text:
+        if (
+            create_hello_world_query
+            and "wrote helloworld.py" in tool_text
+            and "command exited 0" not in tool_text
+            and "run_temp_script" in tool_names
+        ):
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-test-helloworld",
+                        name="run_temp_script",
+                        args={
+                            "filename": "test-helloworld.sh",
+                            "content": "python helloworld.py | grep 'hello world'\n",
+                        },
+                    )
+                ]
+            )
+
+        if create_hello_world_query and "wrote helloworld.py" in tool_text and "command exited 0" in tool_text:
             return LLMResult(content="已在工作目录下新建 helloworld.py，内容为 `print('hello world')`。")
 
         if project_query and "list_files" in tool_names and not tool_text:

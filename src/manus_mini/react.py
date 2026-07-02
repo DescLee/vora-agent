@@ -271,6 +271,11 @@ class ReActLoop:
         if tool_result.data.get("deduplicated"):
             data["deduplicated"] = True
             data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
+        if call.name in {"run_bash", "run_temp_script"}:
+            data["exit_code"] = tool_result.data.get("exit_code")
+            data["stdout"] = tool_result.data.get("stdout", "")[:500]
+            data["stderr"] = tool_result.data.get("stderr", "")[:500]
+            data["timed_out"] = tool_result.data.get("timed_out", False)
         if call.name == "read_file" and tool_result.ok:
             data["content_omitted"] = True
             return data
@@ -418,6 +423,9 @@ class ReActLoop:
                 "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
                 "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
                 "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
+                "如果任务涉及代码修改、修复、生成或删除，开始阶段必须先准备可执行测试命令或临时测试脚本；修改后必须运行测试。",
+                "测试脚本优先使用 run_temp_script，执行完会自动删除；也可以用 run_bash 执行项目已有测试命令。",
+                "如果测试失败，必须根据 stdout/stderr 修复后重新运行，直到测试全部通过或达到循环上限。",
                 "最终用中文给出直接、可执行的结果。",
                 "",
                 "当前执行计划",

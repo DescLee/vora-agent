@@ -930,8 +930,8 @@ def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) ->
     assert second_turn.active_task is not None
     assert second_turn.active_task.status == "done"
     assert (tmp_path / "helloworld.py").read_text(encoding="utf-8") == "print('hello world')\n"
-    assert second_turn.active_task.observations[-1].ok is True
-    assert second_turn.active_task.observations[-1].summary == "wrote helloworld.py"
+    assert any(observation.ok and observation.summary == "wrote helloworld.py" for observation in second_turn.active_task.observations)
+    assert any(observation.ok and observation.summary == "command exited 0" for observation in second_turn.active_task.observations)
 
 
 def test_dry_run_does_not_write_files(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from manus_mini.tools.code_tools import apply_text_edit, propose_patch, read_cod
 from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, WriteFileTool
 from manus_mini.tools.research_tools import collect_local_docs, generate_markdown_report, summarize_text
 from manus_mini.tools.registry import ToolRegistry
+from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 __all__ = [
     "BaseTool",
@@ -20,6 +21,8 @@ __all__ = [
     "read_code_file",
     "scan_project",
     "ReadFileTool",
+    "RunBashTool",
+    "RunTempScriptTool",
     "summarize_text",
     "Tool",
     "ToolPreview",
