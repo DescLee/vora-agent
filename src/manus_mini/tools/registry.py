@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from manus_mini.tools.base import ToolProtocol
-from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, WriteFileTool
+from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
 from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 
@@ -14,6 +14,7 @@ class ToolRegistry:
             ListFilesTool(),
             ReadFileTool(),
             WriteFileTool(),
+            ReplaceInFileTool(),
             AppendFileTool(),
             MakeDirectoryTool(),
             RunBashTool(),

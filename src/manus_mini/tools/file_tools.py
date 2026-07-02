@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -417,6 +419,116 @@ class WriteFileTool(BaseTool):
         return [_display_path(target, workspace.expanduser().resolve())]
 
 
+class ReplaceInFileTool(BaseTool):
+    name = "replace_in_file"
+    description = "Replace exact text inside an existing workspace file."
+    risk_level = "write"
+    requires_confirmation = False
+    is_read_only = False
+
+    def describe_preview(self, **kwargs: Any) -> str:
+        path = kwargs.get("path", "<missing>")
+        return f"Replace text in {path}"
+
+    def preview(self, **kwargs) -> ToolPreview:
+        return super().preview(**kwargs)
+
+    def run(self, **kwargs) -> ToolResult:
+        workspace = Path(kwargs["workspace"])
+        path = kwargs.get("path")
+        old_text = kwargs.get("old_text")
+        new_text = kwargs.get("new_text")
+        if not path:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
+        if old_text is None:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: old_text", error_code="INVALID_TOOL_PARAMS")
+        if new_text is None:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: new_text", error_code="INVALID_TOOL_PARAMS")
+        target = resolve_workspace_path(workspace, path)
+        workspace_root = workspace.expanduser().resolve()
+        relative_path = _display_path(target, workspace_root)
+        if _is_protected_write_path(Path(relative_path)):
+            return ToolResult(tool_name=self.name, ok=False, summary=f"protected write target: {relative_path}", error_code="PROTECTED_PATH")
+        if not target.exists():
+            return ToolResult(tool_name=self.name, ok=False, summary="file not found", error_code="FILE_NOT_FOUND")
+        if not target.is_file():
+            return ToolResult(tool_name=self.name, ok=False, summary="not a file", error_code="INVALID_TOOL_PARAMS")
+
+        encoding = kwargs.get("encoding", "utf-8")
+        try:
+            content = target.read_text(encoding=encoding)
+        except UnicodeDecodeError as error:
+            return ToolResult(tool_name=self.name, ok=False, summary=f"decode failed with {encoding}: {error}", error_code="DECODE_ERROR")
+        old_value = str(old_text)
+        new_value = str(new_text)
+        actual_replacements = content.count(old_value)
+        if actual_replacements == 0:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"old_text not found in {relative_path}",
+                error_code="OLD_TEXT_NOT_FOUND",
+                data={"actual_replacements": 0},
+            )
+        expected_replacements = _positive_int(kwargs.get("expected_replacements"), 1)
+        if actual_replacements != expected_replacements:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"expected {expected_replacements} replacement(s), found {actual_replacements}",
+                error_code="REPLACEMENT_COUNT_MISMATCH",
+                data={"expected_replacements": expected_replacements, "actual_replacements": actual_replacements},
+            )
+
+        updated = content.replace(old_value, new_value, expected_replacements)
+        if updated == content:
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary=f"skipped {relative_path} (content unchanged)",
+                written_path=relative_path,
+                data={"replacements": actual_replacements, "write_strategy": "skipped"},
+            )
+
+        old_bytes = old_value.encode(encoding)
+        new_bytes = new_value.encode(encoding)
+        updated_bytes = updated.encode(encoding)
+        max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_WRITE_BYTES)
+        if len(updated_bytes) > max_bytes:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"content too large: {len(updated_bytes)} bytes exceeds {max_bytes} bytes",
+                error_code="CONTENT_TOO_LARGE",
+            )
+
+        if len(old_bytes) == len(new_bytes) and actual_replacements == 1:
+            offset = content.encode(encoding).find(old_bytes)
+            with target.open("r+b") as handle:
+                handle.seek(offset)
+                handle.write(new_bytes)
+            strategy = "in_place"
+        else:
+            _atomic_write_bytes(target, updated_bytes)
+            strategy = "atomic_replace"
+
+        return ToolResult(
+            tool_name=self.name,
+            ok=True,
+            summary=f"replaced {actual_replacements} occurrence{'s' if actual_replacements != 1 else ''} in {relative_path}",
+            written_path=relative_path,
+            data={"replacements": actual_replacements, "write_strategy": strategy},
+        )
+
+    def resource_keys(self, **kwargs: Any) -> list[str]:
+        workspace = Path(kwargs["workspace"])
+        path = kwargs.get("path")
+        if not path:
+            return []
+        target = resolve_workspace_path(workspace, path)
+        return [_display_path(target, workspace.expanduser().resolve())]
+
+
 class AppendFileTool(BaseTool):
     name = "append_file"
     description = "Append text to a file inside the workspace."
@@ -492,3 +604,17 @@ def _is_protected_write_path(relative_path: Path) -> bool:
     if relative_path.name in PROTECTED_FILE_NAMES:
         return True
     return any(part.startswith(".") for part in parts[:-1])
+
+
+def _atomic_write_bytes(target: Path, content: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+    finally:
+        tmp_path.unlink(missing_ok=True)

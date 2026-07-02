@@ -174,10 +174,13 @@ def test_tool_schema_exposes_file_tool_limits() -> None:
     list_schema = tool_schema("list_files")
     read_schema = tool_schema("read_file")
     write_schema = tool_schema("write_file")
+    replace_schema = tool_schema("replace_in_file")
 
     assert "limit" in list_schema["properties"]
     assert "max_bytes" in read_schema["properties"]
     assert "max_bytes" in write_schema["properties"]
+    assert replace_schema["required"] == ["path", "old_text", "new_text"]
+    assert "expected_replacements" in replace_schema["properties"]
 
 
 def test_tool_schema_exposes_shell_tools() -> None:

@@ -152,6 +152,29 @@ def tool_schema(name: str) -> dict[str, Any]:
             "required": ["path", "content"],
             "additionalProperties": False,
         },
+        "replace_in_file": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative file path inside the workspace."},
+                "old_text": {"type": "string", "description": "Exact existing text to replace."},
+                "new_text": {"type": "string", "description": "Replacement text."},
+                "expected_replacements": {
+                    "type": "integer",
+                    "description": "Exact number of occurrences expected. Defaults to 1 to avoid accidental broad edits.",
+                    "default": 1,
+                    "minimum": 1,
+                },
+                "encoding": {"type": "string", "default": "utf-8"},
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes allowed for the resulting file content.",
+                    "default": 1000000,
+                    "minimum": 1,
+                },
+            },
+            "required": ["path", "old_text", "new_text"],
+            "additionalProperties": False,
+        },
         "append_file": {
             "type": "object",
             "properties": {

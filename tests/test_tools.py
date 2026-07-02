@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from manus_mini.tools.base import resolve_workspace_path
-from manus_mini.tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ToolRegistry, WriteFileTool
+from manus_mini.tools import (
+    AppendFileTool,
+    ListFilesTool,
+    MakeDirectoryTool,
+    ReadFileTool,
+    ReplaceInFileTool,
+    ToolRegistry,
+    WriteFileTool,
+)
 
 
 def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
@@ -230,10 +238,129 @@ def test_write_file_rejects_oversized_content(tmp_path: Path) -> None:
     assert not (tmp_path / "large.txt").exists()
 
 
+def test_replace_in_file_replaces_unique_text_with_confirmation(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("def hello():\n    return 'old'\n", encoding="utf-8")
+    tool = ReplaceInFileTool()
+
+    result = tool.run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="'old'",
+        new_text="'new'",
+    )
+
+    assert result.ok is True
+    assert result.summary == "replaced 1 occurrence in app.py"
+    assert target.read_text(encoding="utf-8") == "def hello():\n    return 'new'\n"
+    assert result.data["replacements"] == 1
+
+
+def test_replace_in_file_rejects_missing_old_text(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="missing",
+        new_text="found",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "OLD_TEXT_NOT_FOUND"
+
+
+def test_replace_in_file_rejects_unexpected_replacement_count(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("value = 1\nvalue = 1\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="value = 1",
+        new_text="value = 2",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "REPLACEMENT_COUNT_MISMATCH"
+    assert result.data["actual_replacements"] == 2
+
+
+def test_replace_in_file_allows_expected_multiple_replacements(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\nvalue = 1\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="value = 1",
+        new_text="value = 2",
+        expected_replacements=2,
+    )
+
+    assert result.ok is True
+    assert result.data["replacements"] == 2
+    assert target.read_text(encoding="utf-8") == "value = 2\nvalue = 2\n"
+
+
+def test_replace_in_file_uses_in_place_strategy_for_equal_length_change(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("status = 'old'\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="'old'",
+        new_text="'new'",
+    )
+
+    assert result.ok is True
+    assert result.data["write_strategy"] == "in_place"
+    assert target.read_text(encoding="utf-8") == "status = 'new'\n"
+
+
+def test_replace_in_file_uses_atomic_replace_for_length_change(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("status = 'old'\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="'old'",
+        new_text="'new value'",
+    )
+
+    assert result.ok is True
+    assert result.data["write_strategy"] == "atomic_replace"
+    assert target.read_text(encoding="utf-8") == "status = 'new value'\n"
+
+
+def test_replace_in_file_skips_when_result_is_unchanged(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("status = 'old'\n", encoding="utf-8")
+    before_mtime = target.stat().st_mtime_ns
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.py",
+        old_text="'old'",
+        new_text="'old'",
+    )
+
+    assert result.ok is True
+    assert result.summary == "skipped app.py (content unchanged)"
+    assert result.data["write_strategy"] == "skipped"
+    assert target.stat().st_mtime_ns == before_mtime
+
+
 def test_file_tools_return_invalid_params_for_missing_required_args(tmp_path: Path) -> None:
     read_result = ReadFileTool().run(workspace=tmp_path)
     write_path_result = WriteFileTool().run(workspace=tmp_path, content="hello")
     write_content_result = WriteFileTool().run(workspace=tmp_path, path="draft.txt")
+    replace_old_text_result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="draft.txt",
+        new_text="new",
+    )
 
     assert read_result.ok is False
     assert read_result.error_code == "INVALID_TOOL_PARAMS"
@@ -247,6 +374,10 @@ def test_file_tools_return_invalid_params_for_missing_required_args(tmp_path: Pa
     assert write_content_result.error_code == "INVALID_TOOL_PARAMS"
     assert "content" in write_content_result.summary
 
+    assert replace_old_text_result.ok is False
+    assert replace_old_text_result.error_code == "INVALID_TOOL_PARAMS"
+    assert "old_text" in replace_old_text_result.summary
+
 
 def test_tool_registry_exposes_default_file_tools() -> None:
     registry = ToolRegistry()
@@ -254,6 +385,8 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     assert isinstance(registry.get("list_files"), ListFilesTool)
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
+    assert isinstance(registry.get("replace_in_file"), ReplaceInFileTool)
+    assert registry.get("replace_in_file").requires_confirmation is False
     assert isinstance(registry.get("append_file"), AppendFileTool)
     assert isinstance(registry.get("make_directory"), MakeDirectoryTool)
 

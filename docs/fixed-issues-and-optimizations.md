@@ -413,6 +413,19 @@
   - 写工具底层仍要求确认，防止直接调用绕过安全保护。
 - 验证：`tests/test_tools.py` 覆盖路径逃逸、二进制、超大内容、敏感路径和确认逻辑。
 
+### 6.3.1 已有文件支持精确局部替换
+
+- 现象：修改已有文件时，如果总是让 Agent 生成完整文件再调用 `write_file` 全量覆盖，文件较大时会造成明显卡顿，也容易触发文件监听、索引和测试工具的额外刷新。
+- 优化：
+  - 新增 `replace_in_file` 工具，用 `old_text -> new_text` 做精确替换，避免让 Agent 全量重写已有文件。
+  - 默认要求 `old_text` 只匹配 1 处；多处匹配时返回 `REPLACEMENT_COUNT_MISMATCH`，需要显式传入 `expected_replacements` 才允许批量替换。
+  - 找不到旧文本时返回 `OLD_TEXT_NOT_FOUND`，避免静默写错文件。
+  - 替换结果不变时直接 skipped，不改文件 mtime。
+  - 等长替换使用 `r+b` seek 到偏移位置做原地写入；长度变化时使用同目录临时文件 + `os.replace` 原子替换。
+  - `replace_in_file` 不需要人工确认，安全性由精确旧文本匹配、替换次数校验和 workspace/protected path 保护保证。
+  - 执行提示要求修改已有文件时优先使用 `replace_in_file`，只有创建新文件或必须整体重写时才使用 `write_file`。
+- 验证：测试覆盖唯一替换、找不到旧文本、多处匹配保护、显式多处替换、等长原地写入、长度变化原子替换、无变化跳过、工具注册和 LLM schema。
+
 ### 6.4 list_files 未尊重 `.gitignore`
 
 - 现象：Agent 分析项目时，`list_files` 会把 `outputs/`、`runs/`、`build/`、`.manus-mini/` 等运行产物也列入结果，导致文件列表过大、上下文膨胀，并增加 LLM 请求失败概率。
@@ -832,7 +845,7 @@
 
 ```bash
 pytest -q
-# 237 passed
+# 244 passed
 
 ruff check src tests
 # All checks passed!
