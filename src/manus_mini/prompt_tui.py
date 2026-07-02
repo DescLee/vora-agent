@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from manus_mini.context import estimate_context_usage
+from manus_mini.logging import project_memory_path
 from manus_mini.models import LoopLimits, Message, Observation, PendingConfirmation, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.redaction import redact_sensitive_text
@@ -145,7 +146,6 @@ def format_process(
         format_task_overview(task),
         format_plan(task),
         format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5),
-        format_recent_process(task.trace_events),
     ]
     return "\n\n".join(section for section in sections if section)
 
@@ -412,17 +412,10 @@ def format_tool_return_status(data: dict) -> str:
     return "成功" if data.get("ok") else "失败"
 
 
-def format_recent_process(events: list[TraceEvent]) -> str:
-    if not events:
-        return "最近过程（折叠）\n- 暂无过程记录。"
-    latest = format_event_summary(events[-1])
-    total = len(events)
-    hidden = max(0, total - 1)
-    lines = ["最近过程（折叠）", f"- 共 {total} 条过程记录"]
-    if hidden:
-        lines.append(f"- 已折叠 {hidden} 条较早过程")
-    lines.append(f"- 最新：{latest}")
-    return "\n".join(lines)
+def format_latest_activity(task: TaskState) -> str:
+    if not task.trace_events:
+        return "等待执行"
+    return format_event_summary(task.trace_events[-1])
 
 
 def _short_text(content: str, limit: int = 160) -> str:
@@ -540,7 +533,6 @@ def format_transcript(
 ) -> str:
     sections = [
         format_section("用户问题", format_user_question(session)),
-        format_section("对话记录", format_messages(session, omit_last_agent=not show_process)),
     ]
     if show_process or session.active_task is not None:
         sections.append(
@@ -663,6 +655,7 @@ def format_status(session: SessionState, is_running: bool | None = None) -> str:
         state_label,
         f"阶段 {format_phase_label(task)}",
         f"当前 {format_current_action(task)}",
+        f"最新动态 {format_latest_activity(task)}",
         format_context_usage(session),
     ]
     parts.extend(["Enter 发送", "Shift+Enter 换行"])
@@ -991,7 +984,7 @@ class PromptTui:
         resolved_options = options or PromptTuiOptions(cwd=cwd or Path.cwd(), limits=LoopLimits())
         self.options = resolved_options
         memory_manager = (
-            MemoryManager(resolved_options.cwd / ".manus-mini" / "memory.db")
+            MemoryManager(project_memory_path(resolved_options.cwd))
             if initial_session is not None
             else MemoryManager(":memory:")
         )
@@ -1229,6 +1222,8 @@ class PromptTui:
     def render_progress(self) -> None:
         self.refresh_confirmation_panel()
         if not self.is_output_at_bottom():
+            self.status.text = format_status(self.manager.current)
+            self.app.invalidate()
             return
 
         self.advance_visible_trace_count()

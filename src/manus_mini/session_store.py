@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from manus_mini.logging import migrate_legacy_project_storage, project_runs_dir, project_sessions_dir
 from manus_mini.models import SessionState
 
 
@@ -21,7 +22,8 @@ class SessionSummary:
 class SessionStore:
     def __init__(self, cwd: Path) -> None:
         self.cwd = cwd
-        self.sessions_dir = cwd / ".manus-mini" / "sessions"
+        self.sessions_dir = project_sessions_dir(cwd)
+        migrate_legacy_project_storage(cwd)
 
     def save(self, session: SessionState) -> Path:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -79,7 +81,7 @@ class SessionStore:
 
     def _runs_dir(self) -> Path:
         """返回 runs 日志目录路径。"""
-        return self.cwd / "runs"
+        return project_runs_dir(self.cwd)
 
     def delete_runs_for_session(self, session_id: str) -> int:
         """删除 runs 目录下所有以指定 session_id 开头的子目录。

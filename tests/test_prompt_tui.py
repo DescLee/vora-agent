@@ -5,6 +5,7 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 from manus_mini.memory import MemoryManager
+from manus_mini.logging import project_memory_path
 from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
@@ -15,6 +16,7 @@ from manus_mini.prompt_tui import (
     format_current_action,
     format_context_usage,
     format_inline_args,
+    format_latest_activity,
     format_message_block,
     line_number_for_position,
     format_phase_label,
@@ -185,9 +187,7 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
     assert "工具返回" in process
     assert "read_file(unknown)" in process
     assert "Tool read_file finished: failed" in process
-    assert "最近过程（折叠）" in process
-    assert "最新：工具返回：read_file(unknown) 已返回" in process
-    assert "INVALID_TOOL_PARAMS" in process
+    assert "最近过程（折叠）" not in process
 
 
 def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
@@ -224,7 +224,7 @@ def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -
     assert usage == "上下文 25.0%"
 
 
-def test_format_process_collapses_recent_process_section(tmp_path: Path) -> None:
+def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -238,11 +238,10 @@ def test_format_process_collapses_recent_process_section(tmp_path: Path) -> None
     )
     session.active_task = task
 
-    process = format_process(session)
+    status = format_status(session)
 
-    assert "最近过程（折叠）" in process
-    assert "最新：ReAct：第 1 轮开始" in process
-    assert "当前步骤" in process
+    assert format_latest_activity(task) == "ReAct：第 1 轮开始"
+    assert "最新动态 ReAct：第 1 轮开始" in status
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -307,7 +306,7 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "1.1 调用 read_file(call-read) path: README.md" in process
     assert "1.1 read_file(call-read) 已返回: read README.md" in process
     assert "# demo project" not in process
-    assert "最近过程（折叠）" in process
+    assert "最近过程（折叠）" not in process
 
 
 def test_format_process_orders_llm_content_before_matching_tool_call_and_result(tmp_path: Path) -> None:
@@ -562,7 +561,7 @@ def test_format_phase_label_maps_task_status_for_users(tmp_path: Path) -> None:
     assert format_phase_label(task) == "已完成"
 
 
-def test_format_process_shows_reflection_reason_in_recent_process(tmp_path: Path) -> None:
+def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -580,10 +579,9 @@ def test_format_process_shows_reflection_reason_in_recent_process(tmp_path: Path
     )
     session.active_task = task
 
-    process = format_process(session)
+    status = format_status(session)
 
-    assert "最近过程（折叠）" in process
-    assert "反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in process
+    assert "最新动态 反思：Reflection decided replan: 需要补充技术架构说明（需要补充技术架构说明）" in status
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -646,9 +644,8 @@ def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path
     process = format_process(session)
 
     assert "event 11" in process
-    assert "最近过程（折叠）" in process
-    assert "已折叠 11 条较早过程" in process
-    assert "最新：ReAct：event 11" in process
+    assert "最近过程（折叠）" not in process
+    assert "已折叠" not in process
 
 
 def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
@@ -670,7 +667,7 @@ def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
     assert "sk-live-secret" not in process
     assert "password=abc123" not in process
     assert "LLM 回合" in process
-    assert "最近过程（折叠）" in process
+    assert "最近过程（折叠）" not in process
 
 
 def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
@@ -687,7 +684,7 @@ def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
     assert "────────────────" in transcript
     assert "用户问题" in transcript
     assert "总结项目" in transcript
-    assert "对话记录" in transcript
+    assert "对话记录" not in transcript
     assert "执行过程" in transcript
     assert "当前步骤" in transcript
     assert "Tool list_files finished: ok" in transcript
@@ -707,13 +704,13 @@ def test_format_transcript_keeps_process_for_final_artifact(tmp_path: Path) -> N
 
     transcript = format_transcript(session, show_process=False)
 
-    assert "对话" in transcript
+    assert "对话" not in transcript
     assert "执行过程" in transcript
     assert "产物" in transcript
     assert "最终总结" in transcript
     assert transcript.count("最终总结") == 1
     assert "工具活动" in transcript
-    assert "最近过程（折叠）" in transcript
+    assert "最近过程（折叠）" not in transcript
 
 
 def test_format_transcript_final_artifact_keeps_full_process_history(tmp_path: Path) -> None:
@@ -1040,6 +1037,16 @@ def test_fresh_tui_does_not_load_persistent_memories(tmp_path: Path) -> None:
     assert tui.manager.memory_manager.search("旧项目优化建议") == []
 
 
+def test_tui_initial_session_uses_project_isolated_memory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    session = SessionState.create(cwd=tmp_path)
+
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    assert tui.manager.memory_manager is not None
+    assert tui.manager.memory_manager.db_path == project_memory_path(tmp_path)
+
+
 def test_send_current_input_starts_background_turn_without_blocking(monkeypatch) -> None:
     tui = PromptTui()
     started: list[str] = []
@@ -1052,7 +1059,7 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert started == ["总结一下项目"]
     assert tui.is_running is True
     assert tui.input.text == ""
-    assert "│  总结一下项目" in tui.output.text
+    assert "用户问题\n总结一下项目" in tui.output.text
     assert "执行过程" in tui.output.text
     assert "当前步骤" in tui.output.text
     assert tui.status.text.startswith("正在执行")
@@ -1100,7 +1107,7 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     assert "LLM 回合" in tui.output.text
     assert "工具调度" in tui.output.text
-    assert "最近过程（折叠）" in tui.output.text
+    assert "最近过程（折叠）" not in tui.output.text
     assert "返回预览" not in tui.output.text
 
 
@@ -1123,12 +1130,12 @@ def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> N
     tui.render_progress()
 
     assert tui.visible_trace_count == 3
-    assert "最近过程（折叠）" in tui.output.text
+    assert "最近过程（折叠）" not in tui.output.text
 
     tui.render_progress()
 
     assert tui.visible_trace_count == 6
-    assert "最近过程（折叠）" in tui.output.text
+    assert "最近过程（折叠）" not in tui.output.text
 
 
 def test_render_progress_keeps_output_scrolled_to_latest_content(tmp_path: Path) -> None:
@@ -1307,18 +1314,24 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
-    task.trace_events.append(TraceEvent(phase="react", message="event 0"))
+    task.plan = [
+        PlanStep(description=f"步骤 {index}：收集和整理项目信息", intent="research", status="pending")
+        for index in range(80)
+    ]
+    for index in range(40):
+        task.trace_events.append(TraceEvent(phase="react", message=f"event {index}"))
     tui.manager.current.active_task = task
     tui.render_progress()
     tui.scroll_output_to_start()
     visible_before = tui.visible_trace_count
     output_before = tui.output.text
 
-    task.trace_events.append(TraceEvent(phase="react", message="event 1"))
+    task.trace_events.append(TraceEvent(phase="react", message="event 40"))
     tui.render_progress()
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
+    assert "最新动态 ReAct：event 40" in tui.status.text
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

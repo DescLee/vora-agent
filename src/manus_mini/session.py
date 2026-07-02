@@ -27,7 +27,7 @@ class SessionManager:
         initial_session: SessionState | None = None,
         session_store: SessionStore | None = None,
     ) -> None:
-        self.runtime = runtime or AgentRuntime(default_limits=default_limits, dry_run=dry_run, memory_manager=memory_manager)
+        self.runtime = runtime or AgentRuntime(default_limits=default_limits, dry_run=dry_run, memory_manager=memory_manager, cwd=cwd)
         self.current = initial_session or SessionState.create(cwd=cwd)
         self.current.cwd = cwd
         self.memory_manager = memory_manager or getattr(self.runtime, "memory_manager", None)

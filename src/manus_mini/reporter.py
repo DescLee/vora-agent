@@ -9,8 +9,9 @@ from manus_mini.redaction import redact_sensitive_text
 
 
 class Reporter:
-    def __init__(self, output_dir: Path) -> None:
+    def __init__(self, output_dir: Path, run_root: Path | None = None) -> None:
         self.output_dir = output_dir
+        self.run_root = run_root
 
     def write_markdown(self, filename: str, content: str) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -25,7 +26,8 @@ class Reporter:
 
     def write_run_summary(self, task: TaskState, user_input: str) -> Path:
         session_id = task.session_id or "unknown-session"
-        run_dir = self.output_dir.parent / "runs" / f"{session_id}-{task.run_id}"
+        run_root = self.run_root or self.output_dir.parent / "runs"
+        run_dir = run_root / f"{session_id}-{task.run_id}"
         run_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path = self._available_run_summary_path(run_dir, f"summary-{timestamp}.md")

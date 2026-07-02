@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
-from manus_mini.logging import EventLogger
+from manus_mini.logging import EventLogger, project_runs_dir
 from manus_mini.context import (
     build_context_bundle,
     estimate_session_context_usage,
@@ -39,13 +39,15 @@ class AgentRuntime:
         dry_run: bool = False,
         memory_manager: MemoryManager | None = None,
         llm: LLMClient | None = None,
+        cwd: Path | None = None,
     ) -> None:
+        self.cwd = cwd or Path.cwd()
         self.default_limits = default_limits or LoopLimits()
-        self.logger = logger or EventLogger(Path("runs"))
+        self.logger = logger or EventLogger(project_runs_dir(self.cwd))
         self.react_loop = ReActLoop(llm=llm, dry_run=dry_run, logger=self.logger)
         self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, llm=llm, logger=self.logger)
         self.planner = Planner(llm=llm, logger=self.logger)
-        self.reporter = reporter or Reporter(self._default_reporter_output_dir())
+        self.reporter = reporter or Reporter(self._default_reporter_output_dir(), run_root=self._default_reporter_run_root())
         self.dry_run = dry_run
         self.memory_manager = memory_manager or MemoryManager(":memory:")
 
@@ -53,6 +55,11 @@ class AgentRuntime:
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
         return Path("outputs")
+
+    def _default_reporter_run_root(self) -> Path:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return Path(tempfile.gettempdir()) / "manus-mini" / "runs"
+        return project_runs_dir(self.cwd)
 
     def on_user_message(
         self,

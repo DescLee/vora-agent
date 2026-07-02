@@ -5,7 +5,8 @@ from manus_mini.models import Message, SessionState
 from manus_mini.session_store import SessionStore
 
 
-def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, capsys) -> None:
+def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("上一轮问题"))
@@ -20,6 +21,7 @@ def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, caps
 
 
 def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
     store.save(session)

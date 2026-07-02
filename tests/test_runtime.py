@@ -281,6 +281,10 @@ def test_runtime_defaults_to_temp_reporter_output_dir_under_pytest(tmp_path: Pat
     runtime = AgentRuntime(llm=ScriptedLLM())
 
     assert runtime.reporter.output_dir == Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
+    assert ".manus-mini/projects/" in str(runtime.logger.root)
+    assert str(runtime.logger.root).endswith("/runs")
+    assert runtime.reporter.run_root is not None
+    assert runtime.reporter.run_root == Path(tempfile.gettempdir()) / "manus-mini" / "runs"
 
     session = SessionState.create(cwd=tmp_path)
     runtime.on_user_message("你好", session)
@@ -1243,14 +1247,18 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     react_response = next(row for row in response_rows if row.get("stage") == "react")
     assert planner_request["request"]["messages"]
     assert planner_request["request"]["tool_names"] == []
-    assert "api_request_payload" in planner_request
-    assert planner_response["api_request_payload"]
-    assert "api_response_raw" in planner_response
+    assert "api_request_payload" not in planner_request
+    assert "request" not in planner_response
+    assert "api_request_payload" not in planner_response
+    assert "api_response_raw" not in planner_response
+    assert "response" in planner_response
     assert react_request["request"]["messages"]
     assert react_request["request"]["tool_names"]
-    assert "api_request_payload" in react_request
-    assert react_response["api_request_payload"]
-    assert "api_response_raw" in react_response
+    assert "api_request_payload" not in react_request
+    assert "request" not in react_response
+    assert "api_request_payload" not in react_response
+    assert "api_response_raw" not in react_response
+    assert "response" in react_response
     reflection_rows = [row for row in rows if row.get("type") == "reflection"]
     assert reflection_rows
     assert "decision" in reflection_rows[0]

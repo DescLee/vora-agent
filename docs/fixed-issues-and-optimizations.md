@@ -31,7 +31,7 @@
 ### 2.1 对话、过程、产物混杂
 
 - 现象：用户问题、执行过程和最终产物展示层次不清晰。
-- 优化：统一输出区结构，分为“用户问题 / 对话记录 / 执行过程 / 最终产物”几个区块。
+- 优化：统一输出区结构，分为“用户问题 / 执行过程 / 最终产物”几个区块，不再展开重复的对话记录。
 - 当前行为：运行中展示执行过程；完成后继续保留执行过程，并在后面展示最终产物。
 - 验证：测试覆盖运行态 transcript 展示过程、完成态 transcript 同时展示过程和产物。
 
@@ -80,7 +80,7 @@
 
 - 现象：任务完成后 TUI 会收起执行过程，只展示最终产物；用户无法回看 Agent 做了哪些事。
 - 修复：完成态 transcript 仍保留“执行过程”，并在其后展示“最终产物”。
-- 验证：测试覆盖完成态同时包含执行过程和最终产物，且最终结果不会在对话记录中重复展示。
+- 验证：测试覆盖完成态同时包含执行过程和最终产物，且最终结果不会重复展示。
 
 ### 2.8 过程内容展示过于原始
 
@@ -167,6 +167,16 @@
   - 确认进行中时隐藏确认弹层，避免界面立即回跳到等待确认。
   - 确认完成后再恢复状态栏和交互焦点。
 - 验证：测试覆盖确认后会启动后台续跑，并保持 UI 不阻塞。
+
+### 2.17 TUI 对话记录与最近过程去噪
+
+- 现象：TUI 顶部已经展示“用户问题”，但下面的“对话记录”又重复展示用户输入、空 Agent 消息和工具摘要；同时“最近过程”模块也重复展示过程尾部信息，影响查看关键执行过程。
+- 修复：
+  - transcript 移除“对话记录”区块，只保留“用户问题 / 执行过程 / 最终产物”。
+  - 执行过程区移除“最近过程（折叠）”模块，避免同一批 trace 在多个区域重复出现。
+  - 新增 `format_latest_activity()`，把最新动态放到底部状态栏，例如 `最新动态 工具返回：read_file(...) 成功`。
+  - 用户滚动查看历史时不强制刷新输出内容，但状态栏仍持续更新最新动态。
+- 验证：测试覆盖 transcript 不再展示对话记录、process 不再展示最近过程、状态栏展示最新动态，以及用户查看历史时输出不被改写但状态栏仍更新。
 
 ## 3. TUI 滚动与可读性
 
@@ -493,18 +503,19 @@
 - 行为：状态栏展示的百分比与压缩触发百分比保持一致，方便判断当前会话是否接近预算上限。
 - 验证：测试覆盖上下文占比在短消息 + 长运行过程场景下的展示一致性。
 
-### 8.5.2 执行过程中的最近过程折叠展示
+### 8.5.2 执行过程中的最近过程模块移除
 
-- 优化：执行过程保留“最近过程”，但默认折叠成摘要，不再把大量历史事件直接铺开。
-- 行为：折叠区只展示总条数、已折叠条数和最新一条过程，避免主视图被过程日志淹没。
-- 验证：测试覆盖折叠摘要的显示，以及默认执行过程不再暴露完整最近过程列表。
+- 优化：执行过程不再展示“最近过程”模块，避免和 LLM 回合、工具调度、工具返回重复。
+- 行为：最新过程摘要移动到底部状态栏的“最新动态”，主视图只保留执行计划、当前步骤和结构化工具过程。
+- 验证：测试覆盖执行过程不再包含“最近过程（折叠）”，状态栏展示最新动态。
 
 ### 8.6 对话恢复能力
 
 - 优化：新增会话持久化与恢复能力。
 - 行为：
   - 每轮 `SessionManager.handle_user_message()` 结束后保存完整 `SessionState`。
-  - 会话文件位于 `.manus-mini/sessions/<session_id>.json`。
+  - 会话文件位于 `~/.manus-mini/projects/<project_key>/sessions/<session_id>.json`。
+  - 不同项目按项目绝对路径生成不同 `project_key`，避免多个项目共用同一份 session。
   - `manus-mini list --cwd <目录>` 列出当前工作目录下已有会话。
   - `manus-mini resume <session_id> --cwd <目录>` 恢复上次上下文并进入 TUI。
 - 验证：测试覆盖 session 保存、加载、列表展示和 resume 入口加载历史消息。
@@ -707,13 +718,102 @@
   - `read_file` 去重 key 纳入 `start_index/max_bytes`，避免不同分片被误判为重复读取。
 - 验证：测试覆盖从指定偏移读取指定长度、偏移超出文件大小报错，以及分片读取不破坏重复读取去重。
 
-## 10. 当前验证基线
+### 9.19 默认运行数据迁移到用户目录并按项目隔离
+
+- 现象：默认 `runs/`、`.manus-mini/sessions` 和 `.manus-mini/memory.db` 会落在当前工程目录下，容易污染用户正在分析的项目；如果简单放到 `~/.manus-mini` 根目录，又会导致多个项目互相混用数据。
+- 修复：
+  - 默认事件日志目录改为 `~/.manus-mini/projects/<project_key>/runs`。
+  - 默认 run summary 也写入同一个项目隔离 runs 根目录。
+  - session 文件改为 `~/.manus-mini/projects/<project_key>/sessions`。
+  - persistent memory 改为 `~/.manus-mini/projects/<project_key>/memory.db`。
+  - `project_key` 由项目目录名和项目绝对路径 hash 组成，兼顾可读性和同名项目隔离。
+  - 初始化 session store 时会非破坏性迁移旧项目内 `.manus-mini/sessions/*.json` 和 `.manus-mini/memory.db`，只复制缺失文件，不覆盖新项目隔离目录中已有数据。
+  - 显式传入 `EventLogger(path)` 或 `Reporter(output_dir)` 时仍尊重调用方指定路径，方便测试和嵌入场景。
+  - pytest 环境使用系统临时目录，避免测试污染真实用户 home。
+  - session 删除/清空时同步清理对应项目隔离 runs 下的运行日志。
+- 验证：测试覆盖项目隔离目录生成、session 保存路径、memory 路径、旧项目 `.manus-mini` 非覆盖迁移、runtime 默认 run summary 目录、session 清理项目 runs，以及工作区不生成默认 runs/outputs。
+
+### 9.20 事件日志内容去重精简
+
+- 现象：LLM 请求/响应日志里同时保存 `request`、`api_request_payload`、`response`、`api_response_raw`，其中不少字段内容重复；reflection context 中 observation 也可能携带大段文件正文。
+- 修复：
+  - `EventLogger.record()` 写盘前统一压缩事件。
+  - 当 `api_request_payload` 与 `request` 相同时删除重复字段。
+  - 当 `api_response_raw` 与 `response` 相同时删除重复字段。
+  - `llm_response` 事件只保留 response 核心内容，不重复携带 request。
+  - reflection observation 的完整正文改为 `content_preview` 和 `content_omitted`，避免长文件内容重复写入日志。
+- 验证：测试覆盖 LLM 响应日志不再包含重复 payload 字段，以及 reflection observation 正文被压缩为预览。
+
+## 10. 当前未提交 diff 快照
+
+本节记录 2026-07-02 当前工作区未提交 diff，便于后续提交、回滚或复盘时快速确认本轮改动边界。
+
+变更规模：
+
+```text
+13 files changed, 386 insertions(+), 75 deletions(-)
+```
+
+文件级变更：
+
+- `docs/fixed-issues-and-optimizations.md`
+  - 补充 TUI 去噪、项目隔离存储、事件日志精简等记录。
+  - 更新会话文件路径说明为 `~/.manus-mini/projects/<project_key>/sessions/<session_id>.json`。
+  - 更新验证基线为 `pytest -q # 228 passed`。
+- `src/manus_mini/logging.py`
+  - 新增 `default_manus_home()`、`project_storage_dir()`、`project_runs_dir()`、`project_sessions_dir()`、`project_memory_path()`。
+  - 默认日志根目录从项目内 `runs` 迁移到用户目录，支持按项目路径 hash 隔离。
+  - 新增旧项目内 `.manus-mini/sessions` 和 `.manus-mini/memory.db` 的非覆盖迁移。
+  - `EventLogger` 支持无参初始化，并在写入前调用 `compact_event()` 精简重复日志字段。
+  - 新增 reflection observation 正文压缩，长 `content` 改为 `content_preview` 和 `content_omitted`。
+- `src/manus_mini/prompt_tui.py`
+  - 移除 transcript 中的“对话记录”区块，避免重复展示用户问题、空 Agent 消息和工具摘要。
+  - 移除执行过程中的“最近过程（折叠）”模块。
+  - 新增 `format_latest_activity()`，把最新 trace 摘要移动到底部状态栏。
+  - 用户滚动查看历史时不改写输出内容，但继续刷新状态栏最新动态。
+  - 恢复历史 session 时，长期记忆路径切到项目隔离的 `project_memory_path(cwd)`。
+- `src/manus_mini/reporter.py`
+  - `Reporter` 新增可选 `run_root`。
+  - run summary 优先写入显式 `run_root`，用于和项目隔离 runs 目录保持一致。
+- `src/manus_mini/runtime.py`
+  - `AgentRuntime` 新增 `cwd` 参数，用于计算项目隔离 runs 根目录。
+  - 默认 `EventLogger` 改为写入 `project_runs_dir(cwd)`。
+  - 默认 `Reporter` 的 run summary 根目录改为项目隔离 runs；pytest 下仍写入系统临时目录，避免污染工作区。
+- `src/manus_mini/session.py`
+  - 创建默认 `AgentRuntime` 时传入 `cwd`，保证 session manager、runtime、日志和报告使用同一个项目隔离口径。
+- `src/manus_mini/session_store.py`
+  - session 存储目录从项目内 `.manus-mini/sessions` 改为 `project_sessions_dir(cwd)`。
+  - 初始化时触发旧项目内 `.manus-mini` 数据迁移。
+  - 删除 session 关联 runs 时改为清理 `project_runs_dir(cwd)`。
+- `tests/test_cli.py`
+  - CLI list/resume 测试 mock `Path.home()`，验证新用户目录存储口径下仍能列出和恢复 session。
+- `tests/test_logging.py`
+  - 覆盖默认用户目录 runs、项目路径隔离、session/run/memory 路径生成。
+  - 覆盖 LLM 日志重复 payload 字段压缩。
+  - 覆盖 reflection observation 长正文压缩。
+- `tests/test_prompt_tui.py`
+  - 更新断言，确认 transcript 不再展示“对话记录”，过程区不再展示“最近过程（折叠）”。
+  - 覆盖状态栏展示“最新动态”。
+  - 覆盖恢复历史 session 时使用项目隔离 memory。
+  - 覆盖用户阅读历史时输出不被重写，但状态栏仍跟进最新 trace。
+- `tests/test_runtime.py`
+  - 更新 pytest 默认运行产物路径断言，确认 logger 使用项目隔离 runs、reporter run_root 使用临时目录。
+  - 更新 LLM 请求/响应日志断言，确认响应日志不再重复携带 request、api_request_payload、api_response_raw。
+- `tests/test_session.py`
+  - 为依赖持久化路径的测试 mock `Path.home()`，避免写入真实用户目录。
+- `tests/test_session_store.py`
+  - 更新 session 保存路径断言为 `project_sessions_dir(cwd)`。
+  - 新增按项目隔离 runs 清理测试。
+  - 新增旧项目 `.manus-mini` session/memory 迁移测试。
+  - 新增迁移不覆盖现有项目隔离数据测试。
+
+## 11. 当前验证基线
 
 最近一次完整验证：
 
 ```bash
 pytest -q
-# 220 passed
+# 228 passed
 
 ruff check src tests
 # All checks passed!

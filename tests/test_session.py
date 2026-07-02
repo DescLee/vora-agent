@@ -15,7 +15,8 @@ def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
     assert manager.current.active_task is None
 
 
-def test_session_manager_handles_user_message(tmp_path: Path) -> None:
+def test_session_manager_handles_user_message(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
@@ -27,7 +28,8 @@ def test_session_manager_handles_user_message(tmp_path: Path) -> None:
     assert "hello world" in session.messages[-1].content
 
 
-def test_session_manager_saves_session_after_turn(tmp_path: Path) -> None:
+def test_session_manager_saves_session_after_turn(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
     session = manager.handle_user_message("你好")
@@ -38,7 +40,8 @@ def test_session_manager_saves_session_after_turn(tmp_path: Path) -> None:
     assert loaded.messages[-1].role == "agent"
 
 
-def test_session_manager_save_context_command_writes_timestamped_snapshot(tmp_path: Path) -> None:
+def test_session_manager_save_context_command_writes_timestamped_snapshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     manager = SessionManager(cwd=tmp_path)
     manager.current.messages.append(Message.user("学习用上下文"))
     manager.current.messages.append(Message.agent("这是当前回答"))
@@ -55,7 +58,8 @@ def test_session_manager_save_context_command_writes_timestamped_snapshot(tmp_pa
     assert "已保存当前上下文" in session.messages[-1].content
 
 
-def test_session_manager_help_command_lists_available_commands(tmp_path: Path) -> None:
+def test_session_manager_help_command_lists_available_commands(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     manager = SessionManager(cwd=tmp_path)
 
     session = manager.handle_user_message("/help")
@@ -68,7 +72,8 @@ def test_session_manager_help_command_lists_available_commands(tmp_path: Path) -
     assert "manus-mini resume" in help_text
 
 
-def test_session_manager_saves_state_when_runtime_is_interrupted(tmp_path: Path) -> None:
+def test_session_manager_saves_state_when_runtime_is_interrupted(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     class InterruptingRuntime:
         def on_user_message(self, content: str, session, append_user_message: bool = True):  # noqa: ANN001, ARG002
             raise KeyboardInterrupt
