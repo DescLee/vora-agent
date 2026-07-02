@@ -776,68 +776,33 @@
   - reflection observation 的完整正文改为 `content_preview` 和 `content_omitted`，避免长文件内容重复写入日志。
 - 验证：测试覆盖 LLM 响应日志不再包含重复 payload 字段，以及 reflection observation 正文被压缩为预览。
 
-## 10. 当前未提交 diff 快照
+## 10. 近期关键提交快照
 
-本节记录 2026-07-02 当前工作区未提交 diff，便于后续提交、回滚或复盘时快速确认本轮改动边界。
+本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
 
-变更规模：
+### 10.1 `0ce4fce feat: add command tools and test gate`
 
-```text
-13 files changed, 386 insertions(+), 75 deletions(-)
-```
+- 新增 `run_bash` 和 `run_temp_script`，支持受控 bash 命令执行和临时脚本执行后自动删除。
+- LLM tool schema 暴露 bash / 临时脚本工具参数。
+- 代码修改类任务增加测试门禁：未执行测试不接受，测试失败回传失败信息，最近测试通过才允许 Reflection 接受。
+- 更新中文问题与优化记录，并将验证基线推进到 `237 passed`。
 
-文件级变更：
+### 10.2 `e1a15b5 docs: add agent behavior guidelines`
 
-- `docs/fixed-issues-and-optimizations.md`
-  - 补充 TUI 去噪、项目隔离存储、事件日志精简等记录。
-  - 更新会话文件路径说明为 `~/.manus-mini/projects/<project_key>/sessions/<session_id>.json`。
-  - 更新验证基线为 `pytest -q # 228 passed`。
-- `src/manus_mini/logging.py`
-  - 新增 `default_manus_home()`、`project_storage_dir()`、`project_runs_dir()`、`project_sessions_dir()`、`project_memory_path()`。
-  - 默认日志根目录从项目内 `runs` 迁移到用户目录，支持按项目路径 hash 隔离。
-  - 新增旧项目内 `.manus-mini/sessions` 和 `.manus-mini/memory.db` 的非覆盖迁移。
-  - `EventLogger` 支持无参初始化，并在写入前调用 `compact_event()` 精简重复日志字段。
-  - 新增 reflection observation 正文压缩，长 `content` 改为 `content_preview` 和 `content_omitted`。
-- `src/manus_mini/prompt_tui.py`
-  - 移除 transcript 中的“对话记录”区块，避免重复展示用户问题、空 Agent 消息和工具摘要。
-  - 移除执行过程中的“最近过程（折叠）”模块。
-  - 新增 `format_latest_activity()`，把最新 trace 摘要移动到底部状态栏。
-  - 用户滚动查看历史时不改写输出内容，但继续刷新状态栏最新动态。
-  - 恢复历史 session 时，长期记忆路径切到项目隔离的 `project_memory_path(cwd)`。
-- `src/manus_mini/reporter.py`
-  - `Reporter` 新增可选 `run_root`。
-  - run summary 优先写入显式 `run_root`，用于和项目隔离 runs 目录保持一致。
-- `src/manus_mini/runtime.py`
-  - `AgentRuntime` 新增 `cwd` 参数，用于计算项目隔离 runs 根目录。
-  - 默认 `EventLogger` 改为写入 `project_runs_dir(cwd)`。
-  - 默认 `Reporter` 的 run summary 根目录改为项目隔离 runs；pytest 下仍写入系统临时目录，避免污染工作区。
-- `src/manus_mini/session.py`
-  - 创建默认 `AgentRuntime` 时传入 `cwd`，保证 session manager、runtime、日志和报告使用同一个项目隔离口径。
-- `src/manus_mini/session_store.py`
-  - session 存储目录从项目内 `.manus-mini/sessions` 改为 `project_sessions_dir(cwd)`。
-  - 初始化时触发旧项目内 `.manus-mini` 数据迁移。
-  - 删除 session 关联 runs 时改为清理 `project_runs_dir(cwd)`。
-- `tests/test_cli.py`
-  - CLI list/resume 测试 mock `Path.home()`，验证新用户目录存储口径下仍能列出和恢复 session。
-- `tests/test_logging.py`
-  - 覆盖默认用户目录 runs、项目路径隔离、session/run/memory 路径生成。
-  - 覆盖 LLM 日志重复 payload 字段压缩。
-  - 覆盖 reflection observation 长正文压缩。
-- `tests/test_prompt_tui.py`
-  - 更新断言，确认 transcript 不再展示“对话记录”，过程区不再展示“最近过程（折叠）”。
-  - 覆盖状态栏展示“最新动态”。
-  - 覆盖恢复历史 session 时使用项目隔离 memory。
-  - 覆盖用户阅读历史时输出不被重写，但状态栏仍跟进最新 trace。
-- `tests/test_runtime.py`
-  - 更新 pytest 默认运行产物路径断言，确认 logger 使用项目隔离 runs、reporter run_root 使用临时目录。
-  - 更新 LLM 请求/响应日志断言，确认响应日志不再重复携带 request、api_request_payload、api_response_raw。
-- `tests/test_session.py`
-  - 为依赖持久化路径的测试 mock `Path.home()`，避免写入真实用户目录。
-- `tests/test_session_store.py`
-  - 更新 session 保存路径断言为 `project_sessions_dir(cwd)`。
-  - 新增按项目隔离 runs 清理测试。
-  - 新增旧项目 `.manus-mini` session/memory 迁移测试。
-  - 新增迁移不覆盖现有项目隔离数据测试。
+- 新增项目根目录 `AGENTS.md`。
+- 明确项目文档默认中文。
+- 新增或修改英文文档时，必须同步新增或修改对应中文文档。
+- 如果中英文双版本同时存在，后续修改必须同步更新两边。
+
+### 10.3 `4a18a75 feat: add precise file replacement tool`
+
+- 新增 `replace_in_file`，用于已有文件的 `old_text -> new_text` 精确局部替换。
+- 默认只允许匹配 1 处，多处匹配需要显式传入 `expected_replacements`。
+- 找不到旧文本返回 `OLD_TEXT_NOT_FOUND`，替换次数不符合预期返回 `REPLACEMENT_COUNT_MISMATCH`。
+- 等长替换走原地写入；长度变化走同目录临时文件 + `os.replace` 原子替换。
+- `replace_in_file` 不需要人工确认，依赖精确旧文本匹配、替换次数校验和 workspace/protected path 保护。
+- 执行提示已要求修改已有文件优先使用 `replace_in_file`，只有创建新文件或必须整体重写时才使用 `write_file`。
+- 更新中文问题与优化记录，并将验证基线推进到 `244 passed`。
 
 ## 11. 当前验证基线
 
