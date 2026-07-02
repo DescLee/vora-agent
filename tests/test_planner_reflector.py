@@ -2,7 +2,8 @@ from pathlib import Path
 
 from manus_mini.llm import LLMResult
 from manus_mini.models import AgentError, LoopLimits, SessionState, TaskState
-from manus_mini.planner import Planner
+from manus_mini.planner import Planner, build_planner_system_prompt
+from manus_mini.reflection import ReflectionLoop
 from manus_mini.reflector import Reflector
 
 
@@ -37,6 +38,16 @@ def test_planner_classifies_small_talk_as_chat(tmp_path: Path) -> None:
     assert len(steps) == 1
     assert steps[0].intent == "chat"
     assert "直接回复" in steps[0].description
+
+
+def test_planner_classifies_identity_questions_as_chat(tmp_path: Path) -> None:
+    planner = Planner()
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("你的名字是啥", session=session)
+
+    assert len(steps) == 1
+    assert steps[0].intent == "chat"
 
 
 def test_planner_treats_cli_usage_errors_as_report_tasks(tmp_path: Path) -> None:
@@ -79,6 +90,76 @@ def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:
         "输出 Markdown 草稿",
     ]
     assert [step.intent for step in steps] == ["research", "research", "report"]
+
+
+def test_planner_corrects_chat_intent_for_file_reading_steps(tmp_path: Path) -> None:
+    class BadIntentLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="1. 读取 README.md 了解项目概述 | chat")
+
+    planner = Planner(llm=BadIntentLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("这个项目是做什么的，简单的说，越简单越好", session=session)
+
+    assert len(steps) == 1
+    assert steps[0].description == "读取 README.md 了解项目概述"
+    assert steps[0].intent == "research"
+
+
+def test_planner_system_prompt_includes_identity_project_overview_and_tool_constraints(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
+    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_runtime.py").write_text("def test_x(): pass", encoding="utf-8")
+
+    session = SessionState.create(cwd=tmp_path)
+
+    prompt = build_planner_system_prompt(session)
+
+    assert "你叫 manus-mini" in prompt
+    assert "个人助理" in prompt
+    assert "代码项目的查看、总结、诊断和优化建议" in prompt
+    assert "修改、删除和生成" in prompt
+    assert "文档写作" in prompt
+    assert "深度行业研究报告" in prompt
+    assert "工具使用要克制" in prompt
+    assert "避免重复 list_files/read_file" in prompt
+    assert "当前项目基本信息" in prompt
+    assert f"项目名：{tmp_path.name}" in prompt
+    assert "项目代码目录结构" in prompt
+    assert "src/：核心实现代码" in prompt
+    assert "docs/：设计文档、问题记录和优化说明" in prompt
+
+
+def test_planner_sends_identity_and_project_overview_to_llm(tmp_path: Path) -> None:
+    class RecordingLLM:
+        def __init__(self) -> None:
+            self.messages = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.messages.append(messages)
+            return LLMResult(content="1. 基于项目结构判断关键文件 | research")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')", encoding="utf-8")
+    llm = RecordingLLM()
+    planner = Planner(llm=llm)
+    session = SessionState.create(cwd=tmp_path)
+
+    planner.build_plan("请分析当前项目结构", session=session)
+
+    system_prompt = llm.messages[0][0].content
+    assert llm.messages[0][0].role == "system"
+    assert "你叫 manus-mini" in system_prompt
+    assert "项目代码目录结构" in system_prompt
+    assert "工具使用要克制" in system_prompt
+    assert "src/：核心实现代码" in system_prompt
 
 
 def test_planner_falls_back_to_rules_when_llm_plan_is_empty(tmp_path: Path) -> None:
@@ -128,3 +209,73 @@ def test_reflector_accepts_complete_risk_discussion(tmp_path: Path) -> None:
     decision = reflector.decide(task, draft)
 
     assert decision.decision == "accept"
+
+
+def test_reflector_rejects_project_answer_that_asks_user_for_project_details(tmp_path: Path) -> None:
+    reflector = Reflector()
+    task = TaskState.create(goal="这个项目是做什么的，简单的说，越简单越好", cwd=tmp_path)
+
+    draft = "您还没有告诉我具体是哪个项目呢？请先提供项目的描述、链接或代码。"
+
+    decision = reflector.decide(task, draft)
+
+    assert decision.decision == "local_update"
+    assert decision.reason == "draft ignored current workspace project context"
+
+
+def test_reflection_follow_up_context_includes_project_structure(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')", encoding="utf-8")
+    task = TaskState.create(
+        goal="这个项目是做什么的，简单的说",
+        cwd=tmp_path,
+        limits=LoopLimits(max_reflection_rounds=1),
+    )
+    loop = ReflectionLoop()
+
+    context = loop._build_follow_up_context(
+        task,
+        "您还没有告诉我具体是哪个项目呢？请先提供项目的描述、链接或代码。",
+        "draft ignored current workspace project context",
+    )
+
+    assert "项目代码目录结构" in context
+    assert "README.md" in context
+    assert "src/：核心实现代码" in context
+    assert "不要要求用户再提供项目描述、链接或代码" in context
+
+
+def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def run(self, task, session):  # noqa: ANN001, ANN201, ARG002
+            return "您还没有告诉我具体是哪个项目呢？请先提供项目的描述、链接或代码。"
+
+    class ReflectionLLM:
+        def __init__(self) -> None:
+            self.messages = []
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
+            self.messages.append(messages)
+            self.tool_names.append(tool_names)
+            return LLMResult(
+                content='{"decision":"local_update","reason":"回答忽略了当前工作目录项目上下文"}'
+            )
+
+    llm = ReflectionLLM()
+    task = TaskState.create(
+        goal="这个项目是做什么的，简单的说",
+        cwd=tmp_path,
+        limits=LoopLimits(max_reflection_rounds=1),
+    )
+    session = SessionState.create(cwd=tmp_path)
+    loop = ReflectionLoop(react_loop=FakeReactLoop(), llm=llm)
+
+    result = loop.run(task, session)
+
+    assert llm.messages
+    assert llm.tool_names == [[]]
+    assert result.decision == "local_update"
+    assert result.reason == "回答忽略了当前工作目录项目上下文"
+    assert "项目代码目录结构" in llm.messages[0][0].content

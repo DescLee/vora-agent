@@ -27,6 +27,7 @@ from manus_mini.prompt_tui import (
     install_shift_enter_mapping,
     insert_newline,
     render_markdown_result,
+    style_confirmation_fragments,
     style_output_fragments,
 )
 
@@ -100,7 +101,7 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
 
     assert "欢迎使用 Manus Mini" in welcome
     assert "外层工程循环上限：3 轮" in welcome
-    assert "ReAct 上限：10 轮" in welcome
+    assert "ReAct 上限：20 轮" in welcome
     assert "Reflection 上限：3 轮" in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
@@ -776,14 +777,88 @@ def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
         tool_call_id="call-write",
         summary="即将修改 notes.txt",
         prompt="即将修改 notes.txt",
+        diff_preview="--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-old\n+new\n",
     )
     tui = PromptTui(cwd=tmp_path, initial_session=session)
 
-    fragments = tui.get_confirmation_fragments()
+    tui.refresh_confirmation_panel()
 
-    assert any("确认写入" in text for _, text in fragments)
-    assert any("▶ 确认" in text for _, text in fragments)
-    assert any("▶ 拒绝" in text for _, text in fragments)
+    assert tui.should_show_confirmation_overlay() is True
+    assert "确认写入" in tui.confirmation_panel_view.text
+    assert "变更预览" in tui.confirmation_panel_view.text
+    assert "+new" in tui.confirmation_panel_view.text
+
+
+def test_confirmation_fragments_color_diff_additions_and_removals() -> None:
+    fragments = style_confirmation_fragments(
+        "确认写入\n\n变更预览\n\n--- a/file.txt\n+++ b/file.txt\n-old\n+new\n context\n"
+    )
+
+    styles_by_text = {text.strip(): style for style, text in fragments if text.strip()}
+
+    assert styles_by_text["--- a/file.txt"] == "class:confirmation.diff.header"
+    assert styles_by_text["+++ b/file.txt"] == "class:confirmation.diff.header"
+    assert styles_by_text["-old"] == "class:confirmation.diff.remove"
+    assert styles_by_text["+new"] == "class:confirmation.diff.add"
+
+
+def test_prompt_tui_refreshes_confirmation_when_pending_appears_during_run(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+        diff_preview="+new",
+    )
+    tui.manager.current = session
+
+    tui.render_progress()
+
+    assert "确认写入" in tui.confirmation_panel_view.text
+    assert "+new" in tui.confirmation_panel_view.text
+
+
+def test_prompt_tui_keeps_confirmation_overlay_visible_while_processing(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+    )
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+    tui.confirmation_in_progress = True
+
+    assert tui.should_show_confirmation_overlay() is True
+
+
+def test_prompt_tui_scrolls_long_confirmation_preview(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+        diff_preview="\n".join(f"+line {index}" for index in range(60)),
+    )
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    tui.refresh_confirmation_panel()
+    initial_scroll_top = tui.confirmation_panel_view.scroll_top
+
+    tui.scroll_confirmation(5)
+
+    assert initial_scroll_top == 0
+    assert tui.confirmation_panel_view.scroll_top > initial_scroll_top
 
 
 def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path) -> None:
@@ -795,6 +870,7 @@ def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path
         tool_call_id="call-write",
         summary="即将修改 notes.txt",
         prompt="即将修改 notes.txt",
+        diff_preview="+large diff",
     )
     tui = PromptTui(cwd=tmp_path, initial_session=session)
     started = []
@@ -804,6 +880,8 @@ def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path
     tui.confirm_pending_confirmation()
 
     assert tui.confirmation_in_progress is True
+    assert "正在执行写入和后续流程" in tui.confirmation_panel_view.text
+    assert "+large diff" not in tui.confirmation_panel_view.text
     assert started == [("确认", True)]
 
 

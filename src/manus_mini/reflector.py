@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from manus_mini.context import should_include_project_code_overview
 from manus_mini.models import TaskState
 
 
@@ -22,6 +23,12 @@ class Reflector:
 
         if _looks_like_cli_issue(goal_text) and not _cli_usage_explained(text):
             return ReflectionDecision("local_update", "cli usage answer is incomplete")
+
+        if should_include_project_code_overview(task.goal) and _asks_user_for_current_project_details(text):
+            return ReflectionDecision(
+                "local_update",
+                "draft ignored current workspace project context",
+            )
 
         if last_error is not None and last_error.retryable:
             return ReflectionDecision("regenerate", f"retryable error: {last_error.code}")
@@ -52,3 +59,30 @@ def _looks_like_cli_issue(text: str) -> bool:
 
 def _cli_usage_explained(text: str) -> bool:
     return any(keyword in text for keyword in ["正确用法", "remove", "list", "resume", "tui", "子命令"])
+
+
+def _asks_user_for_current_project_details(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in [
+            "请先提供项目",
+            "请提供项目",
+            "提供项目的描述",
+            "提供项目描述",
+            "提供项目的链接",
+            "提供项目链接",
+            "提供项目的代码",
+            "提供项目代码",
+            "提供项目的描述、链接或代码",
+            "项目的描述、链接或代码",
+            "没有告诉我具体是哪个项目",
+            "无法得知具体项目",
+            "不知道具体项目",
+            "which project",
+            "provide the project",
+            "share the project",
+        ]
+    )

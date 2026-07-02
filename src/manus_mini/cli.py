@@ -23,11 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("session_id")
     remove_parser.add_argument("--cwd", type=Path, default=Path.cwd())
 
+    clear_parser = subparsers.add_parser("clear", help="clear all saved sessions")
+    clear_parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    clear_parser.add_argument("--force", "-f", action="store_true", help="skip confirmation prompt")
+
     tui_parser = subparsers.add_parser("tui", help="start the interactive TUI")
     tui_parser.add_argument("--cwd", type=Path, default=Path.cwd())
     tui_parser.add_argument("--dry-run", action="store_true")
     tui_parser.add_argument("--max-steps", type=int, default=3)
-    tui_parser.add_argument("--max-react", type=int, default=10)
+    tui_parser.add_argument("--max-react", type=int, default=20)
     tui_parser.add_argument("--max-reflect", type=int, default=3)
     tui_parser.add_argument("--max-tool-retries", type=int, default=3)
     return parser
@@ -46,12 +50,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "remove":
         _run_remove(args.cwd, args.session_id)
         return
+    if args.command == "clear":
+        _run_clear(args.cwd, args.force)
+        return
     if args.command == "tui" or args.command is None:
         _run_tui(
             cwd=args.cwd if hasattr(args, "cwd") else Path.cwd(),
             dry_run=bool(getattr(args, "dry_run", False)),
             max_steps=int(getattr(args, "max_steps", 3)),
-            max_react=int(getattr(args, "max_react", 10)),
+            max_react=int(getattr(args, "max_react", 20)),
             max_reflect=int(getattr(args, "max_reflect", 3)),
             max_tool_retries=int(getattr(args, "max_tool_retries", 3)),
         )
@@ -95,6 +102,27 @@ def _run_remove(cwd: Path, session_id: str) -> None:
     else:
         print(f"Error: session '{session_id}' not found.")
         raise SystemExit(1)
+
+
+def _run_clear(cwd: Path, force: bool) -> None:
+    """Clear all saved sessions.
+
+    If --force/-f is not provided, prompts the user for confirmation.
+    Prints the number of sessions that were deleted.
+    """
+    store = SessionStore(cwd)
+    count = store.clear_all()
+    if count == 0:
+        print("No saved sessions to clear.")
+        return
+    if force:
+        print(f"All {count} saved session(s) have been cleared.")
+        return
+    answer = input(f"Are you sure you want to clear all {count} saved session(s)? [y/N] ").strip().lower()
+    if answer in ("y", "yes", "确认", "是"):
+        print(f"All {count} saved session(s) have been cleared.")
+    else:
+        print("Clear cancelled.")
 
 
 def _run_tui(

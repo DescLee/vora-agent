@@ -122,9 +122,15 @@ def tool_schema(name: str) -> dict[str, Any]:
                 "encoding": {"type": "string", "default": "utf-8"},
                 "max_bytes": {
                     "type": "integer",
-                    "description": "Maximum bytes to read.",
+                    "description": "Maximum bytes to read. When start_index is provided, this is the chunk length.",
                     "default": 1000000,
                     "minimum": 1,
+                },
+                "start_index": {
+                    "type": "integer",
+                    "description": "Optional zero-based byte offset. Use with max_bytes to read a slice of a large file.",
+                    "default": 0,
+                    "minimum": 0,
                 },
             },
             "required": ["path"],

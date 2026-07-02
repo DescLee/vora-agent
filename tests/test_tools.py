@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from manus_mini.tools.base import resolve_workspace_path
 from manus_mini.tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ToolRegistry, WriteFileTool
 
 
@@ -13,6 +14,31 @@ def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
 
     with pytest.raises(PermissionError):
         tool.run(workspace=tmp_path, path="../outside.txt")
+
+
+def test_resolve_workspace_path_allows_system_tmp(tmp_path: Path) -> None:
+    target = resolve_workspace_path(tmp_path, "/tmp/manus-mini-test.txt")
+
+    assert target.resolve().is_relative_to(Path("/tmp").resolve(strict=False))
+
+
+def test_write_file_allows_system_tmp_path(tmp_path: Path) -> None:
+    target = Path("/tmp") / "manus-mini-write-test.txt"
+    if target.exists():
+        target.unlink()
+
+    result = WriteFileTool().run(
+        workspace=tmp_path,
+        path=str(target),
+        content="hello",
+        confirmed=True,
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "hello"
+    assert result.written_path is not None
+    assert result.written_path.endswith("manus-mini-write-test.txt")
+    target.unlink()
 
 
 def test_list_files_returns_relative_paths(tmp_path: Path) -> None:
@@ -128,6 +154,30 @@ def test_read_file_rejects_oversized_files(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.error_code == "FILE_TOO_LARGE"
+
+
+def test_read_file_reads_slice_from_start_index(tmp_path: Path) -> None:
+    (tmp_path / "big.txt").write_text("0123456789abcdef", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="big.txt", start_index=5, max_bytes=4)
+
+    assert result.ok is True
+    assert result.content == "5678"
+    assert result.summary == "read big.txt from byte 5"
+    assert result.data["start_index"] == 5
+    assert result.data["bytes_read"] == 4
+    assert result.data["file_size"] == 16
+    assert result.data["truncated"] is True
+
+
+def test_read_file_rejects_start_index_beyond_file_size(tmp_path: Path) -> None:
+    (tmp_path / "small.txt").write_text("abc", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="small.txt", start_index=4)
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "start_index" in result.summary
 
 
 def test_write_file_preview_requires_confirmation(tmp_path: Path) -> None:

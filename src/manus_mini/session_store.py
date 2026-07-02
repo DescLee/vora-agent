@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,63 @@ class SessionStore:
             return False
         path.unlink()
         return True
+
+    def clear_all(self) -> int:
+        """Delete all saved sessions.
+
+        Returns the number of sessions that were deleted.
+        """
+        if not self.sessions_dir.exists():
+            return 0
+        count = 0
+        for path in self.sessions_dir.glob("*.json"):
+            path.unlink()
+            count += 1
+        return count
+
+    # ──────────────────────────────────────────────
+    #  Runs 同步清理
+    # ──────────────────────────────────────────────
+
+    def _runs_dir(self) -> Path:
+        """返回 runs 日志目录路径。"""
+        return self.cwd / "runs"
+
+    def delete_runs_for_session(self, session_id: str) -> int:
+        """删除 runs 目录下所有以指定 session_id 开头的子目录。
+
+        Args:
+            session_id: 会话 ID，例如 "session-abc123"
+
+        Returns:
+            删除的目录数量
+        """
+        runs_dir = self._runs_dir()
+        if not runs_dir.exists():
+            return 0
+        count = 0
+        prefix = f"{session_id}-"
+        for child in runs_dir.iterdir():
+            if child.is_dir() and child.name.startswith(prefix):
+                shutil.rmtree(child, ignore_errors=True)
+                count += 1
+        return count
+
+    def clear_all_runs(self) -> int:
+        """清空 runs 目录下所有子目录。
+
+        Returns:
+            删除的目录数量
+        """
+        runs_dir = self._runs_dir()
+        if not runs_dir.exists():
+            return 0
+        count = 0
+        for child in runs_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+                count += 1
+        return count
 
     def _summary(self, path: Path) -> SessionSummary:
         data = json.loads(path.read_text(encoding="utf-8"))

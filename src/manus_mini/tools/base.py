@@ -81,5 +81,21 @@ def resolve_workspace_path(workspace: Path, path: str | Path) -> Path:
     try:
         resolved.relative_to(workspace_root)
     except ValueError as exc:
+        # 系统临时目录允许作为受控例外，避免工具无法读写 /tmp 下的短期文件。
+        if _is_system_tmp_path(resolved):
+            return resolved
         raise PermissionError("PATH_OUT_OF_WORKSPACE") from exc
     return resolved
+
+
+def _is_system_tmp_path(path: Path) -> bool:
+    try:
+        return path.is_relative_to(Path("/tmp").expanduser().resolve(strict=False))
+    except AttributeError:
+        try:
+            path.relative_to(Path("/tmp").expanduser().resolve(strict=False))
+            return True
+        except ValueError:
+            return False
+    except ValueError:
+        return False

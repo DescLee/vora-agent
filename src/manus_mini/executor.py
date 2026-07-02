@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures import as_completed
+from difflib import unified_diff
+from pathlib import Path
 
 from manus_mini.models import PendingConfirmation, SessionState, TaskState, TraceEvent, ToolCall
 from manus_mini.tools.base import ToolPreview, ToolResult
@@ -11,6 +13,7 @@ from manus_mini.tools.registry import ToolRegistry
 
 RETRYABLE_TOOL_ERROR_CODES = {"TOOL_TIMEOUT", "TOOL_ERROR"}
 USER_CANCELLED_ERROR_CODE = "USER_CANCELLED"
+MAX_DIFF_PREVIEW_CHARS = 4000
 
 
 def sanitize_tool_args(args: dict) -> dict:
@@ -40,36 +43,9 @@ class Executor:
         requires_confirmation = bool(getattr(tool, "requires_confirmation", False))
         if self.dry_run or requires_confirmation:
             preview = tool.preview(**call.args)
-        if self.dry_run and preview is not None and preview.risk_level == "write":
-            session.pending_confirmation = PendingConfirmation(
-                tool_name=call.name,
-                tool_call_id=call.id,
-                tool_args=dict(call.args),
-                summary=preview.summary,
-                prompt=f"即将修改: {preview.summary}",
-            )
-            task.trace_events.append(
-                TraceEvent(
-                    phase="tool",
-                    message="Dry-run skipped write tool",
-                    data={
-                        "tool_call_id": call.id,
-                        "tool_name": call.name,
-                        "summary": preview.summary,
-                        "requires_confirmation": True,
-                        "dry_run": True,
-                    },
-                )
-            )
-            return ToolResult(tool_name=call.name, ok=False, summary=f"dry-run preview: {preview.summary}", error_code="DRY_RUN")
         if preview is not None and preview.requires_confirmation and "confirmed" not in call.args:
-            session.pending_confirmation = PendingConfirmation(
-                tool_name=call.name,
-                tool_call_id=call.id,
-                tool_args=dict(call.args),
-                summary=preview.summary,
-                prompt=f"即将修改: {preview.summary}",
-            )
+            pending = self._build_pending_confirmation(tool, call, preview, session)
+            session.pending_confirmation = pending
             task.trace_events.append(
                 TraceEvent(
                     phase="tool",
@@ -82,6 +58,10 @@ class Executor:
                     },
                 )
             )
+            if self.dry_run:
+                task.trace_events[-1].message = "Dry-run skipped write tool"
+                task.trace_events[-1].data["dry_run"] = True
+                return ToolResult(tool_name=call.name, ok=False, summary=f"dry-run preview: {preview.summary}", error_code="DRY_RUN")
             return ToolResult(
                 tool_name=call.name,
                 ok=False,
@@ -140,6 +120,53 @@ class Executor:
     def _cancelled_result(self, tool_name: str) -> ToolResult:
         return ToolResult(tool_name=tool_name, ok=False, summary="tool execution interrupted by user", error_code=USER_CANCELLED_ERROR_CODE)
 
+    def _build_pending_confirmation(
+        self,
+        tool,
+        call: ToolCall,
+        preview: ToolPreview,
+        session: SessionState,
+    ) -> PendingConfirmation:
+        diff_preview = self._build_diff_preview(tool.name, call.args, session.cwd)
+        return PendingConfirmation(
+            tool_name=call.name,
+            tool_call_id=call.id,
+            tool_args=dict(call.args),
+            summary=preview.summary,
+            prompt=f"即将修改: {preview.summary}",
+            diff_preview=diff_preview,
+        )
+
+    def _build_diff_preview(self, tool_name: str, args: dict, workspace: Path) -> str:
+        path = str(args.get("path", "")).strip()
+        if not path:
+            return ""
+        if tool_name == "make_directory":
+            return f"+ mkdir -p {path}\n"
+
+        target = (workspace / path).expanduser().resolve()
+        before = _read_text_preview(target)
+        if tool_name == "append_file":
+            after = before + str(args.get("content", ""))
+        else:
+            after = str(args.get("content", ""))
+
+        diff = "".join(
+            unified_diff(
+                _split_lines(before),
+                _split_lines(after),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+            )
+        )
+        if not diff:
+            diff = f"--- a/{path}\n+++ b/{path}\n"
+        if len(diff) <= MAX_DIFF_PREVIEW_CHARS:
+            return diff
+        truncated = diff[:MAX_DIFF_PREVIEW_CHARS]
+        remaining = len(diff) - MAX_DIFF_PREVIEW_CHARS
+        return f"{truncated}\n... [truncated {remaining} more char(s)]\n"
+
     def run_batch(self, batch: list[ToolCall], session: SessionState, task: TaskState) -> dict[str, ToolResult]:
         if len(batch) == 1:
             call = batch[0]
@@ -171,3 +198,16 @@ class Executor:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
         return results
+
+
+def _read_text_preview(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _split_lines(content: str) -> list[str]:
+    return content.splitlines(keepends=True) if content else []

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from manus_mini.context import estimate_context_usage
-from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, TraceEvent
+from manus_mini.models import LoopLimits, Message, Observation, PendingConfirmation, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.redaction import redact_sensitive_text
 from manus_mini.session import SessionManager
@@ -787,6 +788,31 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
     return fragments
 
 
+def style_confirmation_fragments(text: str) -> list[tuple[str, str]]:
+    fragments: list[tuple[str, str]] = []
+    in_diff = False
+    for line in text.splitlines(keepends=True):
+        bare_line = line.rstrip("\n")
+        if bare_line == "变更预览":
+            in_diff = True
+            fragments.append(("class:confirmation.body", line))
+            continue
+        if not in_diff:
+            fragments.append(("class:confirmation.body", line))
+            continue
+        if bare_line.startswith("+++") or bare_line.startswith("---"):
+            fragments.append(("class:confirmation.diff.header", line))
+        elif bare_line.startswith("+"):
+            fragments.append(("class:confirmation.diff.add", line))
+        elif bare_line.startswith("-"):
+            fragments.append(("class:confirmation.diff.remove", line))
+        else:
+            fragments.append(("class:confirmation.diff", line))
+    if not fragments:
+        fragments.append(("", ""))
+    return fragments
+
+
 class ScrollPositionBuffer:
     def __init__(self, view: "ScrollableOutputView") -> None:
         self.view = view
@@ -830,9 +856,16 @@ class ScrollableTextControl(FormattedTextControl):
 
 
 class ScrollableOutputView:
-    def __init__(self, text: str, style: str = "") -> None:
+    def __init__(
+        self,
+        text: str,
+        style: str = "",
+        height: Dimension | None = None,
+        fragment_styler: Callable[[str], list[tuple[str, str]]] = style_output_fragments,
+    ) -> None:
         self._text = text
         self._rendered_text = text
+        self.fragment_styler = fragment_styler
         self.display_line_starts = build_line_starts(text)
         self.display_width: int | None = None
         self.scroll_top = 0
@@ -842,6 +875,7 @@ class ScrollableOutputView:
         self.control = ScrollableTextControl(self)
         self.window = Window(
             content=self.control,
+            height=height,
             wrap_lines=False,
             always_hide_cursor=True,
             right_margins=[ScrollbarMargin(display_arrows=True)],
@@ -897,7 +931,7 @@ class ScrollableOutputView:
 
     def get_rendered_fragments(self) -> list[tuple[str, str]]:
         self.ensure_render_cache()
-        return style_output_fragments(self._rendered_text)
+        return self.fragment_styler(self._rendered_text)
 
     def get_cursor_position(self) -> Point:
         self.ensure_render_cache()
@@ -974,8 +1008,9 @@ class PromptTui:
         self.visible_trace_count = 0
         self.trace_reveal_batch_size = 3
         self.follow_output = True
-        self.confirmation_selection = 0
         self.confirmation_in_progress = False
+        self.confirmation_scroll_batch_size = 5
+        self.confirmation_render_signature: tuple[str, str, str, str, bool] | None = None
         initial_output = (
             format_transcript(self.manager.current, show_process=False)
             if initial_session is not None and initial_session.messages
@@ -986,6 +1021,13 @@ class PromptTui:
         self.output_display_line_starts = self.output_line_starts
         self.output = ScrollableOutputView(initial_output, style="class:panel")
         self.output.scroll_to_end()
+        self.confirmation_panel_view = ScrollableOutputView(
+            "",
+            style="class:confirmation",
+            height=Dimension(preferred=10, max=14),
+            fragment_styler=style_confirmation_fragments,
+        )
+        self.refresh_confirmation_panel()
         self.messages = self.output
         self.artifact = self.output
         self.input = TextArea(
@@ -1002,9 +1044,8 @@ class PromptTui:
         install_shift_enter_mapping()
         key_bindings = KeyBindings()
         input_focused = has_focus(self.input)
-        confirmation_active = Condition(
-            lambda: self.manager.current.pending_confirmation is not None and not self.confirmation_in_progress
-        )
+        confirmation_visible = Condition(self.should_show_confirmation_overlay)
+        confirmation_active = Condition(self.should_accept_confirmation_input)
 
         @key_bindings.add("enter", filter=input_focused & ~confirmation_active)
         def _send_message(_) -> None:
@@ -1024,11 +1065,11 @@ class PromptTui:
 
         @key_bindings.add("up", filter=confirmation_active)
         def _confirmation_up(_) -> None:
-            self.move_confirmation_selection(-1)
+            self.scroll_confirmation(-self.confirmation_scroll_batch_size)
 
         @key_bindings.add("down", filter=confirmation_active)
         def _confirmation_down(_) -> None:
-            self.move_confirmation_selection(1)
+            self.scroll_confirmation(self.confirmation_scroll_batch_size)
 
         @key_bindings.add("c-c")
         def _exit(event) -> None:
@@ -1084,8 +1125,8 @@ class PromptTui:
             floats=[
                 Float(
                     content=ConditionalContainer(
-                        Frame(self.confirmation_panel, title="文件修改确认"),
-                        filter=confirmation_active,
+                        Frame(self.confirmation_panel_view, title="文件修改确认"),
+                        filter=confirmation_visible,
                     ),
                     bottom=1,
                     left=2,
@@ -1104,8 +1145,10 @@ class PromptTui:
                 "confirmation": "bg:#1f2933 #f3f0e8",
                 "confirmation.title": "bold #f3f0e8",
                 "confirmation.body": "#d7dedb",
-                "confirmation.option": "#d7dedb",
-                "confirmation.option.selected": "bold reverse #f3f0e8",
+                "confirmation.diff": "#d7dedb",
+                "confirmation.diff.header": "#8fa19c",
+                "confirmation.diff.add": "#6ee7a8",
+                "confirmation.diff.remove": "#f87171",
                 "confirmation.hint": "#8fa19c",
             }
         )
@@ -1141,8 +1184,8 @@ class PromptTui:
             return
         self.confirmation_in_progress = True
         self.is_running = True
-        self.confirmation_selection = 0
         self.status.text = format_status(self.manager.current, is_running=True)
+        self.refresh_confirmation_panel(force=True)
         self.app.layout.focus(self.input)
         self.app.invalidate()
         self.start_agent_turn("确认", confirmation_turn=True)
@@ -1152,16 +1195,24 @@ class PromptTui:
             return
         self.manager.current = self.manager.reject_pending_confirmation()
         self.manager._save_current(self.manager.current)
-        self.confirmation_selection = 0
+        self.refresh_confirmation_panel()
         self.status.text = format_status(self.manager.current)
         self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
         self.app.layout.focus(self.input)
         self.app.invalidate()
 
-    def move_confirmation_selection(self, delta: int) -> None:
+    def should_show_confirmation_overlay(self) -> bool:
+        if self.manager.current.pending_confirmation is None:
+            return False
+        return True
+
+    def should_accept_confirmation_input(self) -> bool:
+        return self.manager.current.pending_confirmation is not None and not self.confirmation_in_progress
+
+    def scroll_confirmation(self, line_delta: int) -> None:
         if self.manager.current.pending_confirmation is None:
             return
-        self.confirmation_selection = (self.confirmation_selection + delta) % 2
+        self.confirmation_panel_view.scroll(line_delta)
         self.app.invalidate()
 
     def start_agent_turn(self, content: str, confirmation_turn: bool = False) -> None:
@@ -1170,11 +1221,13 @@ class PromptTui:
 
     async def poll_runtime_progress(self) -> None:
         while self.is_running:
+            self.refresh_confirmation_panel()
             if not self.is_streaming_artifact:
                 self.render_progress()
             await asyncio.sleep(0.2)
 
     def render_progress(self) -> None:
+        self.refresh_confirmation_panel()
         if not self.is_output_at_bottom():
             return
 
@@ -1204,6 +1257,8 @@ class PromptTui:
             raise RuntimeError("runtime returned no active task")
         self.is_streaming_artifact = True
         self.status.text = format_status(session)
+        if session.pending_confirmation is not None:
+            self.refresh_confirmation_panel(session.pending_confirmation)
         self.app.layout.focus(self.input)
         result = session.active_task.result
         visible = ""
@@ -1229,31 +1284,58 @@ class PromptTui:
         self.app.layout.focus(self.input)
         self.app.invalidate()
 
-    def get_confirmation_fragments(self) -> list[tuple[str, str]]:
-        pending = self.manager.current.pending_confirmation
+    def refresh_confirmation_panel(self, pending: PendingConfirmation | None = None, force: bool = False) -> None:
         if pending is None:
-            return [("", "")]
-        selected = self.confirmation_selection
+            pending = self.manager.current.pending_confirmation
+        if pending is None:
+            self.confirmation_render_signature = None
+            self.confirmation_panel_view.set_text("", follow_bottom=False)
+            return
+        signature = self.confirmation_signature(pending)
+        if not force and signature == self.confirmation_render_signature:
+            return
+        self.confirmation_render_signature = signature
+        text = self.format_confirmation_text(pending)
+        self.confirmation_panel_view.set_text(text, follow_bottom=False)
+        self.confirmation_panel_view.scroll_to_start()
+
+    def confirmation_signature(self, pending: PendingConfirmation) -> tuple[str, str, str, str, bool]:
+        return (
+            pending.tool_name,
+            pending.tool_call_id,
+            pending.prompt or pending.summary,
+            pending.diff_preview or "",
+            self.confirmation_in_progress,
+        )
+
+    def format_confirmation_text(self, pending: PendingConfirmation) -> str:
         title = pending.prompt or pending.summary or "即将修改文件"
-        body_lines = [
-            ("class:confirmation.title", "确认写入\n"),
-            ("class:confirmation.body", f"{title}\n"),
-            ("class:confirmation.body", f"工具：{pending.tool_name}\n" if pending.tool_name else ""),
-            ("class:confirmation.option.selected" if selected == 0 else "class:confirmation.option", "▶ 确认\n"),
-            ("class:confirmation.option.selected" if selected == 1 else "class:confirmation.option", "▶ 拒绝\n"),
-            ("class:confirmation.hint", "↑/↓ 选择，Enter 确认，Esc 拒绝"),
+        if self.confirmation_in_progress:
+            return "\n".join(
+                [
+                    "确认写入",
+                    "",
+                    title,
+                    "",
+                    "已确认，正在执行写入和后续流程...",
+                ]
+            )
+        diff_preview = (pending.diff_preview or "").strip()
+        lines = [
+            "确认写入",
+            "",
+            title,
         ]
-        return [fragment for fragment in body_lines if fragment[1]]
+        if pending.tool_name:
+            lines.append(f"工具：{pending.tool_name}")
+        if diff_preview:
+            lines.extend(["", "变更预览", "", diff_preview])
+        lines.extend(["", "↑/↓ 滚动预览，Enter 确认，Esc 拒绝"])
+        return "\n".join(lines).strip()
 
     @property
     def confirmation_panel(self) -> Window:
-        return Window(
-            content=FormattedTextControl(self.get_confirmation_fragments),
-            height=Dimension(preferred=5, max=6),
-            wrap_lines=True,
-            always_hide_cursor=True,
-            style="class:confirmation",
-        )
+        return self.confirmation_panel_view.window
 
     async def run_agent_turn(self, content: str, confirmation_turn: bool = False) -> None:
         try:
@@ -1272,6 +1354,7 @@ class PromptTui:
         finally:
             if confirmation_turn:
                 self.confirmation_in_progress = False
+                self.refresh_confirmation_panel()
                 self.status.text = format_status(self.manager.current, is_running=self.is_running)
                 self.app.invalidate()
 

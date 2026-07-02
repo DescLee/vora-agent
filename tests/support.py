@@ -22,9 +22,11 @@ class ScriptedLLM:
             if getattr(message, "role", "") == "tool"
         )
 
-        chat_mode = any(keyword in system_text for keyword in ["本地终端里的中文助手", "闲聊", "问候", "轻量问题"])
+        chat_mode = any(keyword in system_text for keyword in ["对于闲聊", "名字和自我介绍类轻量问题"])
         if chat_mode:
-            if any(keyword in user_text for keyword in ["你好", "您好", "hello", "hi"]):
+            if any(keyword in user_text for keyword in ["你的名字", "你叫什么", "你是谁"]):
+                content = "我叫 manus-mini，是你的个人助理。"
+            elif any(keyword in user_text for keyword in ["你好", "您好", "hello", "hi"]):
                 content = "你好，我在。你可以继续说你的问题。"
             elif any(keyword in user_text for keyword in ["能力", "可以", "会不会", "能不能", "是否"]):
                 content = "我可以帮你分析当前上下文、解释命令、整理思路，也可以在需要时调用项目工具。"

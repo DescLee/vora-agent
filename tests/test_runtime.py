@@ -4,8 +4,6 @@ import re
 import tempfile
 from time import perf_counter, sleep
 
-import pytest
-
 from manus_mini.llm import LLMResult
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop, format_tool_result_message
@@ -90,6 +88,43 @@ def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
     assert result.messages[-1].content == "LLM chat reply"
 
 
+def test_runtime_identity_question_uses_manus_mini_system_identity(tmp_path: Path) -> None:
+    class IdentityLLM:
+        def __init__(self) -> None:
+            self.system_prompts = []
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.tool_names.append(list(tool_names))
+            self.system_prompts.extend(message.content for message in messages if message.role == "system")
+            return LLMResult(content="我叫 manus-mini，是你的个人助理。")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = IdentityLLM()
+
+    result = runtime.on_user_message("你的名字是啥", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.active_task.plan[0].intent == "chat"
+    assert runtime.react_loop.llm.tool_names[0] == []
+    assert any("你叫 manus-mini" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("个人助理" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert "manus-mini" in result.messages[-1].content
+
+
+def test_runtime_scripted_llm_answers_identity_question_with_manus_mini(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+
+    result = runtime.on_user_message("你的名字是啥", session)
+
+    assert result.active_task is not None
+    assert result.active_task.plan[0].intent == "chat"
+    assert "manus-mini" in result.messages[-1].content
+
+
 def test_runtime_cli_usage_error_passes_through_reflection(tmp_path: Path) -> None:
     class CliIssueLLM:
         def __init__(self) -> None:
@@ -136,7 +171,37 @@ def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
     assert runtime.memory_manager.search("manus-mini", limit=5)
 
 
-def test_runtime_injects_project_code_overview_before_project_requests(tmp_path: Path) -> None:
+def test_runtime_project_question_does_not_become_chat_only_when_planner_mislabels_intent(tmp_path: Path) -> None:
+    class BadPlanner:
+        def build_plan(self, goal, session):  # noqa: ANN001, ANN201, ARG002
+            from manus_mini.models import PlanStep
+
+            return [PlanStep(description="读取 README.md 了解项目概述", intent="chat")]
+
+    class InspectingLLM:
+        def __init__(self) -> None:
+            self.tool_names = []
+            self.system_prompts = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.tool_names.append(list(tool_names))
+            self.system_prompts.extend(message.content for message in messages if message.role == "system")
+            return LLMResult(content="这是当前工作目录里的项目。")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.planner = BadPlanner()
+    runtime.react_loop.llm = InspectingLLM()
+
+    result = runtime.on_user_message("这个项目是做什么的，简单的说，越简单越好", session)
+
+    assert result.active_task is not None
+    assert runtime.react_loop.llm.tool_names[0]
+    assert any("用户说“当前项目”“这个项目”“这个工程”时，指的就是当前工作目录" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert "当前工作目录里的项目" in result.messages[-1].content
+
+
+def test_runtime_sends_project_code_overview_to_planner_before_project_requests(tmp_path: Path) -> None:
     class OverviewAwareLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -144,11 +209,14 @@ def test_runtime_injects_project_code_overview_before_project_requests(tmp_path:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             self.calls += 1
             if self.calls == 1:
+                assert tool_names == []
                 system_messages = [message for message in messages if message.role == "system"]
+                assert any("你叫 manus-mini" in message.content for message in system_messages)
                 assert any("项目代码目录结构" in message.content for message in system_messages)
                 assert any("src/：核心实现代码" in message.content for message in system_messages)
-                return LLMResult(content="已了解目录结构，先看 README。")
-            return LLMResult(content="done")
+                assert any("工具使用要克制" in message.content for message in system_messages)
+                return LLMResult(content="1. 基于目录结构判断关键文件 | research")
+            return LLMResult(content="已了解目录结构，先看 README。")
 
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "src").mkdir()
@@ -160,8 +228,7 @@ def test_runtime_injects_project_code_overview_before_project_requests(tmp_path:
     (tmp_path / "tests" / "test_runtime.py").write_text("def test_x(): pass", encoding="utf-8")
 
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(llm=ScriptedLLM())
-    runtime.react_loop.llm = OverviewAwareLLM()
+    runtime = AgentRuntime(llm=OverviewAwareLLM())
 
     result = runtime.on_user_message("请你看下当前项目代码结构，先帮我判断应该看哪些文件", session)
 
@@ -426,6 +493,42 @@ def test_react_loop_rejects_tool_calls_beyond_iteration_budget(tmp_path: Path) -
     assert task.observations[-1].summary == "tool call rejected by iteration budget"
 
 
+def test_react_loop_allows_five_read_files_in_one_iteration(tmp_path: Path) -> None:
+    class FiveReadFilesLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id=f"call-read-{index}", name="read_file", args={"path": f"file-{index}.txt"})
+                        for index in range(5)
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert len(tool_messages) == 5
+            assert all("TOOL_CALL_BUDGET_EXCEEDED" not in message.content for message in tool_messages)
+            return LLMResult(content="all reads handled")
+
+    for index in range(5):
+        (tmp_path / f"file-{index}.txt").write_text(f"content {index}", encoding="utf-8")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(
+        goal="读取多个文件",
+        cwd=tmp_path,
+        limits=LoopLimits(max_tool_calls_per_iteration=5),
+    )
+
+    result = ReActLoop(FiveReadFilesLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "all reads handled"
+    assert len(task.observations) == 5
+    assert all(observation.ok for observation in task.observations)
+
+
 def test_react_loop_limits_overview_task_to_project_entry_files(tmp_path: Path) -> None:
     class OverviewLLM:
         def __init__(self) -> None:
@@ -503,6 +606,100 @@ def test_react_loop_normalizes_empty_and_duplicate_tool_call_ids(tmp_path: Path)
     result = ReActLoop(DuplicateToolIdLLM(), ToolRegistry()).run(task, session)
 
     assert result == "ok"
+
+
+def test_react_loop_skips_duplicate_successful_read_file_calls(tmp_path: Path) -> None:
+    class RepeatingReadLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-read-1", name="read_file", args={"path": "README.md"})])
+            if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-read-2", name="read_file", args={"path": "README.md"})])
+            return LLMResult(content="ok")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="重复读取 README", cwd=tmp_path)
+
+    result = ReActLoop(RepeatingReadLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert [event.data.get("summary") for event in read_events] == [
+        "read README.md",
+        "read_file skipped: already read README.md",
+    ]
+    assert read_events[1].data.get("deduplicated") is True
+    assert task.observations[-1].content == "# demo"
+
+
+def test_react_loop_skips_duplicate_read_file_calls_in_same_iteration(tmp_path: Path) -> None:
+    class DuplicateReadInSameIterationLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id="call-read-1", name="read_file", args={"path": "README.md"}),
+                        ToolCall(id="call-read-2", name="read_file", args={"path": "README.md"}),
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="重复读取 README", cwd=tmp_path)
+
+    result = ReActLoop(DuplicateReadInSameIterationLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert [event.data.get("summary") for event in read_events] == [
+        "read README.md",
+        "read_file skipped: duplicate request in current iteration README.md",
+    ]
+    assert read_events[1].data.get("deduplicated") is True
+
+
+def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) -> None:
+    class RetryReadLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-small", name="read_file", args={"path": "README.md", "max_bytes": 1})])
+            if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-large", name="read_file", args={"path": "README.md", "max_bytes": 20})])
+            return LLMResult(content="ok")
+
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取 README", cwd=tmp_path)
+
+    result = ReActLoop(RetryReadLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert [event.data.get("error_code") for event in read_events] == ["FILE_TOO_LARGE", None]
+    assert read_events[1].data.get("summary") == "read README.md"
 
 
 def test_react_loop_retries_transient_tool_failure(tmp_path: Path) -> None:
@@ -744,6 +941,9 @@ def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
     assert not (tmp_path / "helloworld.py").exists()
     assert session.active_task.observations[-1].summary.startswith("dry-run preview")
     assert any(event.data.get("dry_run") is True for event in session.active_task.trace_events)
+    assert session.pending_confirmation is not None
+    assert "--- a/helloworld.py" in session.pending_confirmation.diff_preview
+    assert "+++ b/helloworld.py" in session.pending_confirmation.diff_preview
 
 
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:
@@ -1037,15 +1237,30 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     response_rows = [row for row in rows if row.get("type") == "llm_response"]
     assert request_rows
     assert response_rows
-    assert request_rows[0]["request"]["messages"]
-    assert request_rows[0]["request"]["tool_names"]
-    assert response_rows[0]["request"]["messages"]
-    assert "response" in response_rows[0]
+    planner_request = next(row for row in request_rows if row.get("stage") == "planner")
+    planner_response = next(row for row in response_rows if row.get("stage") == "planner")
+    react_request = next(row for row in request_rows if row.get("stage") == "react")
+    react_response = next(row for row in response_rows if row.get("stage") == "react")
+    assert planner_request["request"]["messages"]
+    assert planner_request["request"]["tool_names"] == []
+    assert "api_request_payload" in planner_request
+    assert planner_response["api_request_payload"]
+    assert "api_response_raw" in planner_response
+    assert react_request["request"]["messages"]
+    assert react_request["request"]["tool_names"]
+    assert "api_request_payload" in react_request
+    assert react_response["api_request_payload"]
+    assert "api_response_raw" in react_response
     reflection_rows = [row for row in rows if row.get("type") == "reflection"]
     assert reflection_rows
     assert "decision" in reflection_rows[0]
     assert "reason" in reflection_rows[0]
     assert "draft_preview" in reflection_rows[0]
+    assert "draft" in reflection_rows[0]
+    assert "reflection_context" in reflection_rows[0]
+    assert "user_goal" in reflection_rows[0]["reflection_context"]
+    assert "plan" in reflection_rows[0]["reflection_context"]
+    assert "observations" in reflection_rows[0]["reflection_context"]
 
 
 def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
@@ -1135,7 +1350,7 @@ def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path:
     assert result.active_task is not None
     log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-    request_rows = [row for row in rows if row.get("type") == "llm_request"]
+    request_rows = [row for row in rows if row.get("type") == "llm_request" and row.get("stage") == "react"]
     assert request_rows
     payload_messages = request_rows[-1]["request"]["messages"]
     assert any(message["role"] == "tool" for message in payload_messages)

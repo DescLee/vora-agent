@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from inspect import signature
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -9,10 +10,7 @@ from time import monotonic
 from manus_mini.logging import EventLogger
 from manus_mini.context import (
     build_context_bundle,
-    build_project_code_overview,
     estimate_session_context_usage,
-    PROJECT_OVERVIEW_HINT,
-    should_include_project_code_overview,
 )
 from manus_mini.models import AgentError, Artifact, LoopLimits, Message, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
@@ -45,8 +43,8 @@ class AgentRuntime:
         self.default_limits = default_limits or LoopLimits()
         self.logger = logger or EventLogger(Path("runs"))
         self.react_loop = ReActLoop(llm=llm, dry_run=dry_run, logger=self.logger)
-        self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, logger=self.logger)
-        self.planner = Planner(llm=llm)
+        self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, llm=llm, logger=self.logger)
+        self.planner = Planner(llm=llm, logger=self.logger)
         self.reporter = reporter or Reporter(self._default_reporter_output_dir())
         self.dry_run = dry_run
         self.memory_manager = memory_manager or MemoryManager(":memory:")
@@ -62,8 +60,6 @@ class AgentRuntime:
         session: SessionState,
         append_user_message: bool = True,
     ) -> SessionState:
-        if append_user_message and should_include_project_code_overview(content):
-            self._refresh_project_code_overview(session)
         if append_user_message:
             session.messages.append(Message.user(content))
         if session.active_task is not None and session.active_task.result:
@@ -81,7 +77,7 @@ class AgentRuntime:
         model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
         task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
         self._build_context_bundle(session, content, relevant_memories)
-        task.plan = self.planner.build_plan(content, session)
+        task.plan = self._build_plan(content, session, task.run_id)
         task.trace_events.append(
             TraceEvent(
                 phase="runtime",
@@ -194,7 +190,7 @@ class AgentRuntime:
                         task.status = "done"
                         break
                     if reflection.decision == "replan":
-                        task.plan = self.planner.build_plan(f"{content}\n{reflection.reason}", session)
+                        task.plan = self._build_plan(f"{content}\n{reflection.reason}", session, task.run_id)
                         self._mark_plan_running(task)
                         task.trace_events.append(
                             TraceEvent(
@@ -272,6 +268,12 @@ class AgentRuntime:
             if step.status != "skipped":
                 step.status = "done"
 
+    def _build_plan(self, content: str, session: SessionState, run_id: str):
+        build_plan = self.planner.build_plan
+        if "run_id" in signature(build_plan).parameters:
+            return build_plan(content, session, run_id=run_id)
+        return build_plan(content, session)
+
     def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
         if self.memory_manager is None:
             return []
@@ -341,17 +343,6 @@ class AgentRuntime:
                 "recent_observations": len(bundle.recent_observations),
             },
         )
-
-    def _refresh_project_code_overview(self, session: SessionState) -> None:
-        overview = build_project_code_overview(session.cwd)
-        session.messages = [
-            message
-            for message in session.messages
-            if message.metadata.get("context_hint") != PROJECT_OVERVIEW_HINT
-        ]
-        overview_message = Message.system(overview)
-        overview_message.metadata["context_hint"] = PROJECT_OVERVIEW_HINT
-        session.messages.append(overview_message)
 
     def _runtime_exceeded(self, started_at: float, max_runtime_seconds: int) -> bool:
         return monotonic() - started_at > max_runtime_seconds

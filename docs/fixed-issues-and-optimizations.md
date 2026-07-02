@@ -1,6 +1,6 @@
 # Manus Mini 已修复问题与优化记录
 
-更新时间：2026-07-01
+更新时间：2026-07-02
 
 本文用于记录 Manus Mini 第一版开发过程中已经修复的问题和完成的体验优化。每条记录包含现象、根因、处理方式和验证方式，方便后续复盘、面试讲解和继续迭代。
 
@@ -405,6 +405,15 @@
   - IDE/本地运行产物：`.idea`、`.vscode`、`runs`、`outputs`、`.manus-mini`。
 - 验证：测试覆盖无 `.gitignore` 时 Java/JS/Go/Python 等依赖和构建目录会被过滤。
 
+### 6.6 系统 `/tmp` 临时目录被误判为越界路径
+
+- 现象：某些工具在处理系统临时目录下的绝对路径时，会被统一的 `PATH_OUT_OF_WORKSPACE` 检查拦截，导致无法正常读写 `/tmp` 下的临时文件。
+- 根因：路径校验只允许 workspace 内路径，没有把系统临时目录作为明确例外。
+- 修复：
+  - `resolve_workspace_path()` 允许系统 `/tmp` 目录作为例外放行。
+  - 文件工具在展示 `written_path` 和目录结果时，对 workspace 外但被允许的路径保留绝对路径，避免再次依赖相对路径转换。
+- 验证：测试覆盖 `/tmp` 绝对路径的解析和写入，确认仍然保留 workspace 边界保护，但允许系统临时目录。
+
 ## 7. LLM 兼容与配置
 
 ### 7.1 增加 `.env` 配置
@@ -654,13 +663,57 @@
   - 该摘要会在会话内刷新，只保留最新一份，避免重复堆积。
 - 验证：测试覆盖项目请求时会注入目录结构摘要，且摘要中包含 `src/`、`docs/`、`tests/` 等关键目录说明。
 
+### 9.15 Reflection 改为 LLM 审查
+
+- 现象：Reflection 之前主要依赖硬编码规则，遇到“当前项目是什么”这类问题时，如果草稿错误地要求用户再提供项目描述、链接或代码，规则不一定能兜住。
+- 根因：规则型 `Reflector` 只能匹配固定关键词，缺少对用户目标、执行计划、工具观察和当前项目上下文的综合判断。
+- 修复：
+  - `ReflectionLoop` 优先调用 LLM 进行反思审查。
+  - Reflection prompt 包含用户目标、当前工作目录、执行计划、最近工具观察、项目目录结构和待审查草稿。
+  - LLM 必须返回结构化 JSON：`accept`、`local_update`、`regenerate` 或 `replan`。
+  - 原规则 `Reflector` 保留为 LLM 不可用、返回非法 JSON 或异常时的兜底。
+- 验证：测试覆盖 Reflection 会调用 LLM 并使用 LLM 返回的决策和原因。
+
+### 9.16 Reflection 请求、响应和审查上下文完整落日志
+
+- 现象：日志里只能看到 reflection 的 `decision`、`reason` 和 `draft_preview`，排查时不知道反思到底看了哪些上下文。
+- 修复：
+  - `llm_request` / `llm_response` 增加 `stage=reflection`，记录实际发给模型的 reflection API 请求参数和原始响应。
+  - `reflection` 事件增加完整 `draft`。
+  - `reflection` 事件增加 `reflection_context`，包含用户目标、工作目录、任务状态、执行计划、工具观察和错误列表。
+- 验证：测试覆盖 reflection 日志中包含完整草稿和结构化上下文。
+
+### 9.17 read_file 重复调用去重
+
+- 现象：ReAct 多轮中 LLM 会反复请求读取同一个文件；有时同一轮也可能返回多个相同 `read_file` 调用，导致过程噪声增加、上下文膨胀和不必要的文件读取。
+- 根因：
+  - Prompt 里只有“避免重复读取”的软约束。
+  - 调度器只按依赖和风险分批，不识别 `read_file(path, encoding)` 的语义重复。
+- 修复：
+  - 跨轮去重：如果同一路径和编码的 `read_file` 已经成功读取过，后续同样调用不再执行真实工具，直接返回“已复用历史读取结果”。
+  - 同轮去重：如果 LLM 一次返回多个相同 `read_file(path, encoding)`，后续重复调用直接跳过。
+  - 保留合理重试：如果之前读取失败，例如 `FILE_TOO_LARGE`，允许 LLM 调整 `max_bytes` 后再次读取。
+  - 去重结果仍按 tool message 返回，保证 assistant tool_calls 与 tool result 的连续性不被破坏。
+- 验证：测试覆盖跨轮成功读取去重、同轮重复读取去重，以及 `FILE_TOO_LARGE` 后扩大 `max_bytes` 的重试路径。
+
+### 9.18 read_file 支持按偏移分片读取
+
+- 现象：读取较大文件时，如果文件大小超过 `max_bytes`，工具只能返回 `FILE_TOO_LARGE`，LLM 无法按片段继续查看文件后续内容。
+- 修复：
+  - `read_file` 增加 `start_index` 参数，表示从文件第几个字节开始读取。
+  - `max_bytes` 在传入 `start_index` 时作为本次分片读取长度。
+  - 返回结果增加 `start_index`、`bytes_read`、`file_size` 和 `truncated` 元数据，方便 LLM 判断是否继续读取下一段。
+  - LLM tool schema 同步暴露 `start_index`，让模型知道可以分片读取大文件。
+  - `read_file` 去重 key 纳入 `start_index/max_bytes`，避免不同分片被误判为重复读取。
+- 验证：测试覆盖从指定偏移读取指定长度、偏移超出文件大小报错，以及分片读取不破坏重复读取去重。
+
 ## 10. 当前验证基线
 
 最近一次完整验证：
 
 ```bash
 pytest -q
-# 174 passed
+# 220 passed
 
 ruff check src tests
 # All checks passed!

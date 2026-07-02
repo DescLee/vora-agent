@@ -2,7 +2,6 @@ from pathlib import Path
 
 from manus_mini.cli import main
 from manus_mini.models import Message, SessionState
-from manus_mini.session import SessionManager
 from manus_mini.session_store import SessionStore
 
 

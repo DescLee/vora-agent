@@ -95,7 +95,7 @@ class ListFilesTool(BaseTool):
                 and not is_gitignored(item, workspace_root, gitignore_rules)
             ]
 
-        paths = [item.resolve().relative_to(workspace_root).as_posix() for item in files]
+        paths = [_display_path(item, workspace_root) for item in files]
         truncated = len(paths) > limit
         visible_paths = paths[:limit]
         return ToolResult(
@@ -110,7 +110,7 @@ class ListFilesTool(BaseTool):
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path", ".")
         root = resolve_workspace_path(workspace, path)
-        return [root.resolve().relative_to(workspace.expanduser().resolve()).as_posix()]
+        return [_display_path(root, workspace.expanduser().resolve())]
 
 
 class ReadFileTool(BaseTool):
@@ -144,6 +144,48 @@ class ReadFileTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary="not a file", error_code="INVALID_TOOL_PARAMS")
         max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_READ_BYTES)
         size = target.stat().st_size
+        has_start_index = "start_index" in kwargs
+        start_index = _non_negative_int(kwargs.get("start_index"), 0)
+        if has_start_index and start_index > size:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"start_index {start_index} exceeds file size {size} bytes",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+        if has_start_index:
+            with target.open("rb") as handle:
+                handle.seek(start_index)
+                raw = handle.read(max_bytes)
+            if _looks_binary(raw):
+                return ToolResult(
+                    tool_name=self.name,
+                    ok=False,
+                    summary="binary file is not supported",
+                    error_code="BINARY_FILE_UNSUPPORTED",
+                )
+            encoding = kwargs.get("encoding", "utf-8")
+            try:
+                content = raw.decode(encoding)
+            except UnicodeDecodeError as error:
+                return ToolResult(
+                    tool_name=self.name,
+                    ok=False,
+                    summary=f"decode failed with {encoding}: {error}",
+                    error_code="DECODE_ERROR",
+                )
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary=f"read {path} from byte {start_index}",
+                content=content,
+                data={
+                    "start_index": start_index,
+                    "bytes_read": len(raw),
+                    "file_size": size,
+                    "truncated": start_index + len(raw) < size,
+                },
+            )
         if size > max_bytes:
             return ToolResult(
                 tool_name=self.name,
@@ -182,7 +224,7 @@ class ReadFileTool(BaseTool):
         if not path:
             return []
         target = resolve_workspace_path(workspace, path)
-        return [target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()]
+        return [_display_path(target, workspace.expanduser().resolve())]
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -191,6 +233,14 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _non_negative_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _is_noise_path(path: Path, root: Path) -> bool:
@@ -284,6 +334,14 @@ def _preview_existing_text(target: Path, limit: int = 160) -> str:
     return compact[: limit - 1] + "…"
 
 
+def _display_path(path: Path, workspace_root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(workspace_root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 class WriteFileTool(BaseTool):
     name = "write_file"
     description = "Write a file inside the workspace."
@@ -321,7 +379,8 @@ class WriteFileTool(BaseTool):
             raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
 
         target = resolve_workspace_path(workspace, path)
-        relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        workspace_root = workspace.expanduser().resolve()
+        relative_path = _display_path(target, workspace_root)
         previous_preview = _preview_existing_text(target)
         if _is_protected_write_path(Path(relative_path)):
             return ToolResult(
@@ -355,7 +414,7 @@ class WriteFileTool(BaseTool):
         if not path:
             return []
         target = resolve_workspace_path(workspace, path)
-        return [target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()]
+        return [_display_path(target, workspace.expanduser().resolve())]
 
 
 class AppendFileTool(BaseTool):
@@ -381,7 +440,8 @@ class AppendFileTool(BaseTool):
             raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
 
         target = resolve_workspace_path(workspace, path)
-        relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        workspace_root = workspace.expanduser().resolve()
+        relative_path = _display_path(target, workspace_root)
         previous_preview = _preview_existing_text(target)
         if _is_protected_write_path(Path(relative_path)):
             return ToolResult(tool_name=self.name, ok=False, summary=f"protected write target: {relative_path}", error_code="PROTECTED_PATH")
@@ -420,7 +480,8 @@ class MakeDirectoryTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
         target = resolve_workspace_path(workspace, path)
         target.mkdir(parents=True, exist_ok=True)
-        relative_path = target.resolve().relative_to(workspace.expanduser().resolve()).as_posix()
+        workspace_root = workspace.expanduser().resolve()
+        relative_path = _display_path(target, workspace_root)
         return ToolResult(tool_name=self.name, ok=True, summary=f"created directory {path}", written_path=relative_path)
 
 

@@ -212,6 +212,8 @@ class ReActLoop:
         return self._force_final_answer(messages, task, session)
 
     def _is_chat_only_task(self, task: TaskState) -> bool:
+        if _goal_mentions_current_project(task.goal):
+            return False
         return bool(task.plan) and all(step.intent == "chat" for step in task.plan)
 
     def _record_llm_usage(self, task: TaskState, llm_result: LLMResult) -> None:
@@ -266,6 +268,9 @@ class ReActLoop:
             "summary": tool_result.summary,
             "error_code": tool_result.error_code,
         }
+        if tool_result.data.get("deduplicated"):
+            data["deduplicated"] = True
+            data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
         if call.name == "read_file" and tool_result.ok:
             data["content_omitted"] = True
             return data
@@ -328,20 +333,27 @@ class ReActLoop:
                     task.run_id,
                     {
                         "type": "llm_request",
+                        "stage": "react",
                         "iteration": len([event for event in task.trace_events if event.phase == "react"]),
                         "request": request_payload,
+                        "api_request_payload": request_payload,
                     },
                 )
             result = self._resolve_llm().complete_with_tools(messages, resolved_tool_names)
+            api_request_payload = result.source_request or request_payload
+            api_response_raw = result.source_response or result.model_dump(mode="json")
             if self.logger is not None:
                 self.logger.record(
                     session_id,
                     task.run_id,
                     {
                         "type": "llm_response",
+                        "stage": "react",
                         "iteration": len([event for event in task.trace_events if event.phase == "react"]),
-                        "request": result.source_request or request_payload,
-                        "response": result.source_response or result.model_dump(mode="json"),
+                        "request": api_request_payload,
+                        "response": api_response_raw,
+                        "api_request_payload": api_request_payload,
+                        "api_response_raw": api_response_raw,
                     },
                 )
             return result
@@ -352,12 +364,18 @@ class ReActLoop:
                     task.run_id,
                     {
                         "type": "llm_response",
+                        "stage": "react",
                         "iteration": len([event for event in task.trace_events if event.phase == "react"]),
                         "request": {
                             "messages": self._loggable_messages(messages),
                             "tool_names": tool_names if tool_names is not None else self.registry.names(),
                         },
                         "response": {"error": str(error) or error.__class__.__name__, "fallback": True},
+                        "api_request_payload": {
+                            "messages": self._loggable_messages(messages),
+                            "tool_names": tool_names if tool_names is not None else self.registry.names(),
+                        },
+                        "api_response_raw": {"error": str(error) or error.__class__.__name__, "fallback": True},
                     },
                 )
             task.trace_events.append(
@@ -384,13 +402,36 @@ class ReActLoop:
     def _system_prompt_for_task(self, task: TaskState) -> str:
         if self._is_chat_only_task(task):
             return (
-                "你是一个本地终端里的中文助手。"
-                "对于闲聊、问候和轻量问题，请直接给出自然、简洁的回复，不要调用工具。"
+                "你叫 manus-mini，是用户的个人助理。"
+                "你专门负责代码项目的查看、总结、诊断和优化建议；"
+                "也具备代码能力，可以对项目代码进行查看、总结、修改、删除和生成。"
+                "除此以外，你还可以进行文档写作、文档总结，以及深度行业研究报告撰写。"
+                "对于闲聊、问候、名字和自我介绍类轻量问题，请基于这个身份直接回复，不要调用工具。"
             )
-        return (
-            "你是本地项目分析 Agent。用户要求了解当前项目时，必须先使用 list_files 查看项目结构，"
-            "再用 read_file 读取 README、pyproject 或 docs 中的关键设计文档，最后用中文总结项目作用。"
+        plan_text = self._format_execution_plan(task)
+        return "\n".join(
+            [
+                "你是 manus-mini 的执行阶段 Agent。请遵循 Planner 已制定的计划和已有上下文。",
+                f"当前任务：{task.goal}",
+                f"当前工作目录：{task.cwd}",
+                "用户说“当前项目”“这个项目”“这个工程”时，指的就是当前工作目录；不要要求用户再提供项目描述、链接或代码。",
+                "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
+                "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
+                "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
+                "最终用中文给出直接、可执行的结果。",
+                "",
+                "当前执行计划",
+                plan_text,
+            ]
         )
+
+    def _format_execution_plan(self, task: TaskState) -> str:
+        if not task.plan:
+            return "- 暂无计划，请根据当前任务谨慎判断是否需要工具。"
+        lines = []
+        for index, step in enumerate(task.plan, start=1):
+            lines.append(f"{index}. {step.description} | {step.intent} | {step.status}")
+        return "\n".join(lines)
 
     def _rule_fallback_content(self, task: TaskState, messages: list[Message], reason: str = "") -> str:
         user_messages = [message.content for message in messages if message.role == "user"]
@@ -444,10 +485,9 @@ class ReActLoop:
         known_tool_calls = []
         tool_results: dict[str, ToolResult] = {}
         tool_call_count = 0
-        read_file_count = 0
-        list_files_count = 0
+        planned_read_file_keys: set[tuple[str, str, int | None, int | None]] = set()
         for call in tool_calls:
-            budget_error = self._tool_budget_error(call, task, tool_call_count, read_file_count, list_files_count)
+            budget_error = self._tool_budget_error(call, task, tool_call_count)
             if budget_error is not None:
                 tool_results[call.id] = budget_error
                 self._record_tool_rejection(task, call, budget_error)
@@ -457,14 +497,21 @@ class ReActLoop:
                 tool_results[call.id] = scope_error
                 self._record_tool_rejection(task, call, scope_error)
                 continue
+            duplicate_read = self._duplicate_successful_read_file_result(call, task)
+            if duplicate_read is not None:
+                tool_results[call.id] = duplicate_read
+                continue
+            duplicate_planned_read = self._duplicate_planned_read_file_result(call, planned_read_file_keys)
+            if duplicate_planned_read is not None:
+                tool_results[call.id] = duplicate_planned_read
+                continue
 
             tool_call_count += 1
-            if call.name == "read_file":
-                read_file_count += 1
-            elif call.name == "list_files":
-                list_files_count += 1
 
             if call.name in self.registry:
+                read_key = _read_file_key(call)
+                if read_key is not None:
+                    planned_read_file_keys.add(read_key)
                 known_tool_calls.append(self._with_runtime_tool_args(call, session))
                 continue
             tool_results[call.id] = ToolResult(
@@ -481,8 +528,6 @@ class ReActLoop:
         call,
         task: TaskState,
         tool_call_count: int,
-        read_file_count: int,
-        list_files_count: int,
     ) -> ToolResult | None:
         if tool_call_count >= task.limits.max_tool_calls_per_iteration:
             return ToolResult(
@@ -491,22 +536,6 @@ class ReActLoop:
                 summary="tool call rejected by iteration budget",
                 error_code="TOOL_CALL_BUDGET_EXCEEDED",
                 data={"limit": task.limits.max_tool_calls_per_iteration},
-            )
-        if call.name == "read_file" and read_file_count >= task.limits.max_read_files_per_iteration:
-            return ToolResult(
-                tool_name=call.name,
-                ok=False,
-                summary="read_file rejected by iteration budget",
-                error_code="TOOL_CALL_BUDGET_EXCEEDED",
-                data={"limit": task.limits.max_read_files_per_iteration},
-            )
-        if call.name == "list_files" and list_files_count >= task.limits.max_list_files_per_iteration:
-            return ToolResult(
-                tool_name=call.name,
-                ok=False,
-                summary="list_files rejected by iteration budget",
-                error_code="TOOL_CALL_BUDGET_EXCEEDED",
-                data={"limit": task.limits.max_list_files_per_iteration},
             )
         return None
 
@@ -526,6 +555,72 @@ class ReActLoop:
                 "reason": "overview tasks may read docs, metadata, and selected entry files first",
             },
         )
+
+    def _duplicate_successful_read_file_result(self, call, task: TaskState) -> ToolResult | None:
+        read_key = _read_file_key(call)
+        if read_key is None:
+            return None
+        path, encoding, start_index, max_bytes = read_key
+        for event in reversed(task.trace_events):
+            if event.phase != "tool":
+                continue
+            if event.data.get("tool_name") != "read_file" or event.data.get("ok") is not True:
+                continue
+            args = event.data.get("args")
+            if not isinstance(args, dict):
+                continue
+            previous_path = _normalize_relative_path(str(args.get("path", "")))
+            previous_encoding = str(args.get("encoding", "utf-8"))
+            previous_start_index = _optional_int_arg(args, "start_index")
+            previous_max_bytes = _optional_int_arg(args, "max_bytes")
+            if (
+                previous_path != path
+                or previous_encoding != encoding
+                or previous_start_index != start_index
+                or previous_max_bytes != max_bytes
+            ):
+                continue
+            observation = self._observation_by_tool_call_id(task, str(event.data.get("tool_call_id", "")))
+            return ToolResult(
+                tool_name="read_file",
+                ok=True,
+                summary=f"read_file skipped: already read {path}",
+                content=observation.content if observation is not None else "",
+                data={
+                    "deduplicated": True,
+                    "path": path,
+                    "source_tool_call_id": event.data.get("tool_call_id"),
+                },
+            )
+        return None
+
+    def _duplicate_planned_read_file_result(
+        self,
+        call,
+        planned_read_file_keys: set[tuple[str, str, int | None, int | None]],
+    ) -> ToolResult | None:
+        read_key = _read_file_key(call)
+        if read_key is None or read_key not in planned_read_file_keys:
+            return None
+        path, _, _, _ = read_key
+        return ToolResult(
+            tool_name="read_file",
+            ok=True,
+            summary=f"read_file skipped: duplicate request in current iteration {path}",
+            data={
+                "deduplicated": True,
+                "path": path,
+                "scope": "current_iteration",
+            },
+        )
+
+    def _observation_by_tool_call_id(self, task: TaskState, tool_call_id: str):
+        if not tool_call_id:
+            return None
+        for observation in reversed(task.observations):
+            if observation.tool_call_id == tool_call_id and observation.ok:
+                return observation
+        return None
 
     def _is_overview_goal(self, goal: str) -> bool:
         if any(keyword in goal for keyword in ["修改", "实现", "修复", "新增", "删除", "写入", "创建文件"]):
@@ -577,9 +672,38 @@ def _normalize_relative_path(path: str) -> str:
     return normalized
 
 
+def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:
+    if call.name != "read_file":
+        return None
+    path = _normalize_relative_path(str(call.args.get("path", "")))
+    if not path:
+        return None
+    encoding = str(call.args.get("encoding", "utf-8"))
+    start_index = _optional_int_arg(call.args, "start_index")
+    max_bytes = _optional_int_arg(call.args, "max_bytes")
+    return path, encoding, start_index, max_bytes
+
+
+def _optional_int_arg(args: dict, key: str) -> int | None:
+    if key not in args:
+        return None
+    try:
+        return int(args[key])
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_overview_allowed_file(path: str) -> bool:
     if path in OVERVIEW_ALLOWED_EXACT_FILES or path in OVERVIEW_ALLOWED_SRC_FILES:
         return True
     if path.startswith("docs/") and path.endswith(".md"):
         return True
     return False
+
+
+def _goal_mentions_current_project(goal: str) -> bool:
+    normalized = goal.lower()
+    return any(
+        keyword in normalized
+        for keyword in ["当前项目", "这个项目", "项目是做什么", "项目作用", "这个工程", "当前工程"]
+    )
