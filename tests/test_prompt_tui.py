@@ -6,7 +6,7 @@ from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 from manus_mini.memory import MemoryManager
 from manus_mini.logging import project_memory_path
-from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState
+from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState, TraceEvent
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
     PromptTui,
@@ -784,6 +784,46 @@ def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
     assert "确认写入" in tui.confirmation_panel_view.text
     assert "变更预览" in tui.confirmation_panel_view.text
     assert "+new" in tui.confirmation_panel_view.text
+
+
+def test_format_process_shows_replace_diff_preview(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改代码", cwd=tmp_path)
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="llm",
+                message="LLM requested 1 tool call(s)",
+                data={
+                    "tool_calls": [
+                        {
+                            "id": "call-replace",
+                            "name": "replace_in_file",
+                            "args": {"path": "app.py"},
+                        }
+                    ]
+                },
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool diff preview",
+                data={
+                    "message_type": "diff_preview",
+                    "tool_name": "replace_in_file",
+                    "tool_call_id": "call-replace",
+                    "diff_preview": "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+                },
+            ),
+        ]
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "变更预览" in process
+    assert "--- a/app.py" in process
+    assert "-old" in process
+    assert "+new" in process
 
 
 def test_confirmation_fragments_color_diff_additions_and_removals() -> None:

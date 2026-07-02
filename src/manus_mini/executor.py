@@ -69,6 +69,21 @@ class Executor:
                 error_code="WRITE_REQUIRES_CONFIRMATION",
             )
 
+        diff_preview = self._build_nonblocking_diff_preview(call.name, call.args, session.cwd)
+        if diff_preview:
+            task.trace_events.append(
+                TraceEvent(
+                    phase="tool",
+                    message="Tool diff preview",
+                    data={
+                        "message_type": "diff_preview",
+                        "tool_call_id": call.id,
+                        "tool_name": call.name,
+                        "diff_preview": diff_preview,
+                    },
+                )
+            )
+
         for attempt in range(1, max_attempts + 1):
             pool = ThreadPoolExecutor(max_workers=1)
             try:
@@ -146,7 +161,11 @@ class Executor:
 
         target = (workspace / path).expanduser().resolve()
         before = _read_text_preview(target)
-        if tool_name == "append_file":
+        if tool_name == "replace_in_file":
+            after = _preview_replace_content(before, args)
+            if after is None:
+                return ""
+        elif tool_name == "append_file":
             after = before + str(args.get("content", ""))
         else:
             after = str(args.get("content", ""))
@@ -166,6 +185,11 @@ class Executor:
         truncated = diff[:MAX_DIFF_PREVIEW_CHARS]
         remaining = len(diff) - MAX_DIFF_PREVIEW_CHARS
         return f"{truncated}\n... [truncated {remaining} more char(s)]\n"
+
+    def _build_nonblocking_diff_preview(self, tool_name: str, args: dict, workspace: Path) -> str:
+        if tool_name != "replace_in_file":
+            return ""
+        return self._build_diff_preview(tool_name, args, workspace)
 
     def run_batch(self, batch: list[ToolCall], session: SessionState, task: TaskState) -> dict[str, ToolResult]:
         if len(batch) == 1:
@@ -211,3 +235,61 @@ def _read_text_preview(path: Path) -> str:
 
 def _split_lines(content: str) -> list[str]:
     return content.splitlines(keepends=True) if content else []
+
+
+def _preview_replace_content(content: str, args: dict) -> str | None:
+    old_text = args.get("old_text")
+    new_text = args.get("new_text")
+    if old_text is None or new_text is None:
+        return None
+    old_value = str(old_text)
+    matches = _find_contextual_matches(
+        content,
+        old_value,
+        before_text=str(args.get("before_text") or ""),
+        after_text=str(args.get("after_text") or ""),
+    )
+    if not matches:
+        return None
+    expected = _positive_int(args.get("expected_replacements"), 1)
+    if len(matches) != expected:
+        return None
+    return _replace_matches(content, matches, old_value, str(new_text))
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _find_contextual_matches(content: str, old_text: str, before_text: str = "", after_text: str = "") -> list[int]:
+    if not old_text:
+        return []
+    matches: list[int] = []
+    start = 0
+    while True:
+        index = content.find(old_text, start)
+        if index < 0:
+            return matches
+        before_ok = not before_text or content[:index].endswith(before_text)
+        after_start = index + len(old_text)
+        after_ok = not after_text or content[after_start:].startswith(after_text)
+        if before_ok and after_ok:
+            matches.append(index)
+        start = index + len(old_text)
+
+
+def _replace_matches(content: str, matches: list[int], old_text: str, new_text: str) -> str:
+    if not matches:
+        return content
+    parts: list[str] = []
+    cursor = 0
+    for index in matches:
+        parts.append(content[cursor:index])
+        parts.append(new_text)
+        cursor = index + len(old_text)
+    parts.append(content[cursor:])
+    return "".join(parts)

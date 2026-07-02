@@ -1007,6 +1007,53 @@ def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
     assert "+++ b/helloworld.py" in session.pending_confirmation.diff_preview
 
 
+def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) -> None:
+    class ReplaceThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-replace",
+                            name="replace_in_file",
+                            args={
+                                "path": "app.py",
+                                "old_text": "return 'old'",
+                                "new_text": "return 'new'",
+                            },
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    (tmp_path / "app.py").write_text("def value():\n    return 'old'\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改代码 app.py", cwd=tmp_path)
+
+    result = ReActLoop(ReplaceThenAnswerLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    diff_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("message_type") == "diff_preview"
+    ]
+    assert len(diff_events) == 1
+    assert diff_events[0].data["tool_name"] == "replace_in_file"
+    assert diff_events[0].data["tool_call_id"] == "call-replace"
+    assert "--- a/app.py" in diff_events[0].data["diff_preview"]
+    assert "-    return 'old'" in diff_events[0].data["diff_preview"]
+    assert "+    return 'new'" in diff_events[0].data["diff_preview"]
+    replace_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_call_id") == "call-replace" and "ok" in event.data
+    ]
+    assert task.trace_events.index(diff_events[0]) < task.trace_events.index(replace_events[0])
+
+
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:
     class FakeReactLoop:
         def run(self, task: TaskState, session: SessionState) -> str:  # noqa: ARG002

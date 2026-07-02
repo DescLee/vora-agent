@@ -282,6 +282,11 @@ def format_tool_batch_lines(
             tool_call_id = str(event.data.get("tool_call_id") or "")
             tool_name = event.data.get("tool_name", "unknown")
             prefix = prefixes.get(tool_call_id, default_prefix)
+            diff_preview = str(event.data.get("diff_preview") or "").strip()
+            if diff_preview:
+                lines.append(f"- {prefix} {tool_name}({tool_call_id}) 变更预览:")
+                lines.extend(f"  {line}" for line in diff_preview.splitlines())
+                continue
             status = format_tool_return_status(event.data)
             summary = event.data.get("summary") or event.message
             line = f"- {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"

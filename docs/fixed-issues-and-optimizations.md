@@ -458,6 +458,15 @@
   - 确实需要整体重写时，必须显式传入 `allow_full_rewrite=true`。
 - 验证：测试覆盖上下文定位替换、上下文不匹配拒绝、大文件全量覆盖默认拒绝，以及显式允许后可整体重写。
 
+### 6.3.3 replace_in_file 执行前展示 diff
+
+- 现象：`replace_in_file` 不需要人工确认，虽然能减少卡顿和交互成本，但 TUI 里缺少执行前 diff，用户不容易看到即将发生的局部修改。
+- 修复：
+  - Executor 在执行 `replace_in_file` 前生成 unified diff preview，并写入 `tool` trace event。
+  - TUI 工具活动区识别 `diff_preview` trace，在对应 tool call 下展示“变更预览”及 diff 内容。
+  - 该预览只展示，不阻塞执行；`replace_in_file` 仍保持无需人工确认。
+- 验证：测试覆盖 `replace_in_file` 执行前记录 diff preview，且 TUI process 区会渲染该 diff。
+
 ### 6.4 list_files 未尊重 `.gitignore`
 
 - 现象：Agent 分析项目时，`list_files` 会把 `outputs/`、`runs/`、`build/`、`.manus-mini/` 等运行产物也列入结果，导致文件列表过大、上下文膨胀，并增加 LLM 请求失败概率。
@@ -872,7 +881,7 @@
 
 ```bash
 pytest -q
-# 257 passed
+# 259 passed
 
 ruff check src tests
 # All checks passed!
