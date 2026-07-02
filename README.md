@@ -41,3 +41,9 @@ manus-mini
 默认 TUI 使用 `prompt_toolkit` 输入层，中文输入法上屏后可以直接进入输入区。输入完成后按 `Enter` 发送，按 `Shift+Enter` 换行，按 `Ctrl-C` 退出。
 
 当前版本已经包含最小可运行的 TUI 会话骨架和可测试的 Agent Runtime。
+
+## 版本号规则
+
+- 展示版本号使用 `vYYYYMMDD.HHMM`，例如 `v20260702.1644`。
+- Python 包元数据 `pyproject.toml` 使用 PEP 440 合法格式 `YYYYMMDD.HHMM`，例如 `20260702.1644`。
+- 后续更新版本号时，按当前日期和时间直接同步更新 `pyproject.toml`、`src/manus_mini/__init__.py` 和版本测试。

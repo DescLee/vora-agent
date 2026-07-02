@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "manus-mini"
-version = "0.1.0"
+version = "20260702.1644"
 description = "Manus mini demo project"
 readme = "README.md"
 requires-python = ">=3.12"

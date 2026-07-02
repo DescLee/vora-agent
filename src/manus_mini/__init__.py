@@ -1,3 +1,3 @@
 """manus_mini package."""
 
-__version__ = "0.1.0"
+__version__ = "v20260702.1644"
