@@ -200,6 +200,7 @@ def test_runtime_project_question_does_not_become_chat_only_when_planner_mislabe
     assert any("用户说“当前项目”“这个项目”“这个工程”时，指的就是当前工作目录" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert any("先定位目标模块和最小相关文件" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert any("没有读取原文件前，不要凭空改写已有文件" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("不要只给选项并等待用户选择" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert any("最终答复要说明改了什么、验证了什么" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert "当前工作目录里的项目" in result.messages[-1].content
 
@@ -1199,6 +1200,35 @@ def test_runtime_respects_engineering_step_limit(tmp_path: Path) -> None:
 
     assert result.active_task is not None
     assert result.active_task.step_count == 1
+
+
+def test_runtime_stops_when_reflection_waits_for_user_choice(tmp_path: Path) -> None:
+    class WaitingChoiceReflectionLoop:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, task: TaskState, session: SessionState) -> ReflectionResult:  # noqa: ARG002
+            self.calls += 1
+            return ReflectionResult(
+                accepted=False,
+                content="这里有三组可选文案，请选一个。",
+                reason="等待用户选择后继续修改",
+                decision="local_update",
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(default_limits=LoopLimits(max_engineering_steps=3), llm=ScriptedLLM())
+    reflection_loop = WaitingChoiceReflectionLoop()
+    runtime.reflection_loop = reflection_loop
+
+    result = runtime.on_user_message("给我几个文案选项", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.active_task.step_count == 1
+    assert reflection_loop.calls == 1
+    assert "三组可选文案" in result.messages[-1].content
+    assert any("waiting for user choice" in event.message for event in result.active_task.trace_events)
 
 
 def test_runtime_converts_agent_exception_to_failed_message(tmp_path: Path) -> None:

@@ -923,6 +923,20 @@
   - 未知旧错误码迁移为 `UNKNOWN_ERROR`，并在 `metadata.legacy_code` 保留原始错误码。
 - 验证：`tests/test_session_store.py` 覆盖保存版本号、旧会话迁移和未知错误码兼容。
 
+### 9.32 等待用户选择导致外层执行到上限
+
+- 现象：用户表达“没想好换啥，反正就得换个”时，Agent 反复输出多组文案选项并等待用户选择；Reflection 持续返回 `local_update`，Runtime 继续下一工程步，最终达到 `max_engineering_steps` 才失败。
+- 根因：
+  - Planner 把“用户已授权自行选择”的任务规划成“给用户选项并等待选择”。
+  - Reflection 没有把“用户已授权自行决定但草稿仍等待用户选择”识别为错误方向。
+  - Runtime 遇到真正需要用户选择的 `local_update` 时没有停止等待外部输入，而是继续消耗工程步数。
+- 修复：
+  - Planner 对“没想好 / 你来定 / 反正 / 随便”等委托选择表达做计划后处理，移除等待用户选择步骤，改为自行选择保守方案并执行。
+  - ReAct 提示词明确：用户已授权代选时，不要只给选项等待用户选择。
+  - Reflection 对委托选择任务中的“等待用户选择”草稿返回 `regenerate`，要求直接选方案并执行。
+  - Runtime 对真正等待用户选择/确认的反思结果直接收口返回当前草稿，不再跑到外层上限。
+- 验证：`tests/test_planner_reflector.py` 和 `tests/test_runtime.py` 覆盖 Planner 改写、Reflection 拒绝等待选择草稿、Runtime 等待外部选择时单步收口。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
@@ -957,7 +971,7 @@
 
 ```bash
 python -m pytest -q
-# 271 passed
+# 274 passed
 ```
 
 补充手工验证：

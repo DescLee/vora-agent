@@ -67,7 +67,7 @@ class AgentRuntime:
         if session.active_task is not None and session.active_task.result:
             session.messages.append(
                 Message.system(
-                    "当前产物:\n"
+                    "已有产物:\n"
                     f"{session.active_task.result}"
                 )
             )
@@ -83,7 +83,7 @@ class AgentRuntime:
         task.trace_events.append(
             TraceEvent(
                 phase="runtime",
-                message="Planner generated initial plan",
+                message="规划器已生成初始计划",
                 data={
                     "steps": [
                         {
@@ -182,6 +182,19 @@ class AgentRuntime:
                         break
                     if reflection.accepted:
                         self._mark_plan_done(task)
+                        task.status = "done"
+                        break
+                    if _reflection_waits_for_user_choice(reflection.reason, reflection.content):
+                        task.trace_events.append(
+                            TraceEvent(
+                                phase="runtime",
+                                message="Runtime stopped: waiting for user choice",
+                                data={
+                                    "decision": reflection.decision,
+                                    "reason": reflection.reason,
+                                },
+                            )
+                        )
                         task.status = "done"
                         break
                     if reflection.decision == "replan":
@@ -366,3 +379,24 @@ class AgentRuntime:
                 "step_count": task.step_count,
             },
         )
+
+
+def _reflection_waits_for_user_choice(reason: str, content: str) -> bool:
+    text = f"{reason}\n{content}".lower()
+    return any(
+        phrase in text
+        for phrase in [
+            "等待用户选择",
+            "等待用户确认",
+            "用户选择后",
+            "用户确认后",
+            "请选择",
+            "请选",
+            "选一个",
+            "选好后",
+            "等你选",
+            "等你确认",
+            "waiting for user",
+            "wait for user",
+        ]
+    )

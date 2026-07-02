@@ -74,10 +74,10 @@ class ReflectionLoop:
     def _decide(self, task: TaskState, session: SessionState, draft: str) -> ReflectionDecision:
         llm = self._resolve_llm()
         if llm is None:
-            return apply_code_test_gate(task, self.reflector.decide(task, draft))
+            return apply_code_test_gate(task, self.reflector.decide(task, draft), draft=draft)
         try:
             result = self._complete_reflection_llm(llm, task, session, draft)
-            return apply_code_test_gate(task, _parse_reflection_decision(result.content))
+            return apply_code_test_gate(task, _parse_reflection_decision(result.content), draft=draft)
         except Exception as error:
             task.trace_events.append(
                 TraceEvent(
@@ -86,7 +86,7 @@ class ReflectionLoop:
                     data={"error": str(error) or error.__class__.__name__},
                 )
             )
-            return apply_code_test_gate(task, self.reflector.decide(task, draft))
+            return apply_code_test_gate(task, self.reflector.decide(task, draft), draft=draft)
 
     def _resolve_llm(self) -> LLMClient | None:
         if self.llm is not None:
@@ -342,7 +342,10 @@ TEST_COMMAND_KEYWORDS = (
 )
 
 
-def apply_code_test_gate(task: TaskState, decision: ReflectionDecision) -> ReflectionDecision:
+def apply_code_test_gate(task: TaskState, decision: ReflectionDecision, draft: str = "") -> ReflectionDecision:
+    delegated_choice_decision = apply_delegated_choice_gate(task, decision, draft=draft)
+    if delegated_choice_decision is not decision:
+        return delegated_choice_decision
     if decision.decision != "accept" or not _is_code_modification_task(task):
         return decision
     test_events = _test_events_after_latest_code_change(task)
@@ -354,6 +357,15 @@ def apply_code_test_gate(task: TaskState, decision: ReflectionDecision) -> Refle
     return ReflectionDecision("regenerate", f"测试未通过：{_format_test_failure(failed_test)}")
 
 
+def apply_delegated_choice_gate(task: TaskState, decision: ReflectionDecision, draft: str = "") -> ReflectionDecision:
+    if decision.decision not in {"accept", "local_update"}:
+        return decision
+    combined = f"{decision.reason}\n{draft}\n{task.result}".lower()
+    if _goal_delegates_choice(task.goal) and _text_waits_for_user_choice(combined):
+        return ReflectionDecision("regenerate", "用户已授权自行选择方案；不要等待用户选择，请直接选用保守文案完成修改并验证。")
+    return decision
+
+
 def _is_code_modification_task(task: TaskState) -> bool:
     if _latest_code_change_event_index(task) >= 0:
         return True
@@ -363,6 +375,42 @@ def _is_code_modification_task(task: TaskState) -> bool:
     if any(step.intent == "code" for step in task.plan) and has_code_target:
         return True
     return has_change and has_code_target
+
+
+def _goal_delegates_choice(goal: str) -> bool:
+    normalized = goal.lower()
+    return any(
+        phrase in normalized
+        for phrase in [
+            "没想好",
+            "你来定",
+            "你决定",
+            "你帮我选",
+            "你看着办",
+            "随便",
+            "反正",
+            "whatever",
+            "you decide",
+        ]
+    )
+
+
+def _text_waits_for_user_choice(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in [
+            "等待用户",
+            "用户选择",
+            "用户确认",
+            "让用户选择",
+            "你看看哪个",
+            "选好后",
+            "等你选",
+            "等你确认",
+            "wait for user",
+            "choose one",
+        ]
+    )
 
 
 def _test_events_after_latest_code_change(task: TaskState) -> list[dict]:

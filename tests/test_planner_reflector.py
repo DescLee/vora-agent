@@ -92,6 +92,27 @@ def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:
     assert [step.intent for step in steps] == ["research", "research", "report"]
 
 
+def test_planner_rewrites_wait_for_user_choice_when_goal_delegates_choice(tmp_path: Path) -> None:
+    class WaitingChoiceLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                content=(
+                    "1. 定位当前 TUI 标题文案 | research\n"
+                    "2. 给用户提供 3 组替换建议并等待用户选择 | chat\n"
+                    "3. 根据用户确认修改对应文件 | code"
+                )
+            )
+
+    planner = Planner(llm=WaitingChoiceLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("优化当前文案展示，我也没想好换啥，反正就得换个", session=session)
+
+    descriptions = [step.description for step in steps]
+    assert not any("等待用户" in description or "用户选择" in description for description in descriptions)
+    assert any("自行选择" in description and step.intent == "code" for step in steps for description in [step.description])
+
+
 def test_planner_corrects_chat_intent_for_file_reading_steps(tmp_path: Path) -> None:
     class BadIntentLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
@@ -128,6 +149,7 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
     assert "文档写作" in prompt
     assert "深度行业研究报告" in prompt
     assert "工具使用要克制" in prompt
+    assert "不要规划等待用户选择" in prompt
     assert "计划最多 4 步" in prompt
     assert "每一步必须带可验证产出" in prompt
     assert "避免重复 list_files/read_file" in prompt
@@ -299,6 +321,22 @@ def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None
 
     assert decision.decision == "local_update"
     assert "测试" in decision.reason
+
+
+def test_reflection_regenerates_when_draft_waits_for_choice_but_user_delegated(tmp_path: Path) -> None:
+    class WaitingChoiceLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"local_update","reason":"等待用户选择后修改"}')
+
+    task = TaskState.create(goal="优化当前文案展示，我也没想好换啥，反正就得换个", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改 TUI 文案", intent="code")]
+    session = SessionState.create(cwd=tmp_path)
+    draft = "我给你 4 组选项，你看看哪个顺眼，选好后我再修改并测试。"
+
+    decision = ReflectionLoop(llm=WaitingChoiceLLM())._decide(task, session, draft)
+
+    assert decision.decision == "regenerate"
+    assert "自行选择" in decision.reason
 
 
 def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_worded(tmp_path: Path) -> None:

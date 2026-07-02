@@ -19,6 +19,8 @@ PLAN_INSTRUCTIONS = (
     "涉及项目或代码时，先基于下方目录结构判断需要查看的范围；只有信息不足时才计划调用工具。"
     "先定位目标模块，再决定是否读取文件；不要把“查看项目”默认扩成全仓库扫描。"
     "工具使用要克制：优先复用已有上下文，优先少量关键文件，避免重复 list_files/read_file，避免无目的地全量扫描。"
+    "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要规划等待用户选择；"
+    "应自行选择保守方案并继续执行。"
     "计划最多 4 步，每一步必须带可验证产出，例如定位范围、读取依据、修改点、测试或最终结论。"
     "\n\n"
     "输出格式：每行一条计划，格式为：`序号. 计划描述 | intent`。"
@@ -41,9 +43,9 @@ class Planner:
 
         llm_plan = self._build_llm_plan(goal, session, run_id=run_id)
         if llm_plan:
-            return _deduplicate_plan(llm_plan)
+            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_plan))
 
-        return _deduplicate_plan(self._build_rule_plan(goal, normalized))
+        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized)))
 
     def _build_llm_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> list[PlanStep]:
         messages = self._build_prompt_messages(goal, session)
@@ -263,6 +265,56 @@ def _deduplicate_plan(steps: list[PlanStep]) -> list[PlanStep]:
         seen.add(key)
         deduplicated.append(step)
     return deduplicated
+
+
+def _rewrite_delegated_choice_plan(goal: str, steps: list[PlanStep]) -> list[PlanStep]:
+    if not _goal_delegates_choice(goal):
+        return steps
+    rewritten: list[PlanStep] = []
+    inserted_direct_change_step = False
+    for step in steps:
+        if _step_waits_for_user_choice(step.description):
+            if not inserted_direct_change_step:
+                rewritten.append(PlanStep(description="自行选择一组保守文案并直接修改对应文件", intent="code"))
+                inserted_direct_change_step = True
+            continue
+        rewritten.append(step)
+    return rewritten
+
+
+def _goal_delegates_choice(goal: str) -> bool:
+    normalized = goal.lower()
+    return any(
+        phrase in normalized
+        for phrase in [
+            "没想好",
+            "你来定",
+            "你决定",
+            "你帮我选",
+            "你看着办",
+            "随便",
+            "反正",
+            "whatever",
+            "you decide",
+        ]
+    )
+
+
+def _step_waits_for_user_choice(description: str) -> bool:
+    normalized = description.lower()
+    return any(
+        phrase in normalized
+        for phrase in [
+            "等待用户",
+            "让用户选择",
+            "用户选择",
+            "用户确认",
+            "等待确认",
+            "选项",
+            "choose",
+            "wait for user",
+        ]
+    )
 
 
 def _is_small_talk(goal: str, normalized: str) -> bool:
