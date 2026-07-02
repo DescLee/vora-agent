@@ -48,7 +48,7 @@ ruff check src tests: passed
 | LLM API harness | `OpenAICompatibleLLMClient` 测试中 monkeypatch `urllib.request.urlopen` | 不发真实网络请求，也能验证 HTTP 错误、畸形响应、tool schema 和消息转换 | 已完成 |
 | Reporter/Logger harness | `Reporter(tmp_path / "outputs")`、`EventLogger(tmp_path / "runs")` | 将产物与事件日志输出到临时目录，验证报告分块、脱敏和 trace 记录 | 已完成 |
 
-从质量检测角度看，这套 harness 的价值是：当前 269 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
+从质量检测角度看，这套 harness 的价值是：当前 271 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
 
 但 harness 设计仍有少量可继续增强的点：
 
@@ -140,7 +140,7 @@ ruff check src tests: passed
 ### P3：低风险验证与已完成项
 
 1. 保持现有 ReAct、文件工具、路径限制、Reporter、敏感信息过滤等测试覆盖。
-2. 后续改动应避免破坏当前 269 个通过测试。
+2. 后续改动应避免破坏当前 271 个通过测试。
 
 ## 建议验收顺序
 

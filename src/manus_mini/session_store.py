@@ -10,6 +10,25 @@ from manus_mini.logging import migrate_legacy_project_storage, project_runs_dir,
 from manus_mini.models import SessionState
 
 
+CURRENT_SESSION_SCHEMA_VERSION = 1
+KNOWN_ERROR_CODES = {
+    "FILE_NOT_FOUND",
+    "PATH_OUT_OF_WORKSPACE",
+    "INVALID_TOOL_PARAMS",
+    "USER_CANCELLED",
+    "MAX_STEPS_REACHED",
+    "MAX_REACT_ITERATIONS_REACHED",
+    "MAX_REFLECTION_ROUNDS_REACHED",
+    "RUNTIME_TIMEOUT",
+    "TOKEN_BUDGET_EXCEEDED",
+    "TOOL_TIMEOUT",
+    "TOOL_RETRY_EXHAUSTED",
+    "INVALID_LLM_OUTPUT",
+    "LLM_ERROR",
+    "UNKNOWN_ERROR",
+}
+
+
 @dataclass(frozen=True)
 class SessionSummary:
     session_id: str
@@ -39,7 +58,7 @@ class SessionStore:
         if not path.exists():
             raise FileNotFoundError(f"session not found: {session_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
-        session = SessionState.model_validate(data)
+        session = SessionState.model_validate(migrate_session_data(data))
         session.cwd = self.cwd
         if session.active_task is not None:
             session.active_task.cwd = self.cwd
@@ -121,7 +140,7 @@ class SessionStore:
 
     def _summary(self, path: Path) -> SessionSummary:
         data = json.loads(path.read_text(encoding="utf-8"))
-        session = SessionState.model_validate(data)
+        session = SessionState.model_validate(migrate_session_data(data))
         last_user_message = ""
         for message in reversed(session.messages):
             if message.role == "user":
@@ -138,3 +157,34 @@ class SessionStore:
 
     def _path_for(self, session_id: str) -> Path:
         return self.sessions_dir / f"{session_id}.json"
+
+
+def migrate_session_data(data: dict) -> dict:
+    migrated = dict(data)
+    migrated["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
+    active_task = migrated.get("active_task")
+    if isinstance(active_task, dict):
+        migrated["active_task"] = _migrate_task_data(active_task)
+    return migrated
+
+
+def _migrate_task_data(data: dict) -> dict:
+    migrated = dict(data)
+    errors = migrated.get("errors")
+    if isinstance(errors, list):
+        migrated["errors"] = [_migrate_error_data(error) for error in errors]
+    return migrated
+
+
+def _migrate_error_data(data) -> dict:
+    if not isinstance(data, dict):
+        return {"code": "UNKNOWN_ERROR", "message": str(data), "retryable": False}
+    migrated = dict(data)
+    code = str(migrated.get("code") or "UNKNOWN_ERROR")
+    if code in KNOWN_ERROR_CODES:
+        return migrated
+    metadata = dict(migrated.get("metadata") or {})
+    metadata["legacy_code"] = code
+    migrated["code"] = "UNKNOWN_ERROR"
+    migrated["metadata"] = metadata
+    return migrated

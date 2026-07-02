@@ -71,6 +71,7 @@ class AgentError(BaseModel):
     ]
     message: str
     retryable: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Artifact(BaseModel):
@@ -171,6 +172,7 @@ class MemoryItem(BaseModel):
 
 
 class SessionState(BaseModel):
+    schema_version: int = 1
     session_id: str = Field(default_factory=lambda: new_id("session"))
     cwd: Path
     messages: list[Message] = Field(default_factory=list)

@@ -28,6 +28,7 @@ def test_message_factory_methods_keep_tool_call_links() -> None:
 def test_session_state_starts_empty(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
 
+    assert session.schema_version == 1
     assert session.cwd == tmp_path
     assert session.messages == []
     assert session.active_task is None

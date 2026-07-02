@@ -53,6 +53,50 @@ def test_session_store_loads_legacy_runtime_timeout_sessions(monkeypatch, tmp_pa
     assert summaries[0].session_id == session.session_id
 
 
+def test_session_store_saves_current_schema_version(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+
+    saved_path = store.save(session)
+    data = json.loads(saved_path.read_text(encoding="utf-8"))
+
+    assert data["schema_version"] == 1
+
+
+def test_session_store_migrates_unknown_error_code_to_unknown_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("旧任务"))
+    session.active_task = TaskState.create(goal="旧任务", cwd=tmp_path)
+    data = session.model_dump(mode="json")
+    data.pop("schema_version", None)
+    data["active_task"]["errors"].append(
+        {
+            "code": "OLD_NETWORK_ERROR",
+            "message": "old provider failed",
+            "retryable": True,
+        }
+    )
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / f"{session.session_id}.json").write_text(
+        json.dumps(data),
+        encoding="utf-8",
+    )
+
+    loaded = store.load(session.session_id)
+    summaries = store.list_sessions()
+
+    assert loaded.schema_version == 1
+    assert loaded.active_task is not None
+    assert loaded.active_task.errors[0].code == "UNKNOWN_ERROR"
+    assert loaded.active_task.errors[0].message == "old provider failed"
+    assert loaded.active_task.errors[0].retryable is True
+    assert loaded.active_task.errors[0].metadata["legacy_code"] == "OLD_NETWORK_ERROR"
+    assert summaries[0].session_id == session.session_id
+
+
 def test_session_store_rejects_unknown_session(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
