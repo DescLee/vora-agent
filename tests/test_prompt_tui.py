@@ -6,10 +6,11 @@ from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 from manus_mini.memory import MemoryManager
 from manus_mini.logging import project_memory_path
-from manus_mini.models import Message, Observation, PlanStep, SessionState, TaskState, TraceEvent
+from manus_mini.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, TraceEvent
 from manus_mini.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
     PromptTui,
+    PromptTuiOptions,
     build_display_line_starts,
     build_line_starts,
     format_artifact,
@@ -99,9 +100,10 @@ def test_format_message_block_wraps_user_text_with_light_panel() -> None:
 
 def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     task = TaskState.create(goal="demo", cwd=tmp_path)
-    welcome = format_welcome(task.limits)
+    welcome = format_welcome(task.limits, llm_model="deepseek-v4-flash", llm_configured=True)
 
     assert "欢迎使用 Manus Mini" in welcome
+    assert "当前模型：deepseek-v4-flash" in welcome
     assert "工程循环上限：3 轮" in welcome
     assert "ReAct 循环上限：99 轮" in welcome
     assert "Reflection 循环上限：3 轮" in welcome
@@ -112,6 +114,42 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     assert "/help" in welcome
     assert "Enter 发送" in welcome
     assert "Shift+Enter 换行" in welcome
+
+
+def test_format_welcome_warns_when_llm_config_is_missing(tmp_path: Path) -> None:
+    task = TaskState.create(goal="demo", cwd=tmp_path)
+
+    welcome = format_welcome(task.limits, llm_configured=False)
+
+    assert "未找到可用 LLM 配置" in welcome
+    assert "LLM_PROVIDER" in welcome
+    assert "当前模型" not in welcome
+
+
+def test_prompt_tui_welcome_shows_current_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "qwen-test")
+
+    tui = PromptTui(cwd=tmp_path)
+
+    assert "当前模型：qwen-test" in tui.output.text
+    assert "未找到可用 LLM 配置" not in tui.output.text
+
+
+def test_prompt_tui_welcome_warns_when_llm_config_is_missing(tmp_path: Path, monkeypatch) -> None:
+    from manus_mini.config import AppConfig
+
+    monkeypatch.setattr("manus_mini.prompt_tui.AppConfig.from_env", lambda: AppConfig())
+
+    tui = PromptTui(
+        options=PromptTuiOptions(cwd=tmp_path, limits=LoopLimits()),
+    )
+
+    assert "未找到可用 LLM 配置" in tui.output.text
+    assert "LLM_PROVIDER" in tui.output.text
+    assert "当前模型" not in tui.output.text
 
 
 def test_format_artifact_renders_active_task_result(tmp_path: Path) -> None:

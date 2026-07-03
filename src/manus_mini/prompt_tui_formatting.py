@@ -515,12 +515,30 @@ def format_transcript(
     return "\n\n".join(sections)
 
 
-def format_welcome(limits: LoopLimits) -> str:
+def format_welcome(
+    limits: LoopLimits,
+    llm_model: str | None = None,
+    llm_configured: bool | None = None,
+) -> str:
+    llm_lines: list[str] = ["模型配置"]
+    if llm_configured:
+        llm_lines.append(f"- 当前模型：{llm_model or '未指定'}")
+    elif llm_configured is False:
+        llm_lines.extend(
+            [
+                "- 未找到可用 LLM 配置。",
+                "- 请设置环境变量，或在当前目录 `.env`、`~/.manus-mini/.env`、manus-mini 安装源码根目录 `.env` 中配置 LLM_PROVIDER / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL。",
+            ]
+        )
+    else:
+        llm_lines.append("- 当前模型：启动后按配置加载")
     return "\n".join(
         [
             "欢迎使用 Manus Mini",
             "",
             "你可以在这里连续对话，让 Agent 读取项目、调用工具、生成报告或写入文件。",
+            "",
+            *llm_lines,
             "",
             "当前限制",
             f"- 工程循环上限：{limits.max_engineering_steps} 轮",

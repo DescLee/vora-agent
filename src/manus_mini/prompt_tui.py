@@ -19,6 +19,7 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
+from manus_mini.config import AppConfig
 from manus_mini.logging import project_memory_path
 from manus_mini.models import LoopLimits, Message, PendingConfirmation, SessionState, TaskState
 from manus_mini.memory import MemoryManager
@@ -274,7 +275,7 @@ class PromptTui:
         initial_output = (
             format_transcript(self.manager.current, show_process=False)
             if initial_session is not None and initial_session.messages
-            else format_welcome(self.manager.runtime.default_limits)
+            else self._format_initial_welcome()
         )
         self.output_line_starts = build_line_starts(initial_output)
         self.output_display_width: int | None = None
@@ -299,6 +300,19 @@ class PromptTui:
         )
         self.status = Label(format_status(self.manager.current), style="class:status")
         self.app = self._build_app()
+
+    def _format_initial_welcome(self) -> str:
+        config = AppConfig.from_env()
+        llm_configured = (
+            config.llm_provider == "openai-compatible"
+            and bool(config.llm_base_url)
+            and bool(config.llm_api_key)
+        )
+        return format_welcome(
+            self.manager.runtime.default_limits,
+            llm_model=config.llm_model,
+            llm_configured=llm_configured,
+        )
 
     def _build_app(self) -> Application:
         install_shift_enter_mapping()
