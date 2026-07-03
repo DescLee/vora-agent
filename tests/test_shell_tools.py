@@ -32,6 +32,29 @@ def test_run_bash_rejects_dangerous_commands(tmp_path: Path) -> None:
     assert "rejected" in result.summary
 
 
+def test_run_bash_requires_confirmation_for_high_risk_external_path(tmp_path: Path) -> None:
+    external_path = tmp_path.parent / "outside-marker.txt"
+
+    preview = RunBashTool().preview(workspace=tmp_path, command=f"rm -f {external_path}")
+    result = RunBashTool().run(workspace=tmp_path, command=f"rm -f {external_path}")
+
+    assert preview.requires_confirmation is True
+    assert "outside workspace" in preview.summary
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not external_path.exists()
+
+
+def test_run_bash_allows_confirmed_high_risk_external_path(tmp_path: Path) -> None:
+    external_path = tmp_path.parent / "outside-marker.txt"
+    external_path.write_text("old", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command=f"rm -f {external_path}", confirmed=True)
+
+    assert result.ok is True
+    assert not external_path.exists()
+
+
 def test_run_bash_uses_sanitized_environment(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LLM_API_KEY", "secret-key")
 
@@ -47,6 +70,19 @@ def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.tool_name == "run_temp_script"
     assert result.error_code == "COMMAND_REJECTED"
+
+
+def test_run_temp_script_requires_confirmation_for_high_risk_external_path(tmp_path: Path) -> None:
+    external_path = tmp_path.parent / "outside-marker.txt"
+
+    preview = RunTempScriptTool().preview(workspace=tmp_path, content=f"rm -f {external_path}\n")
+    result = RunTempScriptTool().run(workspace=tmp_path, content=f"rm -f {external_path}\n")
+
+    assert preview.requires_confirmation is True
+    assert "outside workspace" in preview.summary
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not external_path.exists()
 
 
 def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:

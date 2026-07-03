@@ -971,6 +971,17 @@
   - 确认流程只清理当前已确认的 pending，保留续跑过程中产生的新 pending。
 - 验证：新增和更新 `tests/test_runtime.py`、`tests/test_models.py`、`tests/test_planner_reflector.py`、`tests/support.py`，覆盖强制 accept、默认 99 次工具调用、代码修改前置测试门禁、确认续跑和写后复测。
 
+### 9.35 高风险外部目录命令增加二次确认
+
+- 现象：`run_bash` / `run_temp_script` 虽然已有少量硬拒绝规则，但对“会修改项目目录以外路径”的命令缺少二次确认，例如删除、移动、改权限或重定向写入工作区外路径。
+- 根因：命令工具只做了固定危险模式拒绝，没有在执行前根据命令副作用和路径作用域做风险分析。
+- 修复：
+  - 新增命令风险分析：识别 `rm`、`mv`、`cp`、`chmod`、`chown`、`mkdir`、`touch`、`truncate`、`tee`、`sed`、`rsync`、`install`、`ln` 等高风险写入/删除/权限类命令。
+  - 如果命令或临时脚本引用工作区外绝对路径，且属于高风险副作用操作，则返回 `COMMAND_REQUIRES_CONFIRMATION`，并通过 Executor 进入 pending confirmation。
+  - 用户确认后才会带 `confirmed=true` 真正执行；原有 `sudo`、`rm -rf /` 等灾难命令仍直接拒绝。
+  - 确认提示对命令类工具使用“即将执行”，避免和文件写入的“即将修改”混淆。
+- 验证：`tests/test_shell_tools.py` 覆盖 shell 工具风险判断、未确认拦截、确认后执行；`tests/test_runtime.py` 覆盖 ReAct 调用高风险外部命令时进入用户二次确认。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。

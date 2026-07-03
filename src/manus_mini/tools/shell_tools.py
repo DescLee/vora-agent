@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from manus_mini.tools.base import BaseTool, ToolResult
+from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult
 
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
@@ -20,6 +21,23 @@ FORBIDDEN_COMMAND_PATTERNS = (
     r"\bshutdown\b",
     r"\breboot\b",
 )
+HIGH_RISK_MUTATING_COMMANDS = {
+    "chmod",
+    "chown",
+    "cp",
+    "install",
+    "ln",
+    "mkdir",
+    "mv",
+    "rm",
+    "rsync",
+    "sed",
+    "tee",
+    "touch",
+    "truncate",
+}
+SHELL_REDIRECT_PATTERN = re.compile(r"(?:^|[\s;&|])(?:>>?|2>>?|&>|2>)\s*(?P<path>(?:~|/)[^\s;&|]+)")
+ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])(?:~|/)[^\s;&|)]+")
 
 
 class RunBashTool(BaseTool):
@@ -27,6 +45,18 @@ class RunBashTool(BaseTool):
     description = "Run a bash command in the workspace and return stdout, stderr, and exit code."
     risk_level = "command"
     is_read_only = False
+
+    def preview(self, **kwargs: Any) -> ToolPreview:
+        command = str(kwargs.get("command", "")).strip()
+        workspace = _optional_workspace(kwargs)
+        risk = analyze_command_risk(command, workspace=workspace)
+        return ToolPreview(
+            tool_name=self.name,
+            summary=risk.summary or self.describe_preview(**kwargs),
+            risk_level=self.risk_level,
+            requires_confirmation=risk.requires_confirmation,
+            args=dict(kwargs),
+        )
 
     def describe_preview(self, **kwargs: Any) -> str:
         command = str(kwargs.get("command", "")).strip()
@@ -57,6 +87,9 @@ class RunBashTool(BaseTool):
         if rejection is not None:
             return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
+        risk = analyze_command_risk(command, workspace=workspace)
+        if risk.requires_confirmation and not bool(kwargs.get("confirmed", False)):
+            return _confirmation_required_result(self.name, risk)
         timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
         return _run_command(
@@ -73,6 +106,18 @@ class RunTempScriptTool(BaseTool):
     description = "Write a temporary bash script, run it in the workspace, then delete the script."
     risk_level = "command"
     is_read_only = False
+
+    def preview(self, **kwargs: Any) -> ToolPreview:
+        content = "" if kwargs.get("content") is None else str(kwargs.get("content"))
+        workspace = _optional_workspace(kwargs)
+        risk = analyze_command_risk(content, workspace=workspace)
+        return ToolPreview(
+            tool_name=self.name,
+            summary=risk.summary or self.describe_preview(**kwargs),
+            risk_level=self.risk_level,
+            requires_confirmation=risk.requires_confirmation,
+            args=dict(kwargs),
+        )
 
     def describe_preview(self, **kwargs: Any) -> str:
         filename = str(kwargs.get("filename") or "agent-script.sh")
@@ -109,6 +154,9 @@ class RunTempScriptTool(BaseTool):
         if rejection is not None:
             return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
+        risk = analyze_command_risk(str(content), workspace=workspace)
+        if risk.requires_confirmation and not bool(kwargs.get("confirmed", False)):
+            return _confirmation_required_result(self.name, risk)
         timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
         filename = _safe_script_filename(str(kwargs.get("filename") or "agent-script.sh"))
@@ -204,6 +252,91 @@ def _command_rejection(command_text: str, tool_name: str) -> ToolResult | None:
                 data={"pattern": pattern},
             )
     return None
+
+
+class CommandRisk:
+    def __init__(self, requires_confirmation: bool, summary: str = "", paths: list[str] | None = None) -> None:
+        self.requires_confirmation = requires_confirmation
+        self.summary = summary
+        self.paths = list(paths or [])
+
+
+def analyze_command_risk(command_text: str, workspace: Path | None) -> CommandRisk:
+    if workspace is None:
+        return CommandRisk(False)
+    normalized = command_text.strip()
+    if not normalized:
+        return CommandRisk(False)
+    if not _looks_mutating(normalized):
+        return CommandRisk(False)
+    outside_paths = _outside_workspace_paths(normalized, workspace)
+    if not outside_paths:
+        return CommandRisk(False)
+    visible_paths = ", ".join(outside_paths[:3])
+    extra = len(outside_paths) - 3
+    if extra > 0:
+        visible_paths += f", ... (+{extra})"
+    return CommandRisk(
+        True,
+        summary=f"high-risk command may modify outside workspace: {visible_paths}",
+        paths=outside_paths,
+    )
+
+
+def _looks_mutating(command_text: str) -> bool:
+    if SHELL_REDIRECT_PATTERN.search(command_text):
+        return True
+    try:
+        tokens = shlex.split(command_text, posix=True)
+    except ValueError:
+        tokens = re.split(r"\s+", command_text)
+    for token in tokens:
+        command_name = Path(token).name
+        if command_name in HIGH_RISK_MUTATING_COMMANDS:
+            return True
+    return False
+
+
+def _outside_workspace_paths(command_text: str, workspace: Path) -> list[str]:
+    workspace_root = workspace.expanduser().resolve()
+    paths: list[str] = []
+    for raw_path in _absolute_path_candidates(command_text):
+        resolved = Path(raw_path).expanduser().resolve(strict=False)
+        try:
+            resolved.relative_to(workspace_root)
+        except ValueError:
+            value = str(resolved)
+            if value not in paths:
+                paths.append(value)
+    return paths
+
+
+def _absolute_path_candidates(command_text: str) -> list[str]:
+    candidates = [match.group("path") for match in SHELL_REDIRECT_PATTERN.finditer(command_text)]
+    candidates.extend(match.group(0) for match in ABSOLUTE_PATH_PATTERN.finditer(command_text))
+    cleaned: list[str] = []
+    for candidate in candidates:
+        value = candidate.strip().strip("'\"")
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def _optional_workspace(kwargs: dict[str, Any]) -> Path | None:
+    workspace = kwargs.get("workspace")
+    if workspace is None:
+        return None
+    return Path(workspace).expanduser().resolve()
+
+
+def _confirmation_required_result(tool_name: str, risk: CommandRisk) -> ToolResult:
+    return ToolResult(
+        tool_name=tool_name,
+        ok=False,
+        summary=risk.summary or "command requires confirmation",
+        error_code="COMMAND_REQUIRES_CONFIRMATION",
+        data={"risk": "high", "outside_workspace_paths": risk.paths},
+    )
 
 
 def _safe_command_env(cwd: Path) -> dict[str, str]:

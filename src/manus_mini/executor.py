@@ -68,8 +68,11 @@ class Executor:
         tool = self.registry.get(call.name)
         preview: ToolPreview | None = None
         requires_confirmation = bool(getattr(tool, "requires_confirmation", False))
-        if self.dry_run or requires_confirmation:
-            preview = tool.preview(**call.args)
+        if self.dry_run or requires_confirmation or call.name in {"run_bash", "run_temp_script"}:
+            try:
+                preview = tool.preview(**call.args)
+            except NotImplementedError:
+                preview = None
         if preview is not None and preview.requires_confirmation and "confirmed" not in call.args:
             pending = self._build_pending_confirmation(tool, call, preview, session)
             session.pending_confirmation = pending
@@ -175,7 +178,7 @@ class Executor:
             tool_call_id=call.id,
             tool_args=dict(call.args),
             summary=preview.summary,
-            prompt=f"即将修改: {preview.summary}",
+            prompt=_confirmation_prompt(preview),
             diff_preview=diff_preview,
         )
 
@@ -301,6 +304,12 @@ def _preview_replace_content(content: str, args: dict) -> str | None:
     if len(matches) != expected:
         return None
     return _replace_matches(content, matches, old_value, str(new_text))
+
+
+def _confirmation_prompt(preview: ToolPreview) -> str:
+    if preview.risk_level == "command":
+        return f"即将执行: {preview.summary}"
+    return f"即将修改: {preview.summary}"
 
 
 def _positive_int(value, default: int) -> int:

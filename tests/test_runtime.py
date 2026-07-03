@@ -773,6 +773,33 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
     assert command_events[1].data.get("blocked_duplicate") is True
 
 
+def test_react_loop_requires_confirmation_for_high_risk_external_command(tmp_path: Path) -> None:
+    external_path = tmp_path.parent / "outside-marker.txt"
+
+    class ExternalCommandLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-rm-outside",
+                        name="run_bash",
+                        args={"command": f"rm -f {external_path}"},
+                    )
+                ]
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="删除外部文件", cwd=tmp_path)
+
+    result = ReActLoop(ExternalCommandLLM(), ToolRegistry()).run(task, session)
+
+    assert "确认" in result or "即将执行" in result
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "run_bash"
+    assert "outside workspace" in session.pending_confirmation.summary
+    assert not external_path.exists()
+
+
 def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_path: Path) -> None:
     class RootPathLLM:
         def __init__(self) -> None:
