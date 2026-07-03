@@ -14,7 +14,7 @@ def new_id(prefix: str) -> str:
 
 class LoopLimits(BaseModel):
     max_engineering_steps: int = 3
-    max_react_iterations: int = 20
+    max_react_iterations: int = 99
     max_reflection_rounds: int = 3
     max_tool_calls_per_iteration: int = 99
     max_tool_retries: int = 3

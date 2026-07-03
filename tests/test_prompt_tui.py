@@ -103,7 +103,7 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
 
     assert "欢迎使用 Manus Mini" in welcome
     assert "工程循环上限：3 轮" in welcome
-    assert "ReAct 循环上限：20 轮" in welcome
+    assert "ReAct 循环上限：99 轮" in welcome
     assert "Reflection 循环上限：3 轮" in welcome
     assert "单轮运行超时" not in welcome
     assert "压缩上下文" in welcome
