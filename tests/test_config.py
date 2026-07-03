@@ -75,8 +75,55 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     assert config.llm_timeout_seconds == 15
 
 
+def test_app_config_falls_back_to_user_env_when_project_env_is_missing(tmp_path: Path, monkeypatch) -> None:
+    clear_llm_env_vars(monkeypatch)
+    home = tmp_path / "home"
+    user_env = home / ".manus-mini" / ".env"
+    user_env.parent.mkdir(parents=True)
+    user_env.write_text(
+        "LLM_PROVIDER=openai-compatible\n"
+        "LLM_BASE_URL=http://localhost:1234/v1\n"
+        "LLM_API_KEY=test-key\n"
+        "LLM_MODEL=qwen-user\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    config = AppConfig.from_env(tmp_path / "other-project" / ".env")
+
+    assert config.llm_provider == "openai-compatible"
+    assert config.llm_base_url == "http://localhost:1234/v1"
+    assert config.llm_api_key == "test-key"
+    assert config.llm_model == "qwen-user"
+
+
+def test_app_config_falls_back_to_package_env_when_project_and_user_env_are_missing(tmp_path: Path, monkeypatch) -> None:
+    clear_llm_env_vars(monkeypatch)
+    package_env = tmp_path / "package" / ".env"
+    package_env.parent.mkdir()
+    package_env.write_text(
+        "LLM_PROVIDER=openai-compatible\n"
+        "LLM_BASE_URL=http://localhost:1234/v1\n"
+        "LLM_API_KEY=test-key\n"
+        "LLM_MODEL=qwen-package\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.from_env(
+        tmp_path / "other-project" / ".env",
+        user_env_path=tmp_path / "home" / ".manus-mini" / ".env",
+        package_env_path=package_env,
+    )
+
+    assert config.llm_provider == "openai-compatible"
+    assert config.llm_base_url == "http://localhost:1234/v1"
+    assert config.llm_api_key == "test-key"
+    assert config.llm_model == "qwen-package"
+
+
 def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
     config = AppConfig.from_env(tmp_path / ".env")
 
@@ -85,10 +132,16 @@ def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) 
 
 def test_get_default_llm_client_requires_explicit_provider(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.chdir(tmp_path)
+    config = AppConfig.from_env(
+        tmp_path / ".env",
+        user_env_path=tmp_path / "home" / ".manus-mini" / ".env",
+        package_env_path=tmp_path / "package" / ".env",
+    )
 
     with pytest.raises(RuntimeError, match="LLM_PROVIDER must be set to openai-compatible"):
-        get_default_llm_client()
+        get_default_llm_client(config)
 
 
 def test_get_default_llm_client_uses_openai_compatible(monkeypatch) -> None:

@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 
 ## 配置
 
-项目会自动读取根目录下的 `.env` 文件。当前支持：
+项目会自动读取配置。查找顺序为：环境变量、当前运行目录的 `.env`、用户级 `~/.manus-mini/.env`、manus-mini 安装源码根目录的 `.env`。当前支持：
 
 ```env
 LLM_PROVIDER=openai-compatible

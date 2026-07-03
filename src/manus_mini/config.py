@@ -58,7 +58,12 @@ class AppConfig:
     llm_timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS
 
     @classmethod
-    def from_env(cls, env_path: str | Path = ".env") -> "AppConfig":
+    def from_env(
+        cls,
+        env_path: str | Path = ".env",
+        user_env_path: str | Path | None = None,
+        package_env_path: str | Path | None = None,
+    ) -> "AppConfig":
         explicit_env = {
             "LLM_PROVIDER": os.environ.get("LLM_PROVIDER"),
             "LLM_BASE_URL": os.environ.get("LLM_BASE_URL"),
@@ -67,11 +72,13 @@ class AppConfig:
             "LLM_TIMEOUT_SECONDS": os.environ.get("LLM_TIMEOUT_SECONDS"),
         }
         loaded_env = load_dotenv(env_path)
+        loaded_user_env = load_dotenv(user_env_path or Path.home() / ".manus-mini" / ".env")
+        loaded_package_env = load_dotenv(package_env_path or _default_package_env_path())
 
         def resolve(key: str, default: str) -> str:
             if explicit_env[key] is not None:
                 return explicit_env[key] or default
-            return loaded_env.get(key, default)
+            return loaded_env.get(key, loaded_user_env.get(key, loaded_package_env.get(key, default)))
 
         default_timeout = str(DEFAULT_LLM_TIMEOUT_SECONDS)
         timeout_value = resolve("LLM_TIMEOUT_SECONDS", default_timeout)
@@ -87,3 +94,7 @@ class AppConfig:
             llm_model=resolve("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
             llm_timeout_seconds=max(1, timeout_seconds),
         )
+
+
+def _default_package_env_path() -> Path:
+    return Path(__file__).resolve().parents[2] / ".env"
