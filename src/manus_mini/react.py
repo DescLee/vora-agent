@@ -5,7 +5,15 @@ from pathlib import PurePosixPath
 from time import monotonic
 
 from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, validate_tool_call_pairs
-from manus_mini.llm import LLMClient, LLMRequestError, LLMResult, extract_usage, get_default_llm_client, openai_messages
+from manus_mini.llm import (
+    LLMClient,
+    LLMRequestError,
+    LLMResult,
+    OpenAICompatibleLLMClient,
+    extract_usage,
+    get_default_llm_client,
+    openai_messages,
+)
 from manus_mini.executor import Executor, sanitize_tool_args
 from manus_mini.logging import EventLogger
 from manus_mini.models import Message, SessionState, TaskState, TraceEvent
@@ -13,6 +21,7 @@ from manus_mini.observer import Observer
 from manus_mini.scheduler import ToolScheduler
 from manus_mini.tools.base import ToolResult
 from manus_mini.tools.registry import ToolRegistry
+from manus_mini.tools.shell_tools import LLMCommandRiskJudge, RunBashTool, RunTempScriptTool
 
 
 MAX_TOOL_RESULT_PATHS = 20
@@ -134,11 +143,25 @@ class ReActLoop:
     ) -> None:
         self.llm = llm
         self.registry = registry or ToolRegistry()
+        self._attach_command_risk_judge()
         self.scheduler = ToolScheduler(self.registry)
         self.dry_run = dry_run
         self.executor = Executor(self.registry, dry_run=dry_run)
         self.observer = Observer()
         self.logger = logger
+
+    def _attach_command_risk_judge(self) -> None:
+        if self.llm is None:
+            return
+        supports_risk_judgement = isinstance(self.llm, OpenAICompatibleLLMClient) or bool(
+            getattr(self.llm, "supports_command_risk_judgement", False)
+        )
+        if not supports_risk_judgement:
+            return
+        risk_judge = LLMCommandRiskJudge(self.llm)
+        for tool in self.registry.all():
+            if isinstance(tool, (RunBashTool, RunTempScriptTool)) and tool.risk_judge is None:
+                tool.risk_judge = risk_judge
 
     def run(self, task: TaskState, session: SessionState) -> str:
         system_prompt = self._system_prompt_for_task(task)
@@ -170,6 +193,7 @@ class ReActLoop:
                     data={
                         "iteration": iteration_index,
                         "content_preview": llm_result.content[:500],
+                        "reasoning_content": llm_result.reasoning_content[:1000],
                         "tool_calls": [
                             {
                                 "id": call.id,

@@ -135,6 +135,8 @@ def format_plan(task: TaskState) -> str:
         "failed": "失败",
     }
     lines = ["执行计划"]
+    if task.plan_reasoning_content:
+        lines.append(f"  规划理由: {task.plan_reasoning_content}")
     running_seen = False
     for index, step in enumerate(task.plan, start=1):
         status = step.status
@@ -183,13 +185,26 @@ def format_llm_tool_rounds(task: TaskState, events: list[TraceEvent], limit: int
 
 def format_llm_tool_round(llm_event: TraceEvent, following_events: list[TraceEvent], task: TaskState, iteration) -> str:
     title = f"LLM 回合 {iteration}" if iteration else "LLM 回合"
-    lines = [title, "LLM 返回", "- 已返回"]
+    lines = [title]
+    reasoning = format_llm_reasoning_summary(llm_event.data.get("reasoning_content"))
+    if reasoning:
+        lines.append(f"- 推理: {reasoning}")
 
     tool_calls = [call for call in llm_event.data.get("tool_calls", []) or [] if isinstance(call, dict)]
     if tool_calls:
         batch_groups = group_tool_calls_by_batch(tool_calls, following_events)
         lines.extend(format_tool_batch_sections(batch_groups, following_events, task, iteration))
     return "\n".join(lines)
+
+
+def format_llm_reasoning_summary(value) -> str:
+    text = redact_sensitive_text(str(value or "").strip())
+    if not text:
+        return ""
+    compact = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    if len(compact) <= 240:
+        return compact
+    return compact[:240] + "... [已截断]"
 
 
 def group_tool_calls_by_batch(tool_calls: list[dict], events: list[TraceEvent]) -> list[tuple[int, list[dict]]]:
@@ -497,6 +512,7 @@ def format_transcript(
     visible_trace_count: int | None = None,
 ) -> str:
     sections = [
+        format_section("会话信息", format_session_run_info(session)),
         format_section("用户问题", format_user_question(session)),
     ]
     if show_process or session.active_task is not None:
@@ -515,14 +531,24 @@ def format_transcript(
     return "\n\n".join(sections)
 
 
+def format_session_run_info(session: SessionState) -> str:
+    task = session.active_task
+    if task is None:
+        return "- Run ID: 暂无"
+    return f"- Run ID: {task.run_id}"
+
+
 def format_welcome(
     limits: LoopLimits,
     llm_model: str | None = None,
     llm_configured: bool | None = None,
+    llm_config_source: str | None = None,
 ) -> str:
     llm_lines: list[str] = ["模型配置"]
     if llm_configured:
         llm_lines.append(f"- 当前模型：{llm_model or '未指定'}")
+        if llm_config_source:
+            llm_lines.append(f"- 配置来源：{llm_config_source}")
     elif llm_configured is False:
         llm_lines.extend(
             [
@@ -545,7 +571,7 @@ def format_welcome(
             f"- ReAct 循环上限：{limits.max_react_iterations} 轮",
             f"- Reflection 循环上限：{limits.max_reflection_rounds} 轮",
             f"- 工具重试上限：{limits.max_tool_retries} 次",
-            f"- 工具超时上限：{limits.max_tool_timeout_seconds} 秒",
+            f"- 工具执行时间：{format_tool_timeout_limit(limits.max_tool_timeout_seconds)}",
             "",
             "操作说明",
             "- Enter 发送消息",
@@ -557,6 +583,12 @@ def format_welcome(
             "- Ctrl-C 退出程序",
         ]
     )
+
+
+def format_tool_timeout_limit(value: int | None) -> str:
+    if value is None or value <= 0:
+        return "不限制"
+    return f"{value} 秒"
 
 
 def format_trace_data(data: dict) -> str:
@@ -754,7 +786,9 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
         style = "class:process" if current_section == "执行过程" else ""
         if current_section == "执行过程":
             stripped_line = bare_line.strip()
-            if stripped_line.endswith("变更预览:"):
+            if stripped_line.startswith("- 推理:"):
+                style = "class:process.reasoning"
+            elif stripped_line.endswith("变更预览:"):
                 in_process_diff = True
             elif in_process_diff:
                 if bare_line.startswith("  "):
@@ -789,7 +823,7 @@ def _looks_like_standalone_process_text(text: str) -> bool:
         stripped = line.strip()
         if not stripped:
             continue
-        return stripped.startswith(("步骤概览", "执行计划", "LLM 回合", "工具调度"))
+        return stripped.startswith(("执行过程", "步骤概览", "执行计划", "LLM 回合", "工具调度"))
     return False
 
 

@@ -1,15 +1,17 @@
 import json
 from pathlib import Path
 import re
-import tempfile
+import threading
 from time import perf_counter, sleep
 
 from manus_mini.llm import LLMResult
+from manus_mini.executor import Executor
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop, format_tool_result_message
 from manus_mini.reflection import ReflectionLoop, ReflectionResult
 from manus_mini.logging import EventLogger
 from manus_mini.reporter import Reporter
+from manus_mini.logging import project_outputs_dir
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.tools.base import ToolResult
@@ -282,14 +284,14 @@ def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path
     assert re.match(r"^\d{8}-\d{6}-run-[a-f0-9]{12}\.md$", filename)
 
 
-def test_runtime_defaults_to_temp_reporter_output_dir_under_pytest(tmp_path: Path) -> None:
-    runtime = AgentRuntime(llm=ScriptedLLM())
+def test_runtime_defaults_to_project_reporter_output_dir_under_pytest(tmp_path: Path) -> None:
+    runtime = AgentRuntime(llm=ScriptedLLM(), cwd=tmp_path)
 
-    assert runtime.reporter.output_dir == Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
+    assert runtime.reporter.output_dir == project_outputs_dir(tmp_path)
     assert ".manus-mini/projects/" in str(runtime.logger.root)
     assert str(runtime.logger.root).endswith("/runs")
     assert runtime.reporter.run_root is not None
-    assert runtime.reporter.run_root == Path(tempfile.gettempdir()) / "manus-mini" / "runs"
+    assert runtime.reporter.run_root == project_outputs_dir(tmp_path).parent / "runs"
 
     session = SessionState.create(cwd=tmp_path)
     runtime.on_user_message("你好", session)
@@ -773,11 +775,15 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
     assert command_events[1].data.get("blocked_duplicate") is True
 
 
-def test_react_loop_requires_confirmation_for_high_risk_external_command(tmp_path: Path) -> None:
+def test_react_loop_requires_confirmation_when_llm_marks_command_high_risk(tmp_path: Path) -> None:
     external_path = tmp_path.parent / "outside-marker.txt"
 
     class ExternalCommandLLM:
+        supports_command_risk_judgement = True
+
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            if any("classify shell command risk" in getattr(message, "content", "") for message in messages):
+                return LLMResult(content='{"risk_level":"high","reason":"deletes a user-selected file"}')
             return LLMResult(
                 tool_calls=[
                     ToolCall(
@@ -796,7 +802,7 @@ def test_react_loop_requires_confirmation_for_high_risk_external_command(tmp_pat
     assert "确认" in result or "即将执行" in result
     assert session.pending_confirmation is not None
     assert session.pending_confirmation.tool_name == "run_bash"
-    assert "outside workspace" in session.pending_confirmation.summary
+    assert "LLM marked command as high risk" in session.pending_confirmation.summary
     assert not external_path.exists()
 
 
@@ -1130,7 +1136,51 @@ def test_react_loop_does_not_retry_deterministic_tool_errors(tmp_path: Path) -> 
     assert not any(event.message == "Tool retry scheduled" for event in task.trace_events)
 
 
-def test_react_loop_marks_tool_timeout(tmp_path: Path) -> None:
+def test_executor_runs_tools_in_shared_thread_pool_capped_at_eight(tmp_path: Path) -> None:
+    class ConcurrentTool:
+        name = "concurrent"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+            self.lock = threading.Lock()
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            sleep(0.05)
+            with self.lock:
+                self.active -= 1
+            return ToolResult(tool_name=self.name, ok=True, summary=f"done {kwargs['index']}")
+
+    tool = ConcurrentTool()
+    executor = Executor(ToolRegistry(tools=[tool]))
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="并发工具", cwd=tmp_path)
+    calls = [
+        ToolCall(id=f"call-{index}", name="concurrent", args={"workspace": tmp_path, "index": index})
+        for index in range(12)
+    ]
+
+    results = executor.run_batch(calls, session, task)
+
+    assert len(results) == 12
+    assert all(result.ok for result in results.values())
+    assert tool.max_active > 1
+    assert tool.max_active <= 8
+
+
+def test_react_loop_does_not_time_out_tool_execution(tmp_path: Path) -> None:
     class SlowTool:
         name = "slow"
         risk_level = "safe"
@@ -1158,13 +1208,13 @@ def test_react_loop_marks_tool_timeout(tmp_path: Path) -> None:
             return LLMResult(content="timeout handled")
 
     session = SessionState.create(cwd=tmp_path)
-    task = TaskState.create(goal="工具超时", cwd=tmp_path, limits=LoopLimits(max_tool_timeout_seconds=0))
+    task = TaskState.create(goal="工具不限制执行时间", cwd=tmp_path, limits=LoopLimits(max_tool_timeout_seconds=0))
 
     result = ReActLoop(TimeoutLLM(), ToolRegistry(tools=[SlowTool()])).run(task, session)
 
     assert result == "timeout handled"
-    assert task.observations[-1].ok is False
-    assert task.observations[-1].summary == "tool execution timed out"
+    assert task.observations[-1].ok is True
+    assert task.observations[-1].summary == "done"
 
 
 def test_react_loop_marks_tool_retry_exhausted(tmp_path: Path) -> None:

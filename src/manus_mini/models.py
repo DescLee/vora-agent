@@ -18,7 +18,7 @@ class LoopLimits(BaseModel):
     max_reflection_rounds: int = 3
     max_tool_calls_per_iteration: int = 99
     max_tool_retries: int = 3
-    max_tool_timeout_seconds: int = 30
+    max_tool_timeout_seconds: int | None = None
     max_estimated_tokens: int = 128_000
 
 
@@ -132,6 +132,7 @@ class TaskState(BaseModel):
     last_total_tokens: int | None = None
     step_count: int = 0
     result: str = ""
+    plan_reasoning_content: str = ""
 
     @classmethod
     def create(cls, goal: str, cwd: Path, limits: LoopLimits | None = None) -> "TaskState":

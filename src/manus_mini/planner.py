@@ -34,20 +34,20 @@ class Planner:
         self.llm = llm
         self.logger = logger
 
-    def build_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> list[PlanStep]:
+    def build_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> tuple[list[PlanStep], str]:
         normalized = goal.lower()
         if _looks_like_cli_issue(goal, normalized):
-            return self._build_cli_issue_plan(goal)
+            return self._build_cli_issue_plan(goal), ""
         if _is_small_talk(goal, normalized):
-            return [PlanStep(description="让 LLM 直接回复用户，不调用本地文件工具", intent="chat")]
+            return [PlanStep(description="让 LLM 直接回复用户，不调用本地文件工具", intent="chat")], ""
 
-        llm_plan = self._build_llm_plan(goal, session, run_id=run_id)
-        if llm_plan:
-            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_plan))
+        llm_steps, reasoning = self._build_llm_plan(goal, session, run_id=run_id)
+        if llm_steps:
+            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_steps)), reasoning
 
-        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized)))
+        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized))), ""
 
-    def _build_llm_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> list[PlanStep]:
+    def _build_llm_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> tuple[list[PlanStep], str]:
         messages = self._build_prompt_messages(goal, session)
         tool_names: list[str] = []
         self._record_llm_request(session, run_id, messages, tool_names)
@@ -61,7 +61,7 @@ class Planner:
                 tool_names,
                 api_response_raw={"error": "planner llm request failed", "fallback": True},
             )
-            return []
+            return [], ""
         self._record_llm_response(
             session,
             run_id,
@@ -70,7 +70,7 @@ class Planner:
             api_request_payload=result.source_request or {},
             api_response_raw=result.source_response or result.model_dump(mode="json"),
         )
-        return self._parse_llm_plan(result.content)
+        return self._parse_llm_plan(result.content), result.reasoning_content
 
     def _build_prompt_messages(self, goal: str, session: SessionState) -> list[Message]:
         recent_messages = session.messages[-8:]

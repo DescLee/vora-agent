@@ -56,6 +56,7 @@ class AppConfig:
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS
+    llm_config_source: str = ""
 
     @classmethod
     def from_env(
@@ -74,6 +75,15 @@ class AppConfig:
         loaded_env = load_dotenv(env_path)
         loaded_user_env = load_dotenv(user_env_path or Path.home() / ".manus-mini" / ".env")
         loaded_package_env = load_dotenv(package_env_path or _default_package_env_path())
+        sources = _config_sources(
+            env_path=env_path,
+            user_env_path=user_env_path or Path.home() / ".manus-mini" / ".env",
+            package_env_path=package_env_path or _default_package_env_path(),
+            loaded_env=loaded_env,
+            loaded_user_env=loaded_user_env,
+            loaded_package_env=loaded_package_env,
+            explicit_env=explicit_env,
+        )
 
         def resolve(key: str, default: str) -> str:
             if explicit_env[key] is not None:
@@ -93,8 +103,35 @@ class AppConfig:
             llm_api_key=resolve("LLM_API_KEY", "").strip(),
             llm_model=resolve("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
             llm_timeout_seconds=max(1, timeout_seconds),
+            llm_config_source=sources.get("LLM_PROVIDER")
+            or sources.get("LLM_BASE_URL")
+            or sources.get("LLM_API_KEY")
+            or sources.get("LLM_MODEL")
+            or "",
         )
 
 
 def _default_package_env_path() -> Path:
     return Path(__file__).resolve().parents[2] / ".env"
+
+
+def _config_sources(
+    env_path: str | Path,
+    user_env_path: str | Path,
+    package_env_path: str | Path,
+    loaded_env: dict[str, str],
+    loaded_user_env: dict[str, str],
+    loaded_package_env: dict[str, str],
+    explicit_env: dict[str, str | None],
+) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    for key, value in explicit_env.items():
+        if value is not None:
+            sources[key] = "环境变量"
+        elif key in loaded_env:
+            sources[key] = str(env_path)
+        elif key in loaded_user_env:
+            sources[key] = str(user_env_path)
+        elif key in loaded_package_env:
+            sources[key] = str(package_env_path)
+    return sources

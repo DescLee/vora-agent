@@ -1,7 +1,21 @@
 from pathlib import Path
 
 from manus_mini.tools import ToolRegistry
+from manus_mini.tools.shell_tools import CommandRisk
 from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
+
+
+class StaticRiskJudge:
+    def __init__(self, requires_confirmation: bool) -> None:
+        self.requires_confirmation = requires_confirmation
+        self.calls: list[tuple[str, Path | None]] = []
+
+    def analyze(self, command_text: str, workspace: Path | None) -> CommandRisk:
+        self.calls.append((command_text, workspace))
+        return CommandRisk(
+            self.requires_confirmation,
+            summary="llm says high risk" if self.requires_confirmation else "",
+        )
 
 
 def test_run_bash_executes_in_workspace_and_returns_output(tmp_path: Path) -> None:
@@ -32,16 +46,27 @@ def test_run_bash_rejects_dangerous_commands(tmp_path: Path) -> None:
     assert "rejected" in result.summary
 
 
-def test_run_bash_requires_confirmation_for_high_risk_external_path(tmp_path: Path) -> None:
-    external_path = tmp_path.parent / "outside-marker.txt"
+def test_run_bash_uses_llm_risk_judgement_for_confirmation(tmp_path: Path) -> None:
+    judge = StaticRiskJudge(requires_confirmation=True)
 
-    preview = RunBashTool().preview(workspace=tmp_path, command=f"rm -f {external_path}")
-    result = RunBashTool().run(workspace=tmp_path, command=f"rm -f {external_path}")
+    preview = RunBashTool(risk_judge=judge).preview(workspace=tmp_path, command="echo harmless")
+    result = RunBashTool(risk_judge=judge).run(workspace=tmp_path, command="echo harmless")
 
     assert preview.requires_confirmation is True
-    assert "outside workspace" in preview.summary
+    assert preview.summary == "llm says high risk"
     assert result.ok is False
     assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert judge.calls
+
+
+def test_run_bash_does_not_require_confirmation_only_because_path_is_external(tmp_path: Path) -> None:
+    external_path = tmp_path.parent / "outside-marker.txt"
+    judge = StaticRiskJudge(requires_confirmation=False)
+
+    preview = RunBashTool(risk_judge=judge).preview(workspace=tmp_path, command=f"rm -f {external_path}")
+
+    assert preview.requires_confirmation is False
+    assert "outside workspace" not in preview.summary
     assert not external_path.exists()
 
 
@@ -72,17 +97,16 @@ def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
     assert result.error_code == "COMMAND_REJECTED"
 
 
-def test_run_temp_script_requires_confirmation_for_high_risk_external_path(tmp_path: Path) -> None:
-    external_path = tmp_path.parent / "outside-marker.txt"
+def test_run_temp_script_uses_llm_risk_judgement_for_confirmation(tmp_path: Path) -> None:
+    judge = StaticRiskJudge(requires_confirmation=True)
 
-    preview = RunTempScriptTool().preview(workspace=tmp_path, content=f"rm -f {external_path}\n")
-    result = RunTempScriptTool().run(workspace=tmp_path, content=f"rm -f {external_path}\n")
+    preview = RunTempScriptTool(risk_judge=judge).preview(workspace=tmp_path, content="echo script\n")
+    result = RunTempScriptTool(risk_judge=judge).run(workspace=tmp_path, content="echo script\n")
 
     assert preview.requires_confirmation is True
-    assert "outside workspace" in preview.summary
+    assert preview.summary == "llm says high risk"
     assert result.ok is False
     assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert not external_path.exists()
 
 
 def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:

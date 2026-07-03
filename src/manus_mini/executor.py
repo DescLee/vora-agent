@@ -15,16 +15,29 @@ from manus_mini.tools.registry import ToolRegistry
 RETRYABLE_TOOL_ERROR_CODES = {"TOOL_TIMEOUT", "TOOL_ERROR"}
 USER_CANCELLED_ERROR_CODE = "USER_CANCELLED"
 MAX_DIFF_PREVIEW_CHARS = 4000
+DEFAULT_TOOL_THREAD_POOL_WORKERS = 8
 
 
 def sanitize_tool_args(args: dict) -> dict:
     return {key: value for key, value in dict(args).items() if key != "workspace" and not str(key).startswith("_")}
 
 
+def _tool_timeout_seconds(value: int | None) -> int | None:
+    if value is None or value <= 0:
+        return None
+    return value
+
+
 class Executor:
-    def __init__(self, registry: ToolRegistry, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        dry_run: bool = False,
+        max_workers: int = DEFAULT_TOOL_THREAD_POOL_WORKERS,
+    ) -> None:
         self.registry = registry
         self.dry_run = dry_run
+        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_workers), thread_name_prefix="manus-tool")
 
     def prepare_tool_call(self, call: ToolCall, session: SessionState) -> ToolCall:
         run_args = sanitize_tool_args(call.args)
@@ -63,6 +76,18 @@ class Executor:
         return rewritten
 
     def execute(self, call: ToolCall, session: SessionState, task: TaskState) -> ToolResult:
+        timeout_seconds = _tool_timeout_seconds(task.limits.max_tool_timeout_seconds)
+        future = self._tool_pool.submit(self._execute_sync, call, session, task)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except KeyboardInterrupt:
+            future.cancel()
+            return self._cancelled_result(call.name)
+        except FuturesTimeoutError:
+            future.cancel()
+            return ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
+
+    def _execute_sync(self, call: ToolCall, session: SessionState, task: TaskState) -> ToolResult:
         max_attempts = max(1, task.limits.max_tool_retries + 1)
         last_result: ToolResult | None = None
         tool = self.registry.get(call.name)
@@ -115,24 +140,14 @@ class Executor:
             )
 
         for attempt in range(1, max_attempts + 1):
-            pool = ThreadPoolExecutor(max_workers=1)
             try:
-                future = pool.submit(tool.run, **call.args)
-                result = future.result(timeout=task.limits.max_tool_timeout_seconds)
+                result = tool.run(**call.args)
             except KeyboardInterrupt:
-                pool.shutdown(wait=False, cancel_futures=True)
                 return self._cancelled_result(call.name)
-            except FuturesTimeoutError:
-                pool.shutdown(wait=False, cancel_futures=True)
-                return ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
             except PermissionError as error:
-                pool.shutdown(wait=False, cancel_futures=True)
                 return ToolResult(tool_name=call.name, ok=False, summary=str(error) or error.__class__.__name__, error_code=str(error) or "PERMISSION_DENIED")
             except Exception as error:  # noqa: BLE001
-                pool.shutdown(wait=False, cancel_futures=True)
                 result = ToolResult(tool_name=call.name, ok=False, summary=str(error) or error.__class__.__name__, error_code="TOOL_ERROR")
-            else:
-                pool.shutdown(wait=False, cancel_futures=True)
 
             if result.ok:
                 return result
@@ -226,13 +241,19 @@ class Executor:
             call = batch[0]
             return {call.id: self.execute(call, session, task)}
 
-        pool = ThreadPoolExecutor(max_workers=len(batch))
-        futures = {pool.submit(self.execute, call, session, task): call for call in batch}
+        timeout_seconds = _tool_timeout_seconds(task.limits.max_tool_timeout_seconds)
+        futures = {self._tool_pool.submit(self._execute_sync, call, session, task): call for call in batch}
         results: dict[str, ToolResult] = {}
         try:
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=timeout_seconds):
                 call = futures[future]
                 results[call.id] = future.result()
+        except FuturesTimeoutError:
+            for future in futures:
+                future.cancel()
+            for call in batch:
+                if call.id not in results:
+                    results[call.id] = ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
         except KeyboardInterrupt:
             for future in futures:
                 future.cancel()
@@ -249,9 +270,10 @@ class Executor:
             for call in batch:
                 if call.id not in results:
                     results[call.id] = self._cancelled_result(call.name)
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
         return results
+
+    def shutdown(self) -> None:
+        self._tool_pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _read_text_preview(path: Path) -> str:

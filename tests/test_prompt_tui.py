@@ -100,13 +100,22 @@ def test_format_message_block_wraps_user_text_with_light_panel() -> None:
 
 def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     task = TaskState.create(goal="demo", cwd=tmp_path)
-    welcome = format_welcome(task.limits, llm_model="deepseek-v4-flash", llm_configured=True)
+    env_path = tmp_path / ".env"
+    welcome = format_welcome(
+        task.limits,
+        llm_model="deepseek-v4-flash",
+        llm_configured=True,
+        llm_config_source=str(env_path),
+    )
 
     assert "欢迎使用 Manus Mini" in welcome
     assert "当前模型：deepseek-v4-flash" in welcome
+    assert f"配置来源：{env_path}" in welcome
     assert "工程循环上限：3 轮" in welcome
     assert "ReAct 循环上限：99 轮" in welcome
     assert "Reflection 循环上限：3 轮" in welcome
+    assert "工具执行时间：不限制" in welcome
+    assert "工具超时上限" not in welcome
     assert "单轮运行超时" not in welcome
     assert "压缩上下文" in welcome
     assert "/compact" in welcome
@@ -127,21 +136,28 @@ def test_format_welcome_warns_when_llm_config_is_missing(tmp_path: Path) -> None
 
 
 def test_prompt_tui_welcome_shows_current_model(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
-    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
-    monkeypatch.setenv("LLM_API_KEY", "test-key")
-    monkeypatch.setenv("LLM_MODEL", "qwen-test")
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "LLM_PROVIDER=openai-compatible\n"
+        "LLM_BASE_URL=http://localhost:1234/v1\n"
+        "LLM_API_KEY=test-key\n"
+        "LLM_MODEL=qwen-test\n",
+        encoding="utf-8",
+    )
+    for key in ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT_SECONDS"]:
+        monkeypatch.delenv(key, raising=False)
 
     tui = PromptTui(cwd=tmp_path)
 
     assert "当前模型：qwen-test" in tui.output.text
+    assert f"配置来源：{env_path}" in tui.output.text
     assert "未找到可用 LLM 配置" not in tui.output.text
 
 
 def test_prompt_tui_welcome_warns_when_llm_config_is_missing(tmp_path: Path, monkeypatch) -> None:
     from manus_mini.config import AppConfig
 
-    monkeypatch.setattr("manus_mini.prompt_tui.AppConfig.from_env", lambda: AppConfig())
+    monkeypatch.setattr("manus_mini.prompt_tui.AppConfig.from_env", lambda *args, **kwargs: AppConfig())
 
     tui = PromptTui(
         options=PromptTuiOptions(cwd=tmp_path, limits=LoopLimits()),
@@ -203,6 +219,19 @@ def test_output_fragments_style_process_section_with_dim_text() -> None:
 
     assert "class:process" in process_fragment[0]
     assert "class:process" not in artifact_fragment[0]
+
+
+def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> None:
+    fragments = style_output_fragments(
+        "执行过程\n"
+        "LLM 回合 1\n"
+        "- 推理: 需要读取项目文件。\n"
+        "工具调度\n"
+    )
+
+    reasoning_fragment = next(fragment for fragment in fragments if "推理:" in fragment[1])
+
+    assert reasoning_fragment[0] == "class:process.reasoning"
 
 
 def test_output_fragments_color_diff_additions_and_removals_in_process_section() -> None:
@@ -424,9 +453,34 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
     batch_index = process.index("第 1 批（1 个工具）")
     assert llm_index < schedule_index < batch_index
     assert "我需要先确认 README 内容。" not in process
-    assert "已返回" in process
+    assert "LLM 返回" not in process
+    assert "- 已返回" not in process
     assert "1.1 调用 read_file(call-read) path: README.md" in process
     assert "1.1 read_file(call-read) 成功: read README.md" in process
+
+
+def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 1,
+                "reasoning_content": "需要先读取 README 和 package.json 判断项目类型。",
+                "tool_calls": [{"id": "call-read", "name": "read_file", "args": {"path": "README.md"}}],
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "LLM 返回" not in process
+    assert "- 已返回" not in process
+    assert "- 推理: 需要先读取 README 和 package.json 判断项目类型。" in process
+    assert "1.1 调用 read_file(call-read) path: README.md" in process
 
 
 def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path) -> None:
@@ -562,7 +616,8 @@ def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
 
     process = format_process(session)
 
-    assert "LLM 返回" in process
+    assert "LLM 返回" not in process
+    assert "- 已返回" not in process
     assert "我需要先确认项目结构，所以准备读取文件列表。" not in process
     assert "返回内容" not in process
 
@@ -759,6 +814,8 @@ def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
     transcript = format_transcript(session, show_process=True)
 
     assert "────────────────" in transcript
+    assert "会话信息" in transcript
+    assert f"Run ID: {task.run_id}" in transcript
     assert "用户问题" in transcript
     assert "总结项目" in transcript
     assert "对话记录" not in transcript
@@ -1183,6 +1240,27 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert "running..." not in tui.status.text
 
 
+def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_path: Path) -> None:
+    tui = PromptTui(cwd=tmp_path)
+    previous_session = SessionState.create(cwd=tmp_path)
+    previous_session.messages.append(Message.user("第一轮"))
+    previous_task = TaskState.create(goal="第一轮", cwd=tmp_path)
+    previous_task.status = "done"
+    previous_task.result = "第一轮结果"
+    previous_session.active_task = previous_task
+    tui.append_completed_transcript(previous_session)
+    monkeypatch.setattr(tui, "start_agent_turn", lambda content: None)
+
+    tui.input.text = "第二轮"
+    tui.send_current_input()
+
+    assert "第一轮结果" in tui.output.text
+    assert f"Run ID: {previous_task.run_id}" in tui.output.text
+    assert "用户问题\n第二轮" in tui.output.text
+    assert tui.manager.current.active_task is not None
+    assert f"Run ID: {tui.manager.current.active_task.run_id}" in tui.output.text
+
+
 def test_run_agent_turn_resets_state_after_exception(monkeypatch) -> None:
     class FailingManager:
         current = SessionState.create(cwd=Path("."))
@@ -1582,7 +1660,8 @@ def test_stream_session_final_output_can_scroll_back_to_full_history(tmp_path: P
 
         assert tui.output.buffer.cursor_position == 0
         assert tui.output.document.cursor_position_row == 0
-        assert "用户问题" in tui.output.text.splitlines()[1]
+        assert "会话信息" in tui.output.text.splitlines()[1]
+        assert "用户问题" in tui.output.text
 
     asyncio.run(run())
 

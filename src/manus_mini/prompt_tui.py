@@ -269,6 +269,7 @@ class PromptTui:
         self.visible_trace_count = 0
         self.trace_reveal_batch_size = 3
         self.follow_output = True
+        self.completed_transcript_blocks: list[str] = []
         self.confirmation_in_progress = False
         self.confirmation_scroll_batch_size = 5
         self.confirmation_render_signature: tuple[str, str, str, str, bool] | None = None
@@ -302,7 +303,7 @@ class PromptTui:
         self.app = self._build_app()
 
     def _format_initial_welcome(self) -> str:
-        config = AppConfig.from_env()
+        config = AppConfig.from_env(self.options.cwd / ".env")
         llm_configured = (
             config.llm_provider == "openai-compatible"
             and bool(config.llm_base_url)
@@ -312,6 +313,7 @@ class PromptTui:
             self.manager.runtime.default_limits,
             llm_model=config.llm_model,
             llm_configured=llm_configured,
+            llm_config_source=config.llm_config_source,
         )
 
     def _build_app(self) -> Application:
@@ -414,6 +416,7 @@ class PromptTui:
                 "frame.label": "#f3f0e8",
                 "panel": "bg:#172026 #d7dedb",
                 "process": "bg:#172026 #8fa19c",
+                "process.reasoning": "bg:#172026 #d7dedb",
                 "process.diff": "bg:#172026 #d7dedb",
                 "process.diff.header": "bg:#172026 #8fa19c",
                 "process.diff.add": "bg:#123625 #9ff2c2",
@@ -450,7 +453,7 @@ class PromptTui:
         self.manager.current.messages.append(Message.user(content))
         self.manager.current.active_task = TaskState.create(goal=content, cwd=self.manager.current.cwd)
         self.visible_trace_count = 0
-        self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
+        self.set_output_text(self.format_transcript_with_history(self.manager.current, show_process=True), force_follow=True)
         self.is_running = True
         self.status.text = format_status(self.manager.current)
         self.app.layout.focus(self.input)
@@ -475,7 +478,7 @@ class PromptTui:
         self.manager._save_current(self.manager.current)
         self.refresh_confirmation_panel()
         self.status.text = format_status(self.manager.current)
-        self.set_output_text(format_transcript(self.manager.current, show_process=True), force_follow=True)
+        self.set_output_text(self.format_transcript_with_history(self.manager.current, show_process=True), force_follow=True)
         self.app.layout.focus(self.input)
         self.app.invalidate()
 
@@ -513,7 +516,7 @@ class PromptTui:
 
         self.advance_visible_trace_count()
         self.set_output_text(
-            format_transcript(
+            self.format_transcript_with_history(
                 self.manager.current,
                 show_process=True,
                 visible_trace_count=self.visible_trace_count,
@@ -545,10 +548,11 @@ class PromptTui:
         try:
             for index in range(0, len(result), 8):
                 visible = result[: index + 8]
-                self.set_output_text(format_transcript(session, show_process=False, result_override=visible))
+                self.set_output_text(self.format_transcript_with_history(session, show_process=False, result_override=visible))
                 self.app.invalidate()
                 await asyncio.sleep(0.03)
-            self.set_output_text(format_transcript(session, show_process=False))
+            self.append_completed_transcript(session)
+            self.set_output_text(self.format_history())
             self.app.invalidate()
         finally:
             self.is_streaming_artifact = False
@@ -654,6 +658,37 @@ class PromptTui:
             self.scroll_output_to_end()
         else:
             self.follow_output = False
+
+    def append_completed_transcript(self, session: SessionState) -> None:
+        if session.pending_confirmation is not None:
+            return
+        if session.active_task is None or session.active_task.status not in {"done", "failed"}:
+            return
+        block = format_transcript(session, show_process=False)
+        if not block:
+            return
+        if not self.completed_transcript_blocks or self.completed_transcript_blocks[-1] != block:
+            self.completed_transcript_blocks.append(block)
+
+    def format_transcript_with_history(
+        self,
+        session: SessionState,
+        *,
+        show_process: bool,
+        result_override: str | None = None,
+        visible_trace_count: int | None = None,
+    ) -> str:
+        current = format_transcript(
+            session,
+            show_process=show_process,
+            result_override=result_override,
+            visible_trace_count=visible_trace_count,
+        )
+        blocks = [*self.completed_transcript_blocks, current]
+        return "\n\n".join(block for block in blocks if block)
+
+    def format_history(self) -> str:
+        return "\n\n".join(self.completed_transcript_blocks)
 
     def is_output_at_bottom(self) -> bool:
         return self.output.is_at_bottom()

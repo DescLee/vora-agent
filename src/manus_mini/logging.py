@@ -35,6 +35,10 @@ def project_runs_dir(cwd: Path) -> Path:
     return project_storage_dir(cwd) / "runs"
 
 
+def project_outputs_dir(cwd: Path) -> Path:
+    return project_storage_dir(cwd) / "outputs"
+
+
 def project_sessions_dir(cwd: Path) -> Path:
     return project_storage_dir(cwd) / "sessions"
 

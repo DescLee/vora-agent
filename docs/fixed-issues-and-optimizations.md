@@ -139,15 +139,17 @@
 
 - 现象：执行过程只突出工具调用，用户看不到 LLM 为什么要调用这些工具。
 - 修复：执行过程改为按 LLM 回合分组展示：
-  - 先展示“LLM 返回”。
-  - 再展示对应“工具调用”。
+  - 先展示 `LLM 回合 N`。
+  - 如果模型返回 `reasoning_content`，展示压缩后的“推理”摘要。
+  - 不再展示固定占位的“LLM 返回 / 已返回”。
+  - 再展示对应“工具调度”和工具调用。
   - 最后展示“调用进度或结果”。
 - 示例：
   - `LLM 回合 1`
-  - `LLM 返回：我需要先确认 README 内容。`
-  - `工具调用：read_file(call-read) path: README.md`
+  - `推理：需要先确认 README 和 package.json 判断项目类型。`
+  - `工具调度：read_file(call-read) path: README.md`
   - `调用进度或结果：read_file(call-read) 成功，read README.md`
-- 验证：测试覆盖 LLM 返回、工具调用、调用结果的展示顺序。
+- 验证：测试覆盖 LLM 回合、推理摘要、工具调用、调用结果的展示顺序和推理行高亮样式。
 
 ### 2.15 上下文占比与真实用量口径不一致
 
@@ -189,7 +191,7 @@
 - 现象：在其他项目目录启动 `manus-mini` 时，如果未命中 LLM 配置，用户只能在发送消息后看到运行失败；如果命中配置，欢迎页也看不到当前使用的模型。
 - 修复：
   - 欢迎页新增“模型配置”区域。
-  - 找到可用配置时展示当前模型，例如 `当前模型：deepseek-v4-flash`。
+  - 找到可用配置时展示当前模型和配置来源路径，例如 `当前模型：deepseek-v4-flash`、`配置来源：/path/to/.env`。
   - 未找到可用配置时提示配置环境变量，或在当前目录 `.env`、`~/.manus-mini/.env`、manus-mini 安装源码根目录 `.env` 中补齐 `LLM_PROVIDER / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`。
 - 验证：`tests/test_prompt_tui.py` 覆盖 formatter 和 TUI 初始化两层展示逻辑。
 
@@ -384,9 +386,10 @@
 ### 5.11 Bash 执行与临时脚本能力
 
 - 优化：
-  - 新增 `run_bash` 工具，在当前 workspace 中执行简短 bash 命令，并返回 exit code、stdout、stderr 和超时状态。
+  - 新增 `run_bash` 工具，在当前 workspace 中执行 bash 命令，并返回 exit code、stdout、stderr 和执行状态。
   - 新增 `run_temp_script` 工具，把 Agent 生成的 bash 脚本写入系统临时目录，执行完成后自动删除脚本文件。
-  - 两个工具都设置为 `command` 风险等级，默认超时并截断输出，避免长时间阻塞和日志体积失控。
+  - 两个工具都设置为 `command` 风险等级，默认不限制执行时间，只截断输出体积。
+  - 如调用方显式传入 `timeout_seconds`，命令和临时脚本仍会按指定秒数超时。
   - LLM tool schema 暴露 `command`、`content`、`is_test`、`timeout_seconds` 和 `output_limit` 参数。
 - 验证：测试覆盖 bash 成功/失败、临时脚本成功/失败后删除，以及工具注册和 schema 暴露。
 
@@ -814,10 +817,11 @@
 
 ### 9.19 默认运行数据迁移到用户目录并按项目隔离
 
-- 现象：默认 `runs/`、`.manus-mini/sessions` 和 `.manus-mini/memory.db` 会落在当前工程目录下，容易污染用户正在分析的项目；如果简单放到 `~/.manus-mini` 根目录，又会导致多个项目互相混用数据。
+- 现象：默认 `runs/`、`outputs/`、`.manus-mini/sessions` 和 `.manus-mini/memory.db` 会落在当前工程目录下，容易污染用户正在分析的项目；如果简单放到 `~/.manus-mini` 根目录，又会导致多个项目互相混用数据。
 - 修复：
   - 默认事件日志目录改为 `~/.manus-mini/projects/<project_key>/runs`。
   - 默认 run summary 也写入同一个项目隔离 runs 根目录。
+  - 默认报告产物目录改为 `~/.manus-mini/projects/<project_key>/outputs`。
   - session 文件改为 `~/.manus-mini/projects/<project_key>/sessions`。
   - persistent memory 改为 `~/.manus-mini/projects/<project_key>/memory.db`。
   - `project_key` 由项目目录名和项目绝对路径 hash 组成，兼顾可读性和同名项目隔离。
@@ -881,7 +885,7 @@
   - 删除 Runtime 中的总时长检查、`RUNTIME_TIMEOUT` 错误码和运行超时结果文案。
   - TUI 欢迎页不再展示“单轮运行超时”。
   - 产品设计、技术设计、计划文档和摘要同步移除 180 秒/3 分钟运行时长限制描述。
-- 保留：单工具超时 `max_tool_timeout_seconds` 仍保留，用于防止单个命令或工具调用长期挂起。
+- 后续调整：单工具执行默认也不再限时，详见 9.40。
 - 验证：测试覆盖 `LoopLimits` 不再暴露 `max_runtime_seconds`、欢迎页不再展示单轮运行超时，以及慢反思流程不会因总时长失败。
 
 ### 9.26 Planner / ReAct / Reflection 提示词收敛
@@ -980,16 +984,91 @@
   - 确认流程只清理当前已确认的 pending，保留续跑过程中产生的新 pending。
 - 验证：新增和更新 `tests/test_runtime.py`、`tests/test_models.py`、`tests/test_planner_reflector.py`、`tests/support.py`，覆盖强制 accept、默认 99 次工具调用、代码修改前置测试门禁、确认续跑和写后复测。
 
-### 9.35 高风险外部目录命令增加二次确认
+### 9.35 高风险命令由 LLM 判定并增加二次确认
 
-- 现象：`run_bash` / `run_temp_script` 虽然已有少量硬拒绝规则，但对“会修改项目目录以外路径”的命令缺少二次确认，例如删除、移动、改权限或重定向写入工作区外路径。
-- 根因：命令工具只做了固定危险模式拒绝，没有在执行前根据命令副作用和路径作用域做风险分析。
+- 现象：旧逻辑把“高风险副作用命令 + 工作区外绝对路径”作为二次确认条件，但实际风险不应只由是否影响工作目录外决定。
+- 根因：
+  - 路径作用域只能说明影响范围，不能完整判断命令是否高风险。
+  - 同样是工作区外路径，有些命令可能只是读取或无害检查；工作区内命令也可能具备破坏性。
 - 修复：
-  - 新增命令风险分析：识别 `rm`、`mv`、`cp`、`chmod`、`chown`、`mkdir`、`touch`、`truncate`、`tee`、`sed`、`rsync`、`install`、`ln` 等高风险写入/删除/权限类命令。
-  - 如果命令或临时脚本引用工作区外绝对路径，且属于高风险副作用操作，则返回 `COMMAND_REQUIRES_CONFIRMATION`，并通过 Executor 进入 pending confirmation。
+  - `run_bash` / `run_temp_script` 支持注入命令风险判定器。
+  - 默认真实 OpenAI-compatible LLM 路径下，由 LLM 对命令或脚本返回 `high/low` 风险判断。
+  - LLM 判为 `high` 时返回 `COMMAND_REQUIRES_CONFIRMATION`，并通过 Executor 进入 pending confirmation。
+  - 不再因为命令影响工作区外路径就自动判为高风险。
   - 用户确认后才会带 `confirmed=true` 真正执行；原有 `sudo`、`rm -rf /` 等灾难命令仍直接拒绝。
   - 确认提示对命令类工具使用“即将执行”，避免和文件写入的“即将修改”混淆。
-- 验证：`tests/test_shell_tools.py` 覆盖 shell 工具风险判断、未确认拦截、确认后执行；`tests/test_runtime.py` 覆盖 ReAct 调用高风险外部命令时进入用户二次确认。
+- 验证：`tests/test_shell_tools.py` 覆盖 LLM 风险判定触发确认、外部路径不再自动触发确认、确认后执行；`tests/test_runtime.py` 覆盖 ReAct 在 LLM 标记 high risk 时进入用户二次确认。
+
+### 9.36 TUI 展示 LLM reasoning_content
+
+- 现象：模型返回了 `reasoning_content`，但 TUI 执行过程只显示“LLM 返回 / 已返回”，用户看不到模型为什么要调用这些工具。
+- 根因：
+  - ReAct trace event 只记录 `content_preview` 和 `tool_calls`，没有把 `reasoning_content` 写入 trace。
+  - TUI formatter 对 LLM 回合只输出固定占位行。
+- 修复：
+  - ReAct 的 LLM trace event 增加 `reasoning_content` 摘要字段。
+  - TUI 在 `LLM 回合 N` 下展示 `推理: ...`，多行会压缩为单行，长内容截断并脱敏。
+  - 移除固定占位的“LLM 返回”和“- 已返回”。
+  - 推理行使用更亮的 `process.reasoning` 样式，和普通过程文本区分。
+- 验证：`tests/test_prompt_tui.py` 覆盖 reasoning_content 展示、占位行移除和推理行高亮样式。
+
+### 9.37 TUI 多轮对话展示不再清空
+
+- 现象：每次发起新对话时，TUI 会用当前轮 transcript 重画主输出区，上一轮的用户问题、执行过程和最终产物会从界面上消失。
+- 根因：TUI 只根据 `session.active_task` 渲染当前轮，没有把已完成轮次固化为历史展示块。
+- 修复：
+  - `PromptTui` 增加已完成 transcript 块列表。
+  - 当前轮运行时展示为“历史块 + 当前轮”；当前轮完成后，将最终 transcript 固化进历史块。
+  - 等待确认的中间状态不固化，避免重复保存未完成轮次。
+  - 每轮 transcript 开头增加“会话信息”，展示当前 `Run ID`，方便定位日志和产物。
+- 验证：`tests/test_prompt_tui.py` 覆盖新输入时保留上一轮展示、每轮显示 Run ID、最终输出仍可滚动回完整历史。
+
+### 9.38 默认 outputs 目录迁移到项目隔离用户目录
+
+- 现象：`runs`、`sessions`、`memory.db` 已经迁移到 `~/.manus-mini/projects/<project_key>/...`，但默认 `outputs/` 仍会落在当前工作目录或 pytest 的全局临时 outputs 下。
+- 根因：`AgentRuntime._default_reporter_output_dir()` 仍返回 `Path("outputs")` 或 pytest 临时全局目录，没有复用项目隔离存储路径。
+- 修复：
+  - 新增 `project_outputs_dir(cwd)`。
+  - 默认 `Reporter.output_dir` 改为 `~/.manus-mini/projects/<project_key>/outputs`。
+  - 默认 `Reporter.run_root` 继续对应同一个项目隔离目录下的 `runs`。
+  - 显式传入 `Reporter(output_dir)` 时仍尊重调用方路径。
+- 验证：`tests/test_logging.py` 覆盖项目隔离 outputs 路径；`tests/test_runtime.py` 覆盖默认 reporter 输出目录和 run summary 根目录。
+
+### 9.39 TUI 欢迎页展示 LLM 配置来源
+
+- 现象：TUI 欢迎页只展示当前模型，不展示配置来自环境变量、当前项目 `.env`、用户 `~/.manus-mini/.env` 还是源码根目录 `.env`。
+- 根因：`PromptTui._format_initial_welcome()` 没有把 `AppConfig.llm_config_source` 传给 formatter。
+- 修复：
+  - TUI 初始化时按当前 `cwd` 读取 `.env`。
+  - 欢迎页在配置可用时展示“配置来源”。
+- 验证：`tests/test_prompt_tui.py` 覆盖当前项目 `.env` 被识别并展示配置来源。
+
+### 9.40 工具执行时间默认不限制
+
+- 现象：用户希望工具执行时间不做限制，避免长时间测试、构建、安装或分析任务被框架层截断。
+- 根因：
+  - `LoopLimits.max_tool_timeout_seconds` 默认 30 秒。
+  - Executor 调用工具时总是把该值传给 `future.result(timeout=...)`。
+  - `run_bash` / `run_temp_script` 默认也会把 30 秒 timeout 传给 `subprocess.run()`。
+- 修复：
+  - `LoopLimits.max_tool_timeout_seconds` 默认改为 `None`。
+  - Executor 将 `None / 0 / 负数` 解释为“不限制”，只有正数才启用外层工具超时。
+  - 命令工具默认不传 subprocess timeout；如果调用方显式传入 `timeout_seconds`，仍按指定秒数限制。
+  - TUI 欢迎页改为展示“工具执行时间：不限制”。
+- 验证：`tests/test_models.py` 覆盖默认值；`tests/test_runtime.py` 覆盖慢工具不会因为 `max_tool_timeout_seconds=0` 被截断；`tests/test_shell_tools.py` 覆盖命令工具默认执行；`tests/test_prompt_tui.py` 覆盖欢迎页文案。
+
+### 9.41 工具执行统一使用最大 8 worker 线程池
+
+- 现象：旧实现中单个工具执行会临时创建 `ThreadPoolExecutor(max_workers=1)`；批量工具执行会按 batch 长度临时创建线程池，batch 较大时可能一次启动过多线程。
+- 根因：
+  - 工具执行线程池没有集中管理。
+  - 批量执行按工具数量直接设置 worker 数，缺少统一并发上限。
+- 修复：
+  - `Executor` 初始化时创建共享工具线程池，默认最大 worker 数为 8。
+  - 单个工具调用和批量工具调用都提交到同一个工具线程池执行。
+  - 批量执行不再按 batch 大小临时创建线程池，避免超过 8 个工具并发执行。
+  - 为避免同池嵌套等待，批量执行直接提交单个工具执行单元，不再在 worker 内二次提交 `tool.run`。
+- 验证：`tests/test_runtime.py` 覆盖 12 个同批工具调用时实际并发数大于 1 且不超过 8；同时保留工具不限时、重试耗尽和 shell 工具回归测试。
 
 ## 10. 近期关键提交快照
 

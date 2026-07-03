@@ -6,6 +6,7 @@ from manus_mini.logging import (
     EventLogger,
     default_manus_home,
     project_memory_path,
+    project_outputs_dir,
     project_runs_dir,
     project_sessions_dir,
     project_storage_dir,
@@ -79,6 +80,7 @@ def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path
     assert project_storage_dir(project_a).parent == default_manus_home() / "projects"
     assert project_sessions_dir(project_a) == project_storage_dir(project_a) / "sessions"
     assert project_runs_dir(project_a) == project_storage_dir(project_a) / "runs"
+    assert project_outputs_dir(project_a) == project_storage_dir(project_a) / "outputs"
     assert project_memory_path(project_a) == project_storage_dir(project_a) / "memory.db"
 
 

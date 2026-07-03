@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from inspect import signature
 from datetime import datetime
 from pathlib import Path
 
-from manus_mini.logging import EventLogger, project_runs_dir
+from manus_mini.logging import EventLogger, project_outputs_dir, project_runs_dir
 from manus_mini.context import (
     build_context_bundle,
     estimate_session_context_usage,
 )
-from manus_mini.models import AgentError, Artifact, LoopLimits, Message, SessionState, TaskState, TraceEvent
+from manus_mini.models import AgentError, Artifact, LoopLimits, Message, PlanStep, SessionState, TaskState, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.planner import Planner
 from manus_mini.reflection import ReflectionLoop
@@ -47,13 +45,9 @@ class AgentRuntime:
         self.memory_manager = memory_manager or MemoryManager(":memory:")
 
     def _default_reporter_output_dir(self) -> Path:
-        if os.environ.get("PYTEST_CURRENT_TEST"):
-            return Path(tempfile.gettempdir()) / "manus-mini" / "outputs"
-        return Path("outputs")
+        return project_outputs_dir(self.cwd)
 
     def _default_reporter_run_root(self) -> Path:
-        if os.environ.get("PYTEST_CURRENT_TEST"):
-            return Path(tempfile.gettempdir()) / "manus-mini" / "runs"
         return project_runs_dir(self.cwd)
 
     def on_user_message(
@@ -79,7 +73,9 @@ class AgentRuntime:
         model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
         task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
         self._build_context_bundle(session, content, relevant_memories)
-        task.plan = self._build_plan(content, session, task.run_id)
+        plan_steps, plan_reasoning = self._build_plan(content, session, task.run_id)
+        task.plan = plan_steps
+        task.plan_reasoning_content = plan_reasoning
         task.trace_events.append(
             TraceEvent(
                 phase="runtime",
@@ -198,7 +194,9 @@ class AgentRuntime:
                         task.status = "done"
                         break
                     if reflection.decision == "replan":
-                        task.plan = self._build_plan(f"{content}\n{reflection.reason}", session, task.run_id)
+                        plan_steps, plan_reasoning = self._build_plan(f"{content}\n{reflection.reason}", session, task.run_id)
+                        task.plan = plan_steps
+                        task.plan_reasoning_content = plan_reasoning
                         self._mark_plan_running(task)
                         task.trace_events.append(
                             TraceEvent(
@@ -276,7 +274,7 @@ class AgentRuntime:
             if step.status != "skipped":
                 step.status = "done"
 
-    def _build_plan(self, content: str, session: SessionState, run_id: str):
+    def _build_plan(self, content: str, session: SessionState, run_id: str) -> tuple[list[PlanStep], str]:
         build_plan = self.planner.build_plan
         if "run_id" in signature(build_plan).parameters:
             return build_plan(content, session, run_id=run_id)

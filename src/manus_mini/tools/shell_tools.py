@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
+import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from manus_mini.llm import LLMClient
+from manus_mini.models import Message
 from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult
 
 
-DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_OUTPUT_LIMIT = 12_000
 FORBIDDEN_COMMAND_PATTERNS = (
     r"\bsudo\b",
@@ -21,23 +22,15 @@ FORBIDDEN_COMMAND_PATTERNS = (
     r"\bshutdown\b",
     r"\breboot\b",
 )
-HIGH_RISK_MUTATING_COMMANDS = {
-    "chmod",
-    "chown",
-    "cp",
-    "install",
-    "ln",
-    "mkdir",
-    "mv",
-    "rm",
-    "rsync",
-    "sed",
-    "tee",
-    "touch",
-    "truncate",
-}
-SHELL_REDIRECT_PATTERN = re.compile(r"(?:^|[\s;&|])(?:>>?|2>>?|&>|2>)\s*(?P<path>(?:~|/)[^\s;&|]+)")
-ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])(?:~|/)[^\s;&|)]+")
+COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
+Return only compact JSON with:
+- risk_level: "high" or "low"
+- reason: short reason in the same language as the command if possible
+
+Mark high risk only when this specific command/script is likely to cause destructive,
+irreversible, privacy-sensitive, credential-exposing, privilege-changing, network-abusive,
+or broad side-effect behavior. Do not mark high risk merely because a path is outside a
+workspace."""
 
 
 class RunBashTool(BaseTool):
@@ -46,10 +39,13 @@ class RunBashTool(BaseTool):
     risk_level = "command"
     is_read_only = False
 
+    def __init__(self, risk_judge: CommandRiskJudge | None = None) -> None:
+        self.risk_judge = risk_judge
+
     def preview(self, **kwargs: Any) -> ToolPreview:
         command = str(kwargs.get("command", "")).strip()
         workspace = _optional_workspace(kwargs)
-        risk = analyze_command_risk(command, workspace=workspace)
+        risk = analyze_command_risk(command, workspace=workspace, risk_judge=self.risk_judge)
         return ToolPreview(
             tool_name=self.name,
             summary=risk.summary or self.describe_preview(**kwargs),
@@ -67,7 +63,11 @@ class RunBashTool(BaseTool):
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Bash command to run from the workspace root."},
-                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional command timeout in seconds. Omit for no timeout.",
+                },
                 "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
             },
             "required": ["command"],
@@ -87,10 +87,10 @@ class RunBashTool(BaseTool):
         if rejection is not None:
             return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
-        risk = analyze_command_risk(command, workspace=workspace)
+        risk = analyze_command_risk(command, workspace=workspace, risk_judge=self.risk_judge)
         if risk.requires_confirmation and not bool(kwargs.get("confirmed", False)):
             return _confirmation_required_result(self.name, risk)
-        timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        timeout_seconds = _optional_positive_int(kwargs.get("timeout_seconds"))
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
         return _run_command(
             tool_name=self.name,
@@ -107,10 +107,13 @@ class RunTempScriptTool(BaseTool):
     risk_level = "command"
     is_read_only = False
 
+    def __init__(self, risk_judge: CommandRiskJudge | None = None) -> None:
+        self.risk_judge = risk_judge
+
     def preview(self, **kwargs: Any) -> ToolPreview:
         content = "" if kwargs.get("content") is None else str(kwargs.get("content"))
         workspace = _optional_workspace(kwargs)
-        risk = analyze_command_risk(content, workspace=workspace)
+        risk = analyze_command_risk(content, workspace=workspace, risk_judge=self.risk_judge)
         return ToolPreview(
             tool_name=self.name,
             summary=risk.summary or self.describe_preview(**kwargs),
@@ -134,7 +137,11 @@ class RunTempScriptTool(BaseTool):
                     "description": "Set true when the temporary script is a validation test gate for code changes.",
                     "default": False,
                 },
-                "timeout_seconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional script timeout in seconds. Omit for no timeout.",
+                },
                 "output_limit": {"type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000},
             },
             "required": ["content"],
@@ -154,10 +161,10 @@ class RunTempScriptTool(BaseTool):
         if rejection is not None:
             return rejection
         workspace = Path(kwargs["workspace"]).expanduser().resolve()
-        risk = analyze_command_risk(str(content), workspace=workspace)
+        risk = analyze_command_risk(str(content), workspace=workspace, risk_judge=self.risk_judge)
         if risk.requires_confirmation and not bool(kwargs.get("confirmed", False)):
             return _confirmation_required_result(self.name, risk)
-        timeout_seconds = _positive_int(kwargs.get("timeout_seconds"), DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        timeout_seconds = _optional_positive_int(kwargs.get("timeout_seconds"))
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
         filename = _safe_script_filename(str(kwargs.get("filename") or "agent-script.sh"))
         script_path: Path | None = None
@@ -184,7 +191,7 @@ def _run_command(
     tool_name: str,
     command: list[str],
     cwd: Path,
-    timeout_seconds: int,
+    timeout_seconds: int | None,
     output_limit: int,
 ) -> ToolResult:
     try:
@@ -240,6 +247,14 @@ def _positive_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _command_rejection(command_text: str, tool_name: str) -> ToolResult | None:
     normalized = command_text.strip()
     for pattern in FORBIDDEN_COMMAND_PATTERNS:
@@ -255,71 +270,87 @@ def _command_rejection(command_text: str, tool_name: str) -> ToolResult | None:
 
 
 class CommandRisk:
-    def __init__(self, requires_confirmation: bool, summary: str = "", paths: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        requires_confirmation: bool,
+        summary: str = "",
+        paths: list[str] | None = None,
+        source: str = "",
+    ) -> None:
         self.requires_confirmation = requires_confirmation
         self.summary = summary
         self.paths = list(paths or [])
+        self.source = source
 
 
-def analyze_command_risk(command_text: str, workspace: Path | None) -> CommandRisk:
-    if workspace is None:
-        return CommandRisk(False)
+class CommandRiskJudge(Protocol):
+    def analyze(self, command_text: str, workspace: Path | None) -> CommandRisk:
+        ...
+
+
+class LLMCommandRiskJudge:
+    def __init__(self, llm: LLMClient) -> None:
+        self.llm = llm
+
+    def analyze(self, command_text: str, workspace: Path | None) -> CommandRisk:
+        normalized = command_text.strip()
+        if not normalized:
+            return CommandRisk(False, source="llm")
+        request = {
+            "workspace": str(workspace) if workspace is not None else "",
+            "command_or_script": normalized,
+        }
+        result = self.llm.complete_with_tools(
+            [
+                Message.system(COMMAND_RISK_SYSTEM_PROMPT),
+                Message.user(json.dumps(request, ensure_ascii=False)),
+            ],
+            tool_names=[],
+        )
+        parsed = _parse_llm_risk_content(result.content)
+        if parsed is None:
+            return CommandRisk(False, source="llm")
+        risk_level, reason = parsed
+        if risk_level != "high":
+            return CommandRisk(False, source="llm")
+        summary = f"LLM marked command as high risk: {reason}" if reason else "LLM marked command as high risk"
+        return CommandRisk(True, summary=summary, source="llm")
+
+
+def analyze_command_risk(
+    command_text: str,
+    workspace: Path | None,
+    risk_judge: CommandRiskJudge | None = None,
+) -> CommandRisk:
     normalized = command_text.strip()
     if not normalized:
         return CommandRisk(False)
-    if not _looks_mutating(normalized):
+    if risk_judge is None:
         return CommandRisk(False)
-    outside_paths = _outside_workspace_paths(normalized, workspace)
-    if not outside_paths:
-        return CommandRisk(False)
-    visible_paths = ", ".join(outside_paths[:3])
-    extra = len(outside_paths) - 3
-    if extra > 0:
-        visible_paths += f", ... (+{extra})"
-    return CommandRisk(
-        True,
-        summary=f"high-risk command may modify outside workspace: {visible_paths}",
-        paths=outside_paths,
-    )
+    return risk_judge.analyze(normalized, workspace=workspace)
 
 
-def _looks_mutating(command_text: str) -> bool:
-    if SHELL_REDIRECT_PATTERN.search(command_text):
-        return True
+def _parse_llm_risk_content(content: str) -> tuple[str, str] | None:
+    text = content.strip()
+    if not text:
+        return None
     try:
-        tokens = shlex.split(command_text, posix=True)
-    except ValueError:
-        tokens = re.split(r"\s+", command_text)
-    for token in tokens:
-        command_name = Path(token).name
-        if command_name in HIGH_RISK_MUTATING_COMMANDS:
-            return True
-    return False
-
-
-def _outside_workspace_paths(command_text: str, workspace: Path) -> list[str]:
-    workspace_root = workspace.expanduser().resolve()
-    paths: list[str] = []
-    for raw_path in _absolute_path_candidates(command_text):
-        resolved = Path(raw_path).expanduser().resolve(strict=False)
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match is None:
+            return None
         try:
-            resolved.relative_to(workspace_root)
-        except ValueError:
-            value = str(resolved)
-            if value not in paths:
-                paths.append(value)
-    return paths
-
-
-def _absolute_path_candidates(command_text: str) -> list[str]:
-    candidates = [match.group("path") for match in SHELL_REDIRECT_PATTERN.finditer(command_text)]
-    candidates.extend(match.group(0) for match in ABSOLUTE_PATH_PATTERN.finditer(command_text))
-    cleaned: list[str] = []
-    for candidate in candidates:
-        value = candidate.strip().strip("'\"")
-        if value and value not in cleaned:
-            cleaned.append(value)
-    return cleaned
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    risk_level = str(payload.get("risk_level") or payload.get("risk") or "").strip().lower()
+    if risk_level not in {"high", "low"}:
+        return None
+    reason = str(payload.get("reason") or "").strip()
+    return risk_level, reason
 
 
 def _optional_workspace(kwargs: dict[str, Any]) -> Path | None:
@@ -335,7 +366,7 @@ def _confirmation_required_result(tool_name: str, risk: CommandRisk) -> ToolResu
         ok=False,
         summary=risk.summary or "command requires confirmation",
         error_code="COMMAND_REQUIRES_CONFIRMATION",
-        data={"risk": "high", "outside_workspace_paths": risk.paths},
+        data={"risk": "high", "risk_source": risk.source, "outside_workspace_paths": risk.paths},
     )
 
 

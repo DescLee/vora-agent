@@ -73,6 +73,7 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     assert config.llm_api_key == "test-key"
     assert config.llm_model == "qwen-turbo"
     assert config.llm_timeout_seconds == 15
+    assert config.llm_config_source == str(env_path)
 
 
 def test_app_config_falls_back_to_user_env_when_project_env_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -95,6 +96,7 @@ def test_app_config_falls_back_to_user_env_when_project_env_is_missing(tmp_path:
     assert config.llm_base_url == "http://localhost:1234/v1"
     assert config.llm_api_key == "test-key"
     assert config.llm_model == "qwen-user"
+    assert config.llm_config_source == str(user_env)
 
 
 def test_app_config_falls_back_to_package_env_when_project_and_user_env_are_missing(tmp_path: Path, monkeypatch) -> None:
@@ -119,6 +121,7 @@ def test_app_config_falls_back_to_package_env_when_project_and_user_env_are_miss
     assert config.llm_base_url == "http://localhost:1234/v1"
     assert config.llm_api_key == "test-key"
     assert config.llm_model == "qwen-package"
+    assert config.llm_config_source == str(package_env)
 
 
 def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) -> None:
