@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser.add_argument("--cwd", type=Path, default=Path.cwd())
     tui_parser.add_argument("--dry-run", action="store_true")
     tui_parser.add_argument("--max-steps", type=int, default=3)
-    tui_parser.add_argument("--max-react", type=int, default=20)
+    tui_parser.add_argument("--max-react", type=int, default=99)
     tui_parser.add_argument("--max-reflect", type=int, default=3)
     tui_parser.add_argument("--max-tool-retries", type=int, default=3)
     return parser
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> None:
             cwd=args.cwd if hasattr(args, "cwd") else Path.cwd(),
             dry_run=bool(getattr(args, "dry_run", False)),
             max_steps=int(getattr(args, "max_steps", 3)),
-            max_react=int(getattr(args, "max_react", 20)),
+            max_react=int(getattr(args, "max_react", 99)),
             max_reflect=int(getattr(args, "max_reflect", 3)),
             max_tool_retries=int(getattr(args, "max_tool_retries", 3)),
         )

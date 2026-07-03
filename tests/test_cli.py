@@ -45,3 +45,16 @@ def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch
     main(["resume", session.session_id, "--cwd", str(tmp_path)])
 
     assert seen["initial_session"] == session.session_id
+
+
+def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(self):  # noqa: ANN001
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
+
+    main(["tui", "--cwd", str(tmp_path)])
+
+    assert seen["max_react_iterations"] == 99
