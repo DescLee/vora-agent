@@ -502,6 +502,39 @@ def test_react_loop_rejects_tool_calls_beyond_iteration_budget(tmp_path: Path) -
     assert task.observations[-1].summary == "tool call rejected by iteration budget"
 
 
+def test_react_loop_rejects_code_write_before_test_case_runs(tmp_path: Path) -> None:
+    class EditBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-replace",
+                            name="replace_in_file",
+                            args={"path": "app.py", "old_text": "old", "new_text": "new"},
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    (tmp_path / "app.py").write_text("old", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
+
+    result = ReActLoop(EditBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old"
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
 def test_react_loop_allows_five_read_files_in_one_iteration(tmp_path: Path) -> None:
     class FiveReadFilesLLM:
         def __init__(self) -> None:
@@ -821,13 +854,23 @@ def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_p
                 return LLMResult(
                     tool_calls=[
                         ToolCall(
+                            id="call-test-before",
+                            name="run_bash",
+                            args={"command": "python -m pytest tests/test_app.py -q", "timeout_seconds": 30},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
                             id="call-replace",
                             name="replace_in_file",
                             args={"path": "app.py", "old_text": "old", "new_text": "new"},
                         )
                     ]
                 )
-            if self.calls == 2:
+            if self.calls == 3:
                 return LLMResult(
                     tool_calls=[
                         ToolCall(
@@ -837,7 +880,7 @@ def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_p
                         )
                     ]
                 )
-            if self.calls == 3:
+            if self.calls == 4:
                 return LLMResult(tool_calls=[ToolCall(id="call-list", name="list_files", args={"path": "."})])
             return LLMResult(content="done")
 
@@ -852,7 +895,7 @@ def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_p
     result = ReActLoop(llm, ToolRegistry()).run(task, session)
 
     assert "测试" in result or "验证" in result or "完成" in result
-    assert llm.calls == 3
+    assert llm.calls == 4
     list_events = [event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "list_files"]
     assert list_events == []
     assert any(event.message == "Code change validated; forcing final answer" for event in task.trace_events)
@@ -890,12 +933,17 @@ def test_react_loop_does_not_validate_code_change_when_test_output_contains_fail
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             self.calls += 1
             if self.calls == 1:
-                return LLMResult(tool_calls=[ToolCall(id="call-replace", name="replace_in_file", args={"path": "app.py", "old_text": "old", "new_text": "new"})])
+                return LLMResult(tool_calls=[ToolCall(id="call-test-before", name="run_bash", args={"command": "python -m pytest tests/test_app.py -q | tail -40"})])
             if self.calls == 2:
+                return LLMResult(tool_calls=[ToolCall(id="call-replace", name="replace_in_file", args={"path": "app.py", "old_text": "old", "new_text": "new"})])
+            if self.calls == 3:
                 return LLMResult(tool_calls=[ToolCall(id="call-test", name="run_bash", args={"command": "python -m pytest tests/test_app.py -q | tail -40"})])
             return LLMResult(content="测试失败，继续修复。")
 
     (tmp_path / "app.py").write_text("old", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_app.py").write_text("def test_app():\n    assert True\n", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
     registry = ToolRegistry(tools=[ReplaceInFileTool(), FailingPipeRunBashTool()])
@@ -904,7 +952,7 @@ def test_react_loop_does_not_validate_code_change_when_test_output_contains_fail
     result = ReActLoop(llm, registry).run(task, session)
 
     assert result == "测试失败，继续修复。"
-    assert llm.calls == 3
+    assert llm.calls == 4
     assert not any(event.message == "Code change validated; forcing final answer" for event in task.trace_events)
 
 
@@ -1222,6 +1270,16 @@ def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) 
                 return LLMResult(
                     tool_calls=[
                         ToolCall(
+                            id="call-test-before",
+                            name="run_bash",
+                            args={"command": "python -m pytest tests/test_app.py -q"},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
                             id="call-replace",
                             name="replace_in_file",
                             args={
@@ -1235,6 +1293,9 @@ def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) 
             return LLMResult(content="ok")
 
     (tmp_path / "app.py").write_text("def value():\n    return 'old'\n", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_app.py").write_text("def test_app():\n    assert True\n", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="修改代码 app.py", cwd=tmp_path)
 
@@ -1271,7 +1332,35 @@ def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: P
 
     assert result.accepted is True
     assert result.content == "当前最佳结果"
-    assert result.reason == "draft is sufficient"
+    assert result.reason == "reflection forced accept"
+
+
+def test_reflection_loop_accepts_even_when_reflector_requests_replan(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def run(self, task: TaskState, session: SessionState) -> str:  # noqa: ARG002
+            return "当前草稿"
+
+    class ReplanningReflector:
+        def decide(self, task: TaskState, draft: str):  # noqa: ANN001, ANN201, ARG002
+            return type(
+                "ReflectionDecision",
+                (),
+                {
+                    "decision": "replan",
+                    "reason": "需要重新规划",
+                },
+            )()
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="写报告", cwd=tmp_path)
+    reflection = ReflectionLoop(react_loop=FakeReactLoop(), reflector=ReplanningReflector())
+
+    result = reflection.run(task, session)
+
+    assert result.accepted is True
+    assert result.decision == "accept"
+    assert result.content == "当前草稿"
+    assert result.reason == "reflection forced accept"
 
 
 def test_runtime_respects_engineering_step_limit(tmp_path: Path) -> None:
@@ -1481,12 +1570,9 @@ def test_reflection_loop_carries_follow_up_context_into_next_round(tmp_path: Pat
 
     result = reflection_loop.run(task, session)
 
-    assert result.decision == "replan"
-    assert session.messages
-    assert session.messages[-1].role == "system"
-    assert "上一轮已完成的进展" in session.messages[-1].content
-    assert "第一轮草稿" in session.messages[-1].content
-    assert "已列出 4 个文件" in session.messages[-1].content
+    assert result.decision == "accept"
+    assert result.reason == "reflection forced accept"
+    assert session.messages == []
 
 
 def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:

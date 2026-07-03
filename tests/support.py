@@ -56,6 +56,24 @@ class ScriptedLLM:
             and any(keyword in user_text for keyword in ["新建", "创建", "生成", "写一个"])
             and "write_file" in tool_names
         )
+        if (
+            create_hello_world_query
+            and ("command exited" not in tool_text or "wrote helloworld.py" in tool_text)
+            and "command exited 0" not in tool_text
+            and "run_bash" in tool_names
+        ):
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-test-helloworld",
+                        name="run_bash",
+                        args={
+                            "command": "python helloworld.py | grep 'hello world' # test helloworld",
+                        },
+                    )
+                ]
+            )
+
         if create_hello_world_query and "wrote helloworld.py" not in tool_text:
             return LLMResult(
                 tool_calls=[
@@ -65,25 +83,6 @@ class ScriptedLLM:
                         args={
                             "path": "helloworld.py",
                             "content": "print('hello world')\n",
-                        },
-                    )
-                ]
-            )
-
-        if (
-            create_hello_world_query
-            and "wrote helloworld.py" in tool_text
-            and "command exited 0" not in tool_text
-            and "run_temp_script" in tool_names
-        ):
-            return LLMResult(
-                tool_calls=[
-                    ToolCall(
-                        id="call-test-helloworld",
-                        name="run_temp_script",
-                        args={
-                            "filename": "test-helloworld.sh",
-                            "content": "python helloworld.py | grep 'hello world'\n",
                         },
                     )
                 ]

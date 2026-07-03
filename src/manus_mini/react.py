@@ -20,6 +20,26 @@ MAX_TOOL_RESULT_CONTENT_CHARS = 4000
 RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
+CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
+CODE_FILE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".mjs",
+    ".php",
+    ".py",
+    ".rb",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+}
 OVERVIEW_GOAL_KEYWORDS = (
     "优化建议",
     "建议",
@@ -572,6 +592,11 @@ class ReActLoop:
                 tool_results[call.id] = budget_error
                 self._record_tool_rejection(task, call, budget_error)
                 continue
+            code_change_error = self._code_change_precondition_error(call, task, session)
+            if code_change_error is not None:
+                tool_results[call.id] = code_change_error
+                self._record_tool_rejection(task, call, code_change_error)
+                continue
             scope_error = self._project_scope_error(call, task)
             if scope_error is not None:
                 tool_results[call.id] = scope_error
@@ -626,6 +651,25 @@ class ReActLoop:
                 data={"limit": task.limits.max_tool_calls_per_iteration},
         )
         return None
+
+    def _code_change_precondition_error(self, call, task: TaskState, session: SessionState) -> ToolResult | None:
+        if call.name not in CODE_WRITE_TOOLS:
+            return None
+        path = _tool_write_path(call)
+        if path is None or not _is_production_code_path(path):
+            return None
+        if _has_prior_test_execution(task, session):
+            return None
+        return ToolResult(
+            tool_name=call.name,
+            ok=False,
+            summary="code change rejected: run a test case before editing production code",
+            error_code="CODE_CHANGE_REQUIRES_TEST_FIRST",
+            data={
+                "path": path,
+                "reason": "write or update a test case, execute it, then modify production code",
+            },
+        )
 
     def _fragmented_read_file_result(
         self,
@@ -731,6 +775,8 @@ class ReActLoop:
         task: TaskState,
         planned_fingerprints: dict[str, str],
     ) -> ToolResult | None:
+        if _is_test_tool_call(call):
+            return None
         fingerprint = _tool_call_fingerprint(call)
         if fingerprint is None:
             return None
@@ -924,6 +970,64 @@ def _find_successful_observation(task: TaskState | None, tool_call_id: str):
     return None
 
 
+def _has_prior_test_execution(task: TaskState, session: SessionState) -> bool:
+    if any(event.phase == "tool" and _is_test_tool_event(event.data) for event in task.trace_events):
+        return True
+    test_tool_call_ids: set[str] = set()
+    executed_tool_call_ids: set[str] = set()
+    for message in session.messages:
+        if message.role == "agent":
+            names = message.metadata.get("tool_call_names")
+            arguments = message.metadata.get("tool_call_arguments")
+            if not isinstance(names, dict):
+                continue
+            if not isinstance(arguments, dict):
+                arguments = {}
+            for tool_call_id, tool_name in names.items():
+                if tool_name not in {"run_bash", "run_temp_script"}:
+                    continue
+                raw_arguments = str(arguments.get(tool_call_id, "")).lower()
+                if "test" in str(tool_call_id).lower() or "test" in raw_arguments:
+                    test_tool_call_ids.add(str(tool_call_id))
+        elif message.role == "tool" and message.tool_call_id:
+            executed_tool_call_ids.add(message.tool_call_id)
+    return bool(test_tool_call_ids & executed_tool_call_ids)
+
+
+def _tool_write_path(call) -> str | None:
+    raw_path = call.args.get("path")
+    if raw_path is None:
+        return None
+    return _normalize_relative_path(str(raw_path))
+
+
+def _is_production_code_path(path: str) -> bool:
+    normalized = _normalize_relative_path(path)
+    if _is_test_path(normalized):
+        return False
+    return PurePosixPath(normalized).suffix.lower() in CODE_FILE_SUFFIXES
+
+
+def _is_test_path(path: str) -> bool:
+    normalized = _normalize_relative_path(path).lower()
+    parts = PurePosixPath(normalized).parts
+    name = PurePosixPath(normalized).name
+    return (
+        "tests" in parts
+        or "test" in parts
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith(".test.ts")
+        or name.endswith(".test.tsx")
+        or name.endswith(".test.js")
+        or name.endswith(".test.jsx")
+        or name.endswith(".spec.ts")
+        or name.endswith(".spec.tsx")
+        or name.endswith(".spec.js")
+        or name.endswith(".spec.jsx")
+    )
+
+
 def _is_test_tool_event(data: dict) -> bool:
     if data.get("tool_name") not in {"run_bash", "run_temp_script"}:
         return False
@@ -942,6 +1046,10 @@ def _is_test_tool_event(data: dict) -> bool:
         ]
     )
     return any(keyword in text for keyword in ["pytest", "unittest", "test", "go test", "cargo test", "npm test", "pnpm test", "yarn test", "ruff"])
+
+
+def _is_test_tool_call(call) -> bool:
+    return _is_test_tool_event({"tool_name": call.name, "args": call.args})
 
 
 def _tool_event_failed(data: dict) -> bool:

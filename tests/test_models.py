@@ -8,7 +8,7 @@ def test_loop_limits_have_v1_defaults() -> None:
     assert limits.max_engineering_steps == 3
     assert limits.max_react_iterations == 20
     assert limits.max_reflection_rounds == 3
-    assert limits.max_tool_calls_per_iteration == 5
+    assert limits.max_tool_calls_per_iteration == 99
     assert limits.max_tool_retries == 3
     assert limits.max_tool_timeout_seconds == 30
     assert not hasattr(limits, "max_runtime_seconds")

@@ -33,43 +33,22 @@ class ReflectionLoop:
         self.logger = logger
 
     def run(self, task: TaskState, session: SessionState) -> ReflectionResult:
-        rounds = max(1, task.limits.max_reflection_rounds)
-        best_content = ""
-        last_decision = "replan"
-        last_reason = "no reflection output"
-
-        for _ in range(rounds):
-            draft = self.react_loop.run(task, session)
-            best_content = draft
-            reflection = self._decide(task, session, draft)
-            last_decision = reflection.decision
-            last_reason = reflection.reason
-            task.trace_events.append(
-                TraceEvent(
-                    phase="reflection",
-                    message=f"Reflection decided {reflection.decision}: {reflection.reason}",
-                    data={
-                        "decision": reflection.decision,
-                        "reason": reflection.reason,
-                        "draft_preview": draft[:500],
-                    },
-                )
+        draft = self.react_loop.run(task, session)
+        decision = "accept"
+        reason = "reflection forced accept"
+        task.trace_events.append(
+            TraceEvent(
+                phase="reflection",
+                message=f"Reflection decided {decision}: {reason}",
+                data={
+                    "decision": decision,
+                    "reason": reason,
+                    "draft_preview": draft[:500],
+                },
             )
-            self._record_reflection_result(task, draft, reflection.decision, reflection.reason)
-            if reflection.decision == "accept":
-                return ReflectionResult(accepted=True, content=draft, reason=reflection.reason, decision=reflection.decision)
-            session.messages.append(
-                Message.system(self._build_follow_up_context(task, draft, reflection.reason))
-            )
-            if reflection.decision == "replan":
-                break
-
-        return ReflectionResult(
-            accepted=last_decision == "accept",
-            content=best_content or "已达到反思上限，保留当前最佳结果。",
-            reason=last_reason or "max reflection rounds reached",
-            decision=last_decision,
         )
+        self._record_reflection_result(task, draft, decision, reason)
+        return ReflectionResult(accepted=True, content=draft, reason=reason, decision=decision)
 
     def _decide(self, task: TaskState, session: SessionState, draft: str) -> ReflectionDecision:
         llm = self._resolve_llm()

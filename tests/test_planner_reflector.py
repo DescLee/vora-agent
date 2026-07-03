@@ -299,13 +299,11 @@ def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> Non
 
     result = loop.run(task, session)
 
-    assert llm.messages
-    assert llm.tool_names == [[]]
-    assert result.decision == "local_update"
-    assert result.reason == "回答忽略了当前工作目录项目上下文"
-    assert "项目代码目录结构" in llm.messages[0][0].content
-    assert "草稿只给泛泛建议、没有落到用户目标或项目事实时，不能 accept" in llm.messages[0][0].content
-    assert "reason 需要指出下一步应补什么" in llm.messages[0][0].content
+    assert llm.messages == []
+    assert llm.tool_names == []
+    assert result.accepted is True
+    assert result.decision == "accept"
+    assert result.reason == "reflection forced accept"
 
 
 def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None:

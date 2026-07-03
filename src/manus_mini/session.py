@@ -61,6 +61,7 @@ class SessionManager:
     def accept_pending_confirmation(self) -> SessionState:
         if self.current.pending_confirmation is None:
             return self.current
+        confirmed_tool_call_id = self.current.pending_confirmation.tool_call_id
         self.current.pending_confirmation.approved = True
         self.current.pending_confirmation.prompt = self.current.pending_confirmation.prompt or "confirmed"
         self.current = self.runtime.on_user_message(
@@ -68,7 +69,11 @@ class SessionManager:
             self.current,
             append_user_message=False,
         )
-        self.current.pending_confirmation = None
+        if (
+            self.current.pending_confirmation is not None
+            and self.current.pending_confirmation.tool_call_id == confirmed_tool_call_id
+        ):
+            self.current.pending_confirmation = None
         return self.current
 
     def reject_pending_confirmation(self) -> SessionState:

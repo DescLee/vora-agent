@@ -1,6 +1,6 @@
 # Manus Mini 已修复问题与优化记录
 
-更新时间：2026-07-02
+更新时间：2026-07-03
 
 本文用于记录 Manus Mini 第一版开发过程中已经修复的问题和完成的体验优化。每条记录包含现象、根因、处理方式和验证方式，方便后续复盘、面试讲解和继续迭代。
 
@@ -177,6 +177,12 @@
   - 新增 `format_latest_activity()`，把最新动态放到底部状态栏，例如 `最新动态 工具返回：read_file(...) 成功`。
   - 用户滚动查看历史时不强制刷新输出内容，但状态栏仍持续更新最新动态。
 - 验证：测试覆盖 transcript 不再展示对话记录、process 不再展示最近过程、状态栏展示最新动态，以及用户查看历史时输出不被改写但状态栏仍更新。
+
+### 2.18 输出区标题过长
+
+- 现象：主输出区标题为“对话 / 过程 / 产物”，与当前已经统一的 transcript 结构重复，视觉上也偏长。
+- 修复：将主输出区标题简化为“会话输出”，减少顶部视觉噪声。
+- 验证：纳入全量测试回归，确认 TUI 相关测试未受影响。
 
 ## 3. TUI 滚动与可读性
 
@@ -950,6 +956,21 @@
   - 同一轮同一文件最多允许 2 个分片 `read_file`，更多小切片会返回 `READ_FILE_FRAGMENT_LIMIT_EXCEEDED`，提示改用更大的 `max_bytes` 或更精确的 grep/sed。
 - 验证：`tests/test_runtime.py` 覆盖管道输出失败时不强制收口，以及同一轮碎片读取限制；`tests/test_planner_reflector.py` 覆盖 Reflection 对失败输出标记的拒绝。
 
+### 9.34 Reflection 强制接受与代码修改前置测试流程
+
+- 现象：当前阶段希望减少 Reflection 自我否决带来的反复循环，同时要求代码修改任务严格遵循“先写测试用例、先执行测试、再改生产代码”的流程。
+- 根因：
+  - Reflection 原先会根据 LLM 或规则返回 `local_update/regenerate/replan`，在部分任务中会继续消耗外层工程步数。
+  - `replace_in_file` 等写入工具只在写后测试门禁上做收口，没有在写生产代码之前强制要求已经执行过测试。
+  - 确认写入后如果同一轮产生新的 pending confirmation，旧逻辑可能清掉新的 pending 状态。
+- 修复：
+  - `ReflectionLoop.run()` 现在只执行一次 ReAct，然后统一记录并返回 `accept`。
+  - `LoopLimits.max_tool_calls_per_iteration` 默认值从 5 提升到 99。
+  - ReAct 对 `write_file` / `replace_in_file` / `append_file` 修改生产代码增加前置门禁：必须先执行过测试命令或测试脚本；测试文件本身不拦截。
+  - 测试命令允许在代码修改后重复执行，避免复测被重复调用去重拦截。
+  - 确认流程只清理当前已确认的 pending，保留续跑过程中产生的新 pending。
+- 验证：新增和更新 `tests/test_runtime.py`、`tests/test_models.py`、`tests/test_planner_reflector.py`、`tests/support.py`，覆盖强制 accept、默认 99 次工具调用、代码修改前置测试门禁、确认续跑和写后复测。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。
@@ -984,7 +1005,7 @@
 
 ```bash
 python -m pytest -q
-# 277 passed
+# 279 passed
 ```
 
 补充手工验证：
