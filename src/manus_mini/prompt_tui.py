@@ -374,7 +374,7 @@ class PromptTui:
 
         main_body = HSplit(
             [
-                Frame(self.output, title="会话输出"),
+                Frame(self.output, title="对话记录"),
                 self.status,
                 Frame(self.input, title="输入区"),
             ],
