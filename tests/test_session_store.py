@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from manus_mini.models import Message, SessionState, TaskState
-from manus_mini.logging import project_memory_path, project_runs_dir, project_sessions_dir
+from manus_mini.logging import project_logs_dir, project_memory_path, project_sessions_dir
 from manus_mini.session_store import SessionStore
 
 
@@ -109,20 +109,20 @@ def test_session_store_rejects_unknown_session(monkeypatch, tmp_path: Path) -> N
         raise AssertionError("expected FileNotFoundError")
 
 
-def test_session_store_cleans_runs_from_user_manus_mini(monkeypatch, tmp_path: Path) -> None:
+def test_session_store_cleans_logs_from_user_manus_mini(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: home)
     session_id = "session-abc123"
-    run_dir = project_runs_dir(tmp_path) / f"{session_id}-run-1"
-    other_run_dir = project_runs_dir(tmp_path) / "session-other-run-1"
-    run_dir.mkdir(parents=True)
-    other_run_dir.mkdir(parents=True)
+    log_dir = project_logs_dir(tmp_path) / session_id
+    other_log_dir = project_logs_dir(tmp_path) / "session-other"
+    log_dir.mkdir(parents=True)
+    other_log_dir.mkdir(parents=True)
 
     store = SessionStore(tmp_path)
 
-    assert store.delete_runs_for_session(session_id) == 1
-    assert not run_dir.exists()
-    assert other_run_dir.exists()
+    assert store.delete_logs_for_session(session_id) == 1
+    assert not log_dir.exists()
+    assert other_log_dir.exists()
 
 
 def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path: Path) -> None:

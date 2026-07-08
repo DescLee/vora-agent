@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from manus_mini.logging import migrate_legacy_project_storage, project_runs_dir, project_sessions_dir
+from manus_mini.logging import migrate_legacy_project_storage, project_logs_dir, project_sessions_dir
 from manus_mini.models import SessionState
 
 
@@ -95,15 +95,15 @@ class SessionStore:
         return count
 
     # ──────────────────────────────────────────────
-    #  Runs 同步清理
+    #  Logs 同步清理
     # ──────────────────────────────────────────────
 
-    def _runs_dir(self) -> Path:
-        """返回 runs 日志目录路径。"""
-        return project_runs_dir(self.cwd)
+    def _logs_dir(self) -> Path:
+        """返回 session 级日志目录路径。"""
+        return project_logs_dir(self.cwd)
 
-    def delete_runs_for_session(self, session_id: str) -> int:
-        """删除 runs 目录下所有以指定 session_id 开头的子目录。
+    def delete_logs_for_session(self, session_id: str) -> int:
+        """删除 logs 目录下指定 session 的日志目录。
 
         Args:
             session_id: 会话 ID，例如 "session-abc123"
@@ -111,32 +111,33 @@ class SessionStore:
         Returns:
             删除的目录数量
         """
-        runs_dir = self._runs_dir()
-        if not runs_dir.exists():
+        log_dir = self._logs_dir() / session_id
+        if not log_dir.exists():
+            return 0
+        shutil.rmtree(log_dir, ignore_errors=True)
+        return 1
+
+    def delete_runs_for_session(self, session_id: str) -> int:
+        return self.delete_logs_for_session(session_id)
+
+    def clear_all_logs(self) -> int:
+        """清空 logs 目录下所有 session 日志目录。
+
+        Returns:
+            删除的目录数量
+        """
+        logs_dir = self._logs_dir()
+        if not logs_dir.exists():
             return 0
         count = 0
-        prefix = f"{session_id}-"
-        for child in runs_dir.iterdir():
-            if child.is_dir() and child.name.startswith(prefix):
+        for child in logs_dir.iterdir():
+            if child.is_dir():
                 shutil.rmtree(child, ignore_errors=True)
                 count += 1
         return count
 
     def clear_all_runs(self) -> int:
-        """清空 runs 目录下所有子目录。
-
-        Returns:
-            删除的目录数量
-        """
-        runs_dir = self._runs_dir()
-        if not runs_dir.exists():
-            return 0
-        count = 0
-        for child in runs_dir.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-                count += 1
-        return count
+        return self.clear_all_logs()
 
     def _summary(self, path: Path) -> SessionSummary:
         data = json.loads(path.read_text(encoding="utf-8"))

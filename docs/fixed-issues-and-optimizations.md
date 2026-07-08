@@ -1081,6 +1081,20 @@
   - 继续保留工具预算、重复读取去重、分片读取限制、路径安全保护等通用约束，避免失控读取。
 - 验证：`tests/test_runtime.py` 覆盖 overview 任务可以读取有针对性的深层源码文件；同时保留单轮多文件读取和重复读取去重回归。
 
+### 9.43 日志从 run 级目录改为 session 级目录
+
+- 现象：同一个会话的多轮对话已经保存在同一个 `SessionState.messages` 中，但运行日志仍按 `runs/<session_id>-<run_id>/` 拆分，排查同一会话上下文时需要跨多个目录查找。
+- 根因：早期日志模型以单轮任务为中心，`EventLogger` 的落盘路径绑定 `run_id`；Reporter 的 run summary 也按每轮 run 单独建目录。
+- 修复：
+  - 默认日志目录改为 `~/.manus-mini/projects/<project_key>/logs`。
+  - 每个 session 日志目录固定为 3 个文件：`summary.jsonl`、`pipeline.jsonl`、`node.jsonl`。
+  - `summary.jsonl` 只记录每轮用户输入、执行状态、执行结果和最终 `final_node_id`，用于快速判断对话质量。
+  - `pipeline.jsonl` 记录每轮从开始到结束涉及的节点、节点状态、关联消息 ID、`node_id` 和 `upstream_node_ids`，用于定位失败节点。
+  - `node.jsonl` 记录每个节点的输入输出详情，包括用户输入、LLM 请求/响应、审查节点、工具输入输出等；可通过 `run_id + node_id` 查询具体节点，并沿 `upstream_node_ids` 追溯上游节点。
+  - Reporter 不再向日志目录写每轮 Markdown summary，避免 session 日志目录超过 3 个文件。
+  - 删除/清空 session 时同步清理对应 session 级日志目录。
+- 验证：`tests/test_logging.py` 覆盖三文件结构、不同 run 追加到同一 session、`node_id` 与上游链路；`tests/test_runtime.py` 和 `tests/test_session_store.py` 覆盖默认路径、summary 到 pipeline/node 的关联、节点详情和日志清理。
+
 ## 10. 近期关键提交快照
 
 本节记录 2026-07-02 近期已经提交的关键能力，避免继续沿用“当前未提交 diff”的旧口径。

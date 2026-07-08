@@ -667,7 +667,7 @@ def format_status(session: SessionState, is_running: bool | None = None) -> str:
 
     state_label = format_status_label(task, is_running=is_running)
 
-    return f"状态 {state_label} | Enter 发送消息 | Shift+Enter 换行"
+    return f"状态 {state_label} | {format_context_usage(session)} | Enter 发送消息 | Shift+Enter 换行"
 
 
 def format_context_usage(session: SessionState) -> str:
@@ -677,7 +677,6 @@ def format_context_usage(session: SessionState) -> str:
     limit = task.model_context_limit or task.limits.max_estimated_tokens
     if limit <= 0:
         return "上下文 --"
-    actual_usage = task.last_prompt_tokens is not None
     if task.last_prompt_tokens is not None:
         usage = task.last_prompt_tokens / limit
     else:
@@ -685,9 +684,7 @@ def format_context_usage(session: SessionState) -> str:
     if usage is None:
         return "上下文 --"
     percent = min(999.9, usage * 100)
-    if actual_usage:
-        return f"上下文 {percent:.1f}%"
-    return f"上下文 {round(percent)}%"
+    return f"上下文 {percent:.1f}%"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:
@@ -773,28 +770,37 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
     current_section = "执行过程" if _looks_like_standalone_process_text(text) else ""
     pending_section_title = False
     in_process_diff = False
+    in_reasoning = False
 
     for line in text.splitlines(keepends=True):
         bare_line = line.rstrip("\n")
         if bare_line == SECTION_SEPARATOR:
             pending_section_title = True
             in_process_diff = False
+            in_reasoning = False
         elif pending_section_title:
             current_section = bare_line
             pending_section_title = False
+            in_reasoning = False
 
         style = "class:process" if current_section == "执行过程" else ""
         if current_section == "执行过程":
             stripped_line = bare_line.strip()
             if stripped_line.startswith("- 推理:"):
                 style = "class:process.reasoning"
+                in_reasoning = True
+            elif in_reasoning and stripped_line and not _is_process_control_line(stripped_line):
+                style = "class:process.reasoning"
             elif stripped_line.endswith("变更预览:"):
+                in_reasoning = False
                 in_process_diff = True
             elif in_process_diff:
                 if bare_line.startswith("  "):
                     style = _diff_line_style(stripped_line)
                 elif bare_line:
                     in_process_diff = False
+            else:
+                in_reasoning = False
         fragments.append((style, line))
 
     if not fragments:
@@ -816,6 +822,18 @@ def _diff_line_style(line: str) -> str:
     if line.startswith("-"):
         return styles["remove"]
     return styles["diff"]
+
+
+def _is_process_control_line(line: str) -> bool:
+    return line.startswith(
+        (
+            "- ",
+            "LLM 回合",
+            "工具调度",
+            "步骤概览",
+            "执行计划",
+        )
+    )
 
 
 def _looks_like_standalone_process_text(text: str) -> bool:

@@ -21,16 +21,15 @@ class Reporter:
 
     def write_task_report(self, filename: str, task: TaskState, user_input: str) -> Path:
         report = self.write_markdown(filename, render_task_report(task, user_input))
-        self.write_run_summary(task, user_input)
         return report
 
     def write_run_summary(self, task: TaskState, user_input: str) -> Path:
         session_id = task.session_id or "unknown-session"
-        run_root = self.run_root or self.output_dir.parent / "runs"
-        run_dir = run_root / f"{session_id}-{task.run_id}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_root = self.run_root or self.output_dir.parent / "logs"
+        session_dir = run_root / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = self._available_run_summary_path(run_dir, f"summary-{timestamp}.md")
+        path = self._available_run_summary_path(session_dir, f"summary-{timestamp}-{task.run_id}.md")
         path.write_text(render_run_summary(task, user_input), encoding="utf-8")
         return path
 

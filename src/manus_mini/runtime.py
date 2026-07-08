@@ -4,7 +4,7 @@ from inspect import signature
 from datetime import datetime
 from pathlib import Path
 
-from manus_mini.logging import EventLogger, project_outputs_dir, project_runs_dir
+from manus_mini.logging import EventLogger, project_logs_dir, project_outputs_dir
 from manus_mini.context import (
     build_context_bundle,
     estimate_session_context_usage,
@@ -36,7 +36,7 @@ class AgentRuntime:
     ) -> None:
         self.cwd = cwd or Path.cwd()
         self.default_limits = default_limits or LoopLimits()
-        self.logger = logger or EventLogger(project_runs_dir(self.cwd))
+        self.logger = logger or EventLogger(project_logs_dir(self.cwd))
         self.react_loop = ReActLoop(llm=llm, dry_run=dry_run, logger=self.logger)
         self.reflection_loop = ReflectionLoop(react_loop=self.react_loop, llm=llm, logger=self.logger)
         self.planner = Planner(llm=llm, logger=self.logger)
@@ -48,7 +48,7 @@ class AgentRuntime:
         return project_outputs_dir(self.cwd)
 
     def _default_reporter_run_root(self) -> Path:
-        return project_runs_dir(self.cwd)
+        return project_logs_dir(self.cwd)
 
     def on_user_message(
         self,
@@ -56,8 +56,11 @@ class AgentRuntime:
         session: SessionState,
         append_user_message: bool = True,
     ) -> SessionState:
+        user_message_id = None
         if append_user_message:
-            session.messages.append(Message.user(content))
+            user_message = Message.user(content)
+            session.messages.append(user_message)
+            user_message_id = user_message.id
         if session.active_task is not None and session.active_task.result:
             session.messages.append(
                 Message.system(
@@ -69,6 +72,15 @@ class AgentRuntime:
 
         task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits)
         task.session_id = session.session_id
+        self.logger.record(
+            session.session_id,
+            task.run_id,
+            {
+                "type": "user_input",
+                "content": content,
+                "message_id": user_message_id,
+            },
+        )
         context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
         model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
         task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
@@ -249,6 +261,13 @@ class AgentRuntime:
                 "interrupted": interrupted,
             },
         )
+        self.logger.record_summary(
+            session.session_id,
+            task.run_id,
+            user_input=content,
+            result=task.result,
+            status=task.status,
+        )
         session.messages.append(Message.agent(task.result))
         if task.status in {"done", "failed"}:
             session.pending_confirmation = None
@@ -277,8 +296,8 @@ class AgentRuntime:
     def _build_plan(self, content: str, session: SessionState, run_id: str) -> tuple[list[PlanStep], str]:
         build_plan = self.planner.build_plan
         if "run_id" in signature(build_plan).parameters:
-            return _normalize_plan_result(build_plan(content, session, run_id=run_id))
-        return _normalize_plan_result(build_plan(content, session))
+            return _normalize_plan_result(build_plan(content, session, run_id=run_id), self.planner)
+        return _normalize_plan_result(build_plan(content, session), self.planner)
 
     def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
         if self.memory_manager is None:
@@ -400,7 +419,7 @@ def _reflection_waits_for_user_choice(reason: str, content: str) -> bool:
     )
 
 
-def _normalize_plan_result(result) -> tuple[list[PlanStep], str]:
+def _normalize_plan_result(result, planner=None) -> tuple[list[PlanStep], str]:
     if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], str):
         return list(result[0]), result[1]
-    return list(result), ""
+    return list(result), str(getattr(planner, "last_reasoning_content", "") or "")

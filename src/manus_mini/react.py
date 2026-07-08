@@ -220,6 +220,21 @@ class ReActLoop:
                 tool_result = tool_results[call.id]
                 event_call = executable_call_by_id.get(call.id, call)
                 event_data = self._tool_event_data(iteration_index, event_call, tool_result)
+                if self.logger is not None:
+                    self.logger.record(
+                        session.session_id,
+                        task.run_id,
+                        {
+                            "type": "tool_result",
+                            "stage": "tool",
+                            "iteration": iteration_index,
+                            "tool_call_id": call.id,
+                            "tool_name": call.name,
+                            "args": sanitize_tool_args(event_call.args),
+                            "ok": tool_result.ok,
+                            "result": tool_result.model_dump(mode="json"),
+                        },
+                    )
                 task.trace_events.append(
                     TraceEvent(
                         phase="tool",

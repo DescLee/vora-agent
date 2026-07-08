@@ -234,6 +234,22 @@ def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> 
     assert reasoning_fragment[0] == "class:process.reasoning"
 
 
+def test_output_fragments_styles_wrapped_reasoning_continuation_lines() -> None:
+    fragments = style_output_fragments(
+        "执行过程\n"
+        "LLM 回合 1\n"
+        "- 推理: 第一行推理内容\n"
+        "第二行推理内容\n"
+        "工具调度\n"
+    )
+
+    continuation_fragment = next(fragment for fragment in fragments if "第二行推理内容" in fragment[1])
+    tool_fragment = next(fragment for fragment in fragments if "工具调度" in fragment[1])
+
+    assert continuation_fragment[0] == "class:process.reasoning"
+    assert tool_fragment[0] == "class:process"
+
+
 def test_output_fragments_color_diff_additions_and_removals_in_process_section() -> None:
     text = "\n\n".join(
         [
@@ -313,7 +329,7 @@ def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
     task.limits.max_estimated_tokens = 100
     usage = format_context_usage(session)
 
-    assert usage == "上下文 5%"
+    assert usage == "上下文 5.0%"
 
 
 def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -> None:
@@ -347,7 +363,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -713,7 +729,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -895,7 +911,8 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
     status = format_status(session)
 
     assert "上下文 25%" not in status
-    assert format_context_usage(session) == "上下文 25%"
+    assert "上下文 25.0%" in status
+    assert format_context_usage(session) == "上下文 25.0%"
 
 
 def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
@@ -1079,7 +1096,7 @@ def test_format_status_context_usage_includes_active_task_process(tmp_path: Path
     session.active_task = task
     session.messages.append(Message.user("hi"))
 
-    assert format_context_usage(session) == "上下文 0%"
+    assert format_context_usage(session) == "上下文 0.0%"
 
 
 def test_format_status_describes_current_step_while_running(tmp_path: Path) -> None:
@@ -1141,7 +1158,7 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
     assert "当前 准备调用工具 list_files(call-list)" not in status
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
@@ -1526,7 +1543,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert tui.status.text == "状态 正在执行 | Enter 发送消息 | Shift+Enter 换行"
+    assert tui.status.text == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

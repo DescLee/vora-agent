@@ -6,8 +6,8 @@ from manus_mini.logging import (
     EventLogger,
     default_manus_home,
     project_memory_path,
+    project_logs_dir,
     project_outputs_dir,
-    project_runs_dir,
     project_sessions_dir,
     project_storage_dir,
 )
@@ -17,21 +17,69 @@ from manus_mini.reporter import render_task_report
 
 
 def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
     path = logger.record("session-1", "run-1", {"type": "context_budget", "estimated_tokens": 10})
 
     assert path.exists()
-    assert re.match(r"^\d{8}-\d{6}-\d{6}-event\.jsonl$", path.name)
+    assert path == tmp_path / "logs" / "session-1" / "node.jsonl"
     row = json.loads(path.read_text(encoding="utf-8").strip())
     assert row["session_id"] == "session-1"
     assert row["run_id"] == "run-1"
     assert row["type"] == "context_budget"
     assert row["estimated_tokens"] == 10
+    assert row["node_id"] == "run-1:node-0001"
+    assert row["upstream_node_ids"] == []
     assert "ts" in row
+    pipeline = json.loads((tmp_path / "logs" / "session-1" / "pipeline.jsonl").read_text(encoding="utf-8").strip())
+    assert pipeline["node"] == "context_budget"
+    assert pipeline["status"] == "recorded"
+    assert pipeline["node_id"] == row["node_id"]
+    assert pipeline["upstream_node_ids"] == []
+
+
+def test_event_logger_writes_three_session_log_files(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "logs", enabled=True)
+
+    first_path = logger.record("session-1", "run-1", {"type": "start"})
+    second_path = logger.record("session-1", "run-2", {"type": "finish"})
+    summary_path = logger.record_summary("session-1", "run-2", "用户输入", "执行结果", "done")
+
+    assert first_path == second_path
+    assert first_path == tmp_path / "logs" / "session-1" / "node.jsonl"
+    assert summary_path == tmp_path / "logs" / "session-1" / "summary.jsonl"
+    assert sorted(path.name for path in first_path.parent.iterdir()) == ["node.jsonl", "pipeline.jsonl", "summary.jsonl"]
+    node_rows = [json.loads(line) for line in first_path.read_text(encoding="utf-8").splitlines()]
+    pipeline_rows = [json.loads(line) for line in (first_path.parent / "pipeline.jsonl").read_text(encoding="utf-8").splitlines()]
+    summary_rows = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["run_id"] for row in node_rows] == ["run-1", "run-2"]
+    assert [row["type"] for row in node_rows] == ["start", "finish"]
+    assert [row["node"] for row in pipeline_rows] == ["start", "finish"]
+    assert [row["node_id"] for row in node_rows] == ["run-1:node-0001", "run-2:node-0001"]
+    assert summary_rows[0]["user_input"] == "用户输入"
+    assert summary_rows[0]["result"] == "执行结果"
+    assert summary_rows[0]["final_node_id"] == "run-2:node-0001"
+
+
+def test_event_logger_links_pipeline_and_node_rows_by_upstream_node_ids(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "logs", enabled=True)
+
+    logger.record("session-1", "run-1", {"type": "user_input"})
+    logger.record("session-1", "run-1", {"type": "llm_request", "stage": "planner"})
+    logger.record("session-1", "run-1", {"type": "llm_response", "stage": "planner"})
+
+    log_dir = tmp_path / "logs" / "session-1"
+    node_rows = [json.loads(line) for line in (log_dir / "node.jsonl").read_text(encoding="utf-8").splitlines()]
+    pipeline_rows = [json.loads(line) for line in (log_dir / "pipeline.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert [row["node_id"] for row in node_rows] == ["run-1:node-0001", "run-1:node-0002", "run-1:node-0003"]
+    assert node_rows[1]["upstream_node_ids"] == ["run-1:node-0001"]
+    assert node_rows[2]["upstream_node_ids"] == ["run-1:node-0002"]
+    assert pipeline_rows[2]["node_id"] == node_rows[2]["node_id"]
+    assert pipeline_rows[2]["upstream_node_ids"] == ["run-1:node-0002"]
 
 
 def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
     path = logger.record(
         "session-1",
         "run-1",
@@ -54,21 +102,21 @@ def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
 
 
 def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs")
+    logger = EventLogger(tmp_path / "logs")
     path = logger.record("session-1", "run-1", {"type": "context_budget", "estimated_tokens": 10})
 
-    assert re.match(r"^\d{8}-\d{6}-\d{6}-event\.jsonl$", path.name)
+    assert path == tmp_path / "logs" / "session-1" / "node.jsonl"
     assert not path.exists()
 
 
-def test_event_logger_defaults_to_user_manus_mini_runs(monkeypatch, tmp_path: Path) -> None:
+def test_event_logger_defaults_to_user_manus_mini_logs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     logger = EventLogger()
     path = logger.record("session-1", "run-1", {"type": "context_budget"})
 
-    assert logger.root == default_manus_home() / "runs"
-    assert path.parent == default_manus_home() / "runs" / "session-1-run-1"
+    assert logger.root == default_manus_home() / "logs"
+    assert path.parent == default_manus_home() / "logs" / "session-1"
 
 
 def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path: Path) -> None:
@@ -79,13 +127,13 @@ def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path
     assert project_storage_dir(project_a) != project_storage_dir(project_b)
     assert project_storage_dir(project_a).parent == default_manus_home() / "projects"
     assert project_sessions_dir(project_a) == project_storage_dir(project_a) / "sessions"
-    assert project_runs_dir(project_a) == project_storage_dir(project_a) / "runs"
+    assert project_logs_dir(project_a) == project_storage_dir(project_a) / "logs"
     assert project_outputs_dir(project_a) == project_storage_dir(project_a) / "outputs"
     assert project_memory_path(project_a) == project_storage_dir(project_a) / "memory.db"
 
 
 def test_event_logger_compacts_duplicate_llm_payload_fields(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
     request = {"messages": [{"role": "user", "content": "hi"}], "tool_names": []}
     response = {"choices": [{"message": {"content": "ok"}}]}
 
@@ -110,7 +158,7 @@ def test_event_logger_compacts_duplicate_llm_payload_fields(tmp_path: Path) -> N
 
 
 def test_event_logger_compacts_large_llm_request_messages(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
     long_content = "x" * 5000
 
     path = logger.record(
@@ -136,7 +184,7 @@ def test_event_logger_compacts_large_llm_request_messages(tmp_path: Path) -> Non
 
 
 def test_event_logger_compacts_reflection_observation_content(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
 
     path = logger.record(
         "session-1",
@@ -164,7 +212,7 @@ def test_event_logger_compacts_reflection_observation_content(tmp_path: Path) ->
 
 
 def test_event_logger_keeps_only_recent_reflection_observations(tmp_path: Path) -> None:
-    logger = EventLogger(tmp_path / "runs", enabled=True)
+    logger = EventLogger(tmp_path / "logs", enabled=True)
     observations = [
         {"tool_call_id": f"call-{index}", "ok": True, "summary": f"event {index}"}
         for index in range(30)

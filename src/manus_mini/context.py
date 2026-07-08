@@ -28,6 +28,7 @@ PROJECT_OVERVIEW_TOP_LEVEL_DESCRIPTIONS = {
     "docs": "设计文档、问题记录和优化说明",
     "scripts": "辅助脚本",
     ".manus-mini": "本地会话和缓存数据，通常不优先查看",
+    "logs": "运行日志和调试记录，通常不优先查看",
     "runs": "运行日志和执行产物，通常不优先查看",
     "outputs": "产物输出目录，通常不优先查看",
 }
@@ -421,7 +422,7 @@ def _describe_overview_path(relative: str, is_dir: bool) -> str:
 
 def _is_noise_entry(path: Path) -> bool:
     name = path.name
-    if name in {".git", ".idea", ".vscode", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "node_modules", "dist", "build", "outputs", "runs"}:
+    if name in {".git", ".idea", ".vscode", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "node_modules", "dist", "build", "logs", "outputs", "runs"}:
         return True
     return name.startswith(".") and name not in {".env.example", ".gitignore"}
 

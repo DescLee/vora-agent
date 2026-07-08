@@ -33,19 +33,22 @@ class Planner:
     def __init__(self, llm: LLMClient | None = None, logger: EventLogger | None = None) -> None:
         self.llm = llm
         self.logger = logger
+        self.last_reasoning_content = ""
 
-    def build_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> tuple[list[PlanStep], str]:
+    def build_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> list[PlanStep]:
+        self.last_reasoning_content = ""
         normalized = goal.lower()
         if _looks_like_cli_issue(goal, normalized):
-            return self._build_cli_issue_plan(goal), ""
+            return self._build_cli_issue_plan(goal)
         if _is_small_talk(goal, normalized):
-            return [PlanStep(description="让 LLM 直接回复用户，不调用本地文件工具", intent="chat")], ""
+            return [PlanStep(description="让 LLM 直接回复用户，不调用本地文件工具", intent="chat")]
 
         llm_steps, reasoning = self._build_llm_plan(goal, session, run_id=run_id)
+        self.last_reasoning_content = reasoning
         if llm_steps:
-            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_steps)), reasoning
+            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_steps))
 
-        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized))), ""
+        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized)))
 
     def _build_llm_plan(self, goal: str, session: SessionState, run_id: str | None = None) -> tuple[list[PlanStep], str]:
         messages = self._build_prompt_messages(goal, session)

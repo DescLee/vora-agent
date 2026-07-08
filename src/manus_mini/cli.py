@@ -94,7 +94,7 @@ def _run_resume(cwd: Path, session_id: str) -> None:
 def _run_remove(cwd: Path, session_id: str) -> None:
     """Remove a saved session by its session_id.
 
-    Also removes the corresponding run directory under runs/.
+    Also removes the corresponding session log directory under logs/.
     If the session exists, deletes it and prints a confirmation message.
     If not found, prints an error message and exits with non-zero status.
     """
@@ -103,19 +103,18 @@ def _run_remove(cwd: Path, session_id: str) -> None:
         print(f"Error: session '{session_id}' not found.")
         raise SystemExit(1)
 
-    # 同步删除 runs 目录下对应的子目录
-    runs_deleted = store.delete_runs_for_session(session_id)
-    if runs_deleted:
-        print(f"Session '{session_id}' has been removed (also cleaned {runs_deleted} run(s)).")
+    logs_deleted = store.delete_logs_for_session(session_id)
+    if logs_deleted:
+        print(f"Session '{session_id}' has been removed (also cleaned {logs_deleted} log dir(s)).")
     else:
         print(f"Session '{session_id}' has been removed.")
 
 
 def _run_clear(cwd: Path, force: bool) -> None:
-    """Clear all saved sessions and their corresponding runs.
+    """Clear all saved sessions and their corresponding logs.
 
     If --force/-f is not provided, prompts the user for confirmation.
-    Prints the number of sessions and runs that were deleted.
+    Prints the number of sessions and log dirs that were deleted.
     """
     store = SessionStore(cwd)
     count = store.clear_all()
@@ -128,9 +127,8 @@ def _run_clear(cwd: Path, force: bool) -> None:
             print("Clear cancelled.")
             return
 
-    # 同步清空 runs 目录
-    runs_deleted = store.clear_all_runs()
-    print(f"All {count} saved session(s) have been cleared (also cleaned {runs_deleted} run(s)).")
+    logs_deleted = store.clear_all_logs()
+    print(f"All {count} saved session(s) have been cleared (also cleaned {logs_deleted} log dir(s)).")
 
 
 def _run_tui(

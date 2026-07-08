@@ -20,8 +20,12 @@ def default_manus_home() -> Path:
     return Path.home() / ".manus-mini"
 
 
+def default_logs_dir() -> Path:
+    return default_manus_home() / "logs"
+
+
 def default_runs_dir() -> Path:
-    return default_manus_home() / "runs"
+    return default_logs_dir()
 
 
 def project_storage_dir(cwd: Path) -> Path:
@@ -31,8 +35,12 @@ def project_storage_dir(cwd: Path) -> Path:
     return default_manus_home() / "projects" / f"{safe_name}-{digest}"
 
 
+def project_logs_dir(cwd: Path) -> Path:
+    return project_storage_dir(cwd) / "logs"
+
+
 def project_runs_dir(cwd: Path) -> Path:
-    return project_storage_dir(cwd) / "runs"
+    return project_logs_dir(cwd)
 
 
 def project_outputs_dir(cwd: Path) -> Path:
@@ -79,27 +87,128 @@ def migrate_legacy_project_storage(cwd: Path) -> list[Path]:
 
 class EventLogger:
     def __init__(self, root: Path | None = None, enabled: bool | None = None) -> None:
-        self.root = root or default_runs_dir()
-        self.filename = f"{datetime.now(UTC).strftime('%Y%m%d-%H%M%S-%f')}-event.jsonl"
+        self.root = root or default_logs_dir()
+        self.summary_filename = "summary.jsonl"
+        self.pipeline_filename = "pipeline.jsonl"
+        self.node_filename = "node.jsonl"
+        self._run_node_counts: dict[tuple[str, str], int] = {}
+        self._last_node_ids: dict[tuple[str, str], str] = {}
         if enabled is None:
             enabled = os.environ.get("MANUS_DISABLE_LOGGING") != "1" and not os.environ.get("PYTEST_CURRENT_TEST")
         self.enabled = enabled
 
     def record(self, session_id: str, run_id: str, event: dict[str, Any]) -> Path:
-        run_dir = self.root / f"{session_id}-{run_id}"
-        path = run_dir / self.filename
+        session_dir = self.root / session_id
+        node_path = session_dir / self.node_filename
+        node_id = self._next_node_id(session_id, run_id, event)
+        upstream_node_ids = self._upstream_node_ids(session_id, run_id, event)
+        self._last_node_ids[(session_id, run_id)] = node_id
+        if not self.enabled:
+            return node_path
+        session_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(UTC).isoformat()
+        compacted_event = compact_event(event)
+        payload = {
+            "ts": ts,
+            "session_id": session_id,
+            "run_id": run_id,
+            "node_id": node_id,
+            "upstream_node_ids": upstream_node_ids,
+            **compacted_event,
+        }
+        pipeline_payload = build_pipeline_event(ts, session_id, run_id, node_id, upstream_node_ids, compacted_event)
+        with (session_dir / self.pipeline_filename).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(pipeline_payload, ensure_ascii=False) + "\n")
+        with node_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        return node_path
+
+    def record_summary(
+        self,
+        session_id: str,
+        run_id: str,
+        user_input: str,
+        result: str,
+        status: str,
+    ) -> Path:
+        session_dir = self.root / session_id
+        path = session_dir / self.summary_filename
         if not self.enabled:
             return path
-        run_dir.mkdir(parents=True, exist_ok=True)
+        session_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "ts": datetime.now(UTC).isoformat(),
             "session_id": session_id,
             "run_id": run_id,
-            **compact_event(event),
+            "final_node_id": self._last_node_ids.get((session_id, run_id)),
+            "user_input": user_input,
+            "status": status,
+            "result": result,
         }
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
         return path
+
+    def _next_node_id(self, session_id: str, run_id: str, event: dict[str, Any]) -> str:
+        explicit = event.get("node_id")
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+        key = (session_id, run_id)
+        count = self._run_node_counts.get(key, 0) + 1
+        self._run_node_counts[key] = count
+        return f"{run_id}:node-{count:04d}"
+
+    def _upstream_node_ids(self, session_id: str, run_id: str, event: dict[str, Any]) -> list[str]:
+        explicit = event.get("upstream_node_ids")
+        if isinstance(explicit, list):
+            return [str(item) for item in explicit if str(item).strip()]
+        previous = self._last_node_ids.get((session_id, run_id))
+        return [previous] if previous else []
+
+
+def build_pipeline_event(
+    ts: str,
+    session_id: str,
+    run_id: str,
+    node_id: str,
+    upstream_node_ids: list[str],
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ts": ts,
+        "session_id": session_id,
+        "run_id": run_id,
+        "node_id": node_id,
+        "node": pipeline_node_name(event),
+        "status": pipeline_status(event),
+        "message_id": event.get("message_id") or event.get("tool_call_id") or event.get("id"),
+        "upstream_node_ids": upstream_node_ids,
+    }
+
+
+def pipeline_node_name(event: dict[str, Any]) -> str:
+    event_type = str(event.get("type") or "event")
+    stage = event.get("stage")
+    if stage:
+        return f"{stage}.{event_type}"
+    return event_type
+
+
+def pipeline_status(event: dict[str, Any]) -> str:
+    event_type = event.get("type")
+    if event_type == "result":
+        return str(event.get("status") or "done")
+    if event_type in {"error"}:
+        return "failed"
+    if event_type == "interrupt":
+        return "cancelled"
+    if event.get("ok") is True:
+        return "success"
+    if event.get("ok") is False:
+        return "failed"
+    if event_type in {"llm_request", "engineering_step", "user_input"}:
+        return "running"
+    return "recorded"
 
 
 def compact_event(event: dict[str, Any]) -> dict[str, Any]:

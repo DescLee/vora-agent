@@ -20,6 +20,10 @@ from manus_mini.tools.registry import ToolRegistry
 from support import ScriptedLLM
 
 
+def session_event_log_path(root: Path, session_id: str) -> Path:
+    return root / session_id / "node.jsonl"
+
+
 def test_runtime_turns_user_request_into_agent_reply(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
@@ -247,7 +251,11 @@ def test_runtime_sends_project_code_overview_to_planner_before_project_requests(
 def test_runtime_output_file_records_input_process_observations_and_result_in_chunks(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("hello world", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
-    runtime = AgentRuntime(reporter=Reporter(tmp_path / "outputs"), llm=ScriptedLLM())
+    runtime = AgentRuntime(
+        reporter=Reporter(tmp_path / "outputs"),
+        logger=EventLogger(tmp_path / "logs", enabled=True),
+        llm=ScriptedLLM(),
+    )
 
     result = runtime.on_user_message("读取 a.md", session)
 
@@ -266,11 +274,16 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     assert "hello world" in content
     assert "## 4. 输出产物" in content
     assert result.messages[-1].content in content
-    summary_dir = tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}"
-    summary_files = list(summary_dir.glob("summary-*.md"))
-    assert len(summary_files) == 1
-    assert re.match(r"^summary-\d{8}-\d{6}\.md$", summary_files[0].name)
-    assert "Manus Mini Run Summary" in summary_files[0].read_text(encoding="utf-8")
+    log_dir = tmp_path / "logs" / result.session_id
+    assert sorted(path.name for path in log_dir.iterdir()) == ["node.jsonl", "pipeline.jsonl", "summary.jsonl"]
+    summary_rows = [json.loads(line) for line in (log_dir / "summary.jsonl").read_text(encoding="utf-8").splitlines()]
+    pipeline_rows = [json.loads(line) for line in (log_dir / "pipeline.jsonl").read_text(encoding="utf-8").splitlines()]
+    node_rows = [json.loads(line) for line in (log_dir / "node.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert summary_rows[-1]["user_input"] == "读取 a.md"
+    assert summary_rows[-1]["result"] == result.messages[-1].content
+    final_node_id = summary_rows[-1]["final_node_id"]
+    assert any(row["node_id"] == final_node_id for row in pipeline_rows)
+    assert any(row["node_id"] == final_node_id for row in node_rows)
 
 
 def test_runtime_output_filename_starts_with_timestamp_for_lookup(tmp_path: Path) -> None:
@@ -289,14 +302,15 @@ def test_runtime_defaults_to_project_reporter_output_dir_under_pytest(tmp_path: 
 
     assert runtime.reporter.output_dir == project_outputs_dir(tmp_path)
     assert ".manus-mini/projects/" in str(runtime.logger.root)
-    assert str(runtime.logger.root).endswith("/runs")
+    assert str(runtime.logger.root).endswith("/logs")
     assert runtime.reporter.run_root is not None
-    assert runtime.reporter.run_root == project_outputs_dir(tmp_path).parent / "runs"
+    assert runtime.reporter.run_root == project_outputs_dir(tmp_path).parent / "logs"
 
     session = SessionState.create(cwd=tmp_path)
     runtime.on_user_message("你好", session)
 
     assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "logs").exists()
     assert not (tmp_path / "outputs").exists()
 
 
@@ -1525,14 +1539,14 @@ def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: 
     session.messages.extend(Message.user("x" * 120) for _ in range(4))
     runtime = AgentRuntime(
         default_limits=LoopLimits(max_estimated_tokens=100),
-        logger=EventLogger(tmp_path / "runs", enabled=True),
+        logger=EventLogger(tmp_path / "logs", enabled=True),
         llm=ScriptedLLM(),
     )
 
     result = runtime.on_user_message("继续", session)
 
     assert result.active_task is not None
-    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     budget_rows = [row for row in rows if row.get("type") == "context_budget"]
     assert budget_rows
@@ -1729,13 +1743,13 @@ def test_runtime_fallback_summary_includes_recent_tool_observations(tmp_path: Pa
 
 
 def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "logs", enabled=True), llm=ScriptedLLM())
     session = SessionState.create(cwd=tmp_path)
 
     result = runtime.on_user_message("写一个报告", session)
 
     assert result.active_task is not None
-    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     request_rows = [row for row in rows if row.get("type") == "llm_request"]
     response_rows = [row for row in rows if row.get("type") == "llm_response"]
@@ -1849,14 +1863,14 @@ def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path:
             return LLMResult(content="完成")
 
     (tmp_path / "README.md").write_text("hello world", encoding="utf-8")
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "logs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = ToolThenAnswerLLM()
     session = SessionState.create(cwd=tmp_path)
 
     result = runtime.on_user_message("读取 README.md", session)
 
     assert result.active_task is not None
-    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     request_rows = [row for row in rows if row.get("type") == "llm_request" and row.get("stage") == "react"]
     assert request_rows
@@ -1874,7 +1888,7 @@ def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             raise KeyboardInterrupt
 
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "logs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = InterruptingLLM()
     session = SessionState.create(cwd=tmp_path)
 
@@ -1883,7 +1897,7 @@ def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -
     assert result.active_task is not None
     assert result.active_task.status == "failed"
     assert "用户中断" in result.active_task.result
-    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     interrupt_rows = [row for row in rows if row.get("type") == "interrupt"]
     assert interrupt_rows
@@ -1906,7 +1920,7 @@ def test_runtime_logs_successful_read_file_content_in_logs(tmp_path: Path) -> No
                 )
             return LLMResult(content="读取完成")
 
-    runtime = AgentRuntime(logger=EventLogger(tmp_path / "runs", enabled=True), llm=ScriptedLLM())
+    runtime = AgentRuntime(logger=EventLogger(tmp_path / "logs", enabled=True), llm=ScriptedLLM())
     runtime.react_loop.llm = ReadReadmeLLM()
     session = SessionState.create(cwd=tmp_path)
 
@@ -1921,7 +1935,7 @@ def test_runtime_logs_successful_read_file_content_in_logs(tmp_path: Path) -> No
     assert read_events
     assert "content_preview" not in read_events[-1].data
 
-    log_path = next((tmp_path / "runs" / f"{result.session_id}-{result.active_task.run_id}").glob("*-event.jsonl"))
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
     log_text = log_path.read_text(encoding="utf-8")
     assert "secret file content" in log_text
     assert "read_file" in log_text
