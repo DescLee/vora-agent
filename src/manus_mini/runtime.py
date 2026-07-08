@@ -277,8 +277,8 @@ class AgentRuntime:
     def _build_plan(self, content: str, session: SessionState, run_id: str) -> tuple[list[PlanStep], str]:
         build_plan = self.planner.build_plan
         if "run_id" in signature(build_plan).parameters:
-            return build_plan(content, session, run_id=run_id)
-        return build_plan(content, session)
+            return _normalize_plan_result(build_plan(content, session, run_id=run_id))
+        return _normalize_plan_result(build_plan(content, session))
 
     def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
         if self.memory_manager is None:
@@ -398,3 +398,9 @@ def _reflection_waits_for_user_choice(reason: str, content: str) -> bool:
             "wait for user",
         ]
     )
+
+
+def _normalize_plan_result(result) -> tuple[list[PlanStep], str]:
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], str):
+        return list(result[0]), result[1]
+    return list(result), ""

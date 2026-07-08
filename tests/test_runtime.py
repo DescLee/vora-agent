@@ -573,7 +573,7 @@ def test_react_loop_allows_five_read_files_in_one_iteration(tmp_path: Path) -> N
     assert all(observation.ok for observation in task.observations)
 
 
-def test_react_loop_limits_overview_task_to_project_entry_files(tmp_path: Path) -> None:
+def test_react_loop_allows_overview_task_to_read_targeted_source_files(tmp_path: Path) -> None:
     class OverviewLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -589,22 +589,22 @@ def test_react_loop_limits_overview_task_to_project_entry_files(tmp_path: Path) 
                 )
             tool_messages = {message.tool_call_id: message.content for message in messages if message.role == "tool"}
             assert "# demo" in tool_messages["call-read-readme"]
-            assert "PROJECT_SCOPE_RESTRICTED" in tool_messages["call-read-deep"]
+            assert "SECRET = 'can be read when targeted'" in tool_messages["call-read-deep"]
             return LLMResult(content="overview handled")
 
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "src" / "feature").mkdir(parents=True)
-    (tmp_path / "src" / "feature" / "deep.py").write_text("SECRET = 'should not be read'", encoding="utf-8")
+    (tmp_path / "src" / "feature" / "deep.py").write_text("SECRET = 'can be read when targeted'", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="请你看下这个项目提一些优化建议", cwd=tmp_path)
 
     result = ReActLoop(OverviewLLM(), ToolRegistry()).run(task, session)
 
     assert result == "overview handled"
-    blocked = [observation for observation in task.observations if observation.tool_call_id == "call-read-deep"]
-    assert blocked
-    assert blocked[0].ok is False
-    assert "SECRET" not in blocked[0].content
+    deep_reads = [observation for observation in task.observations if observation.tool_call_id == "call-read-deep"]
+    assert deep_reads
+    assert deep_reads[0].ok is True
+    assert "SECRET = 'can be read when targeted'" in deep_reads[0].content
 
 
 def test_react_loop_includes_recent_conversation_context_for_follow_up(tmp_path: Path) -> None:

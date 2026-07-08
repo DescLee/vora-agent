@@ -60,25 +60,6 @@ OVERVIEW_GOAL_KEYWORDS = (
     "说明",
     "总结",
 )
-OVERVIEW_ALLOWED_EXACT_FILES = {
-    "README.md",
-    "pyproject.toml",
-    "setup.py",
-    "setup.cfg",
-    "package.json",
-    "pnpm-lock.yaml",
-    "uv.lock",
-    "requirements.txt",
-}
-OVERVIEW_ALLOWED_SRC_FILES = {
-    "src/manus_mini/runtime.py",
-    "src/manus_mini/react.py",
-    "src/manus_mini/reflection.py",
-    "src/manus_mini/planner.py",
-    "src/manus_mini/llm.py",
-}
-
-
 def format_tool_result_message(tool_result) -> str:
     parts = [tool_result.summary]
     if tool_result.paths:
@@ -621,11 +602,6 @@ class ReActLoop:
                 tool_results[call.id] = code_change_error
                 self._record_tool_rejection(task, call, code_change_error)
                 continue
-            scope_error = self._project_scope_error(call, task)
-            if scope_error is not None:
-                tool_results[call.id] = scope_error
-                self._record_tool_rejection(task, call, scope_error)
-                continue
             duplicate_read = self._duplicate_successful_read_file_result(call, task)
             if duplicate_read is not None:
                 tool_results[call.id] = duplicate_read
@@ -715,23 +691,6 @@ class ReActLoop:
                 "path": path,
                 "limit": 2,
                 "reason": "avoid repeated fragmented reads of the same file in one iteration",
-            },
-        )
-
-    def _project_scope_error(self, call, task: TaskState) -> ToolResult | None:
-        if call.name != "read_file" or not self._is_overview_goal(task.goal):
-            return None
-        path = _normalize_relative_path(str(call.args.get("path", "")))
-        if _is_overview_allowed_file(path):
-            return None
-        return ToolResult(
-            tool_name=call.name,
-            ok=False,
-            summary="read_file rejected by project overview scope",
-            error_code="PROJECT_SCOPE_RESTRICTED",
-            data={
-                "path": path,
-                "reason": "overview tasks may read docs, metadata, and selected entry files first",
             },
         )
 
@@ -1114,14 +1073,6 @@ def _optional_int_value(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _is_overview_allowed_file(path: str) -> bool:
-    if path in OVERVIEW_ALLOWED_EXACT_FILES or path in OVERVIEW_ALLOWED_SRC_FILES:
-        return True
-    if path.startswith("docs/") and path.endswith(".md"):
-        return True
-    return False
 
 
 def _goal_mentions_current_project(goal: str) -> bool:
