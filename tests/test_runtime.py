@@ -2137,6 +2137,55 @@ def test_react_loop_adds_disclaimer_when_web_search_has_no_results(tmp_path: Pat
     assert "三类方向" in result
 
 
+def test_react_loop_adds_disclaimer_when_web_search_fails(tmp_path: Path) -> None:
+    class FailingSearchTool:
+        name = "web_search"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201, ARG002
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="Search request failed: timeout",
+                content="Search request failed: timeout",
+                error_code="SEARCH_FAILED",
+            )
+
+    class SearchThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-search",
+                            name="web_search",
+                            args={"query": "AI Agent framework landscape"},
+                        )
+                    ]
+                )
+            return LLMResult(content="三类方向：编排型、多 Agent 协作型、运行时治理型。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请做一份 AI Agent 框架简短行研摘要", cwd=tmp_path)
+
+    result = ReActLoop(SearchThenAnswerLLM(), ToolRegistry(tools=[FailingSearchTool()])).run(task, session)
+
+    assert "未获取到有效搜索结果" in result
+    assert "三类方向" in result
+
+
 def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tmp_path: Path) -> None:
     class FakeReactLoop:
         def __init__(self) -> None:

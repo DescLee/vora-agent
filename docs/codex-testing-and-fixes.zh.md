@@ -220,6 +220,25 @@
 - 用户拒绝 `manus-mini clear` 后，已有会话必须仍然存在。
 - 只有确认通过后，CLI 才能真正删除会话和对应日志。
 
+### 12. 联网搜索失败时，最终行研回答未提示证据不足
+
+#### 现象
+
+- 旧逻辑只处理 `web_search` 成功执行但返回 0 结果的情况。
+- 如果搜索工具本身失败，例如超时、网络错误或搜索服务异常，Agent 仍可能直接生成行研摘要。
+- 用户看到完整答案时，无法区分“已联网核实”还是“搜索失败后基于已有知识整理”。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中将搜索收口条件改为“本轮没有任何有效搜索结果”。
+- 只要本轮调用过 `web_search`，但没有拿到有效结果，就在最终答案前追加证据不足提示。
+- 如果存在至少一次有效搜索结果，则不额外添加该提示，避免误伤正常搜索场景。
+
+#### 回归点
+
+- `web_search` 返回 0 结果时，最终答案必须提示证据不足。
+- `web_search` 执行失败时，最终答案也必须提示证据不足。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -235,6 +254,7 @@
   - 空结果保护
   - 行研问答默认不落文件
   - 搜索 0 结果时增加证据不足提示
+  - 搜索失败时增加证据不足提示
   - `replace_in_file` 必须进入确认流
   - `run_bash` 的原地文件修改命令必须进入确认流
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
@@ -250,7 +270,7 @@ pytest -q
 
 结果：
 
-- `348 passed`
+- `350 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -259,6 +279,7 @@ pytest -q
 - LLM 返回空字符串时，最终仍有可展示结果
 - 普通行研问答不会误入写文件确认流程
 - `web_search` 无结果时，最终答案会主动提示“未获取到有效搜索结果”
+- `web_search` 执行失败时，最终答案也会主动提示“未获取到有效搜索结果”
 - `replace_in_file` 不会再直接修改文件，而是先等待确认
 - `run_bash` 中明显会改文件的命令会被拦到确认流
 - 中文 TUI 不会再直接展示大段英文 reasoning

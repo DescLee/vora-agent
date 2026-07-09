@@ -997,7 +997,7 @@ class ReActLoop:
         )
 
     def _finalize_answer_content(self, task: TaskState, content: str) -> str:
-        if not _has_only_empty_web_search_results(task):
+        if not _has_no_effective_web_search_results(task):
             return content
         if "未获取到有效搜索结果" in content:
             return content
@@ -1022,7 +1022,7 @@ def _goal_explicitly_requests_file_output(goal: str) -> bool:
     return any(keyword in normalized for keyword in EXPLICIT_WRITE_INTENT_KEYWORDS)
 
 
-def _has_only_empty_web_search_results(task: TaskState) -> bool:
+def _has_no_effective_web_search_results(task: TaskState) -> bool:
     saw_search = False
     for event in task.trace_events:
         if event.phase != "tool":
@@ -1031,10 +1031,8 @@ def _has_only_empty_web_search_results(task: TaskState) -> bool:
         if data.get("tool_name") != "web_search":
             continue
         saw_search = True
-        if data.get("ok") is not True:
-            return False
         summary = str(data.get("summary") or "")
-        if not summary.startswith("No results found for:"):
+        if data.get("ok") is True and not summary.startswith("No results found for:"):
             return False
     return saw_search
 
