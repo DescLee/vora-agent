@@ -1,4 +1,6 @@
 from pathlib import Path
+import threading
+import time
 
 from manus_mini.tools import ToolRegistry
 from manus_mini.tools.shell_tools import CommandRisk
@@ -36,6 +38,46 @@ def test_run_bash_reports_non_zero_exit_code(tmp_path: Path) -> None:
     assert result.error_code == "COMMAND_FAILED"
     assert result.data["exit_code"] == 7
     assert "bad" in result.data["stderr"]
+
+
+def test_run_bash_timeout_terminates_child_process_group(tmp_path: Path) -> None:
+    marker = tmp_path / "child-finished.txt"
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command=f"(sleep 2; touch {marker.name}) & wait",
+        timeout_seconds=1,
+        confirmed=True,
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_TIMEOUT"
+    time.sleep(0.2)
+    assert not marker.exists()
+
+
+def test_run_bash_honors_cooperative_cancellation(tmp_path: Path) -> None:
+    cancel_event = threading.Event()
+    marker = tmp_path / "cancelled-child-finished.txt"
+
+    def cancel() -> None:
+        time.sleep(0.1)
+        cancel_event.set()
+
+    thread = threading.Thread(target=cancel)
+    thread.start()
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command=f"(sleep 2; touch {marker.name}) & wait",
+        _cancel_event=cancel_event,
+        confirmed=True,
+    )
+    thread.join()
+
+    assert result.ok is False
+    assert result.error_code == "USER_CANCELLED"
+    time.sleep(0.2)
+    assert not marker.exists()
 
 
 def test_run_bash_rejects_dangerous_commands(tmp_path: Path) -> None:

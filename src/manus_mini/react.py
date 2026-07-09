@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from time import monotonic
 
@@ -811,6 +812,7 @@ class ReActLoop:
         return None
 
     def _code_change_precondition_error(self, call, task: TaskState, session: SessionState) -> ToolResult | None:
+        paths: Sequence[str | None]
         if call.name in CODE_WRITE_TOOLS:
             paths = [_tool_write_path(call)]
         elif call.name in SHELL_CODE_WRITE_TOOLS:

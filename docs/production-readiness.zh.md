@@ -13,8 +13,8 @@
 | 任务状态 | `TaskState` 记录目标、计划、观察、错误、产物和 trace。 |
 | 会话状态 | `SessionState` 记录消息、active task、memory refs 和 pending confirmation。 |
 | 结构化日志 | `EventLogger` 记录 LLM 请求、工具结果、上下文预算和最终摘要。 |
-| 工具超时 | 工具执行支持 timeout，并将超时转成 `TOOL_TIMEOUT`。 |
-| 工具重试 | retryable tool error 会按上限重试。 |
+| 工具超时 | 工具执行支持 timeout 和协作式取消；shell 超时会终止整个进程组。 |
+| 工具重试 | retryable tool error 会按上限执行指数退避重试。 |
 | 写入确认 | 写入和高风险命令需要 preview + 用户确认。 |
 | 质量门禁 | 代码任务 Reflection 阶段执行 pytest gate。 |
 
@@ -89,8 +89,8 @@ API / TUI
 
 | 故障 | 当前处理 | 生产化增强 |
 |---|---|---|
-| LLM 请求失败 | 429/5xx、网络错误和超时会做基础重试，失败后转成 `LLM_ERROR` 或 fallback | 增加指数退避、多 provider fallback、熔断。 |
-| 工具超时 | 返回 `TOOL_TIMEOUT` | 增加任务级 timeout 和 worker 隔离回收。 |
+| LLM 请求失败 | 429/5xx、网络错误和超时会执行指数退避与 jitter，支持 `Retry-After` | 增加多 provider fallback、限流和熔断。 |
+| 工具超时 | 设置协作式取消信号；shell 会终止进程组 | 第三方 Python 工具若不响应取消信号，线程仍不能被安全强杀；生产环境需使用进程/容器隔离。 |
 | 测试失败 | Reflection 回流继续执行 | 增加失败分类和自动生成最小复现。 |
 | 上下文超限 | 压缩或硬裁剪 | 增加 artifact 引用化和分层摘要。 |
 | 用户拒绝写入 | 记录取消并继续 | 增加审批记录和审计日志。 |

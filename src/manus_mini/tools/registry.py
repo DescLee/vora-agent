@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import cast
 
 from manus_mini.tools.base import ToolProtocol
 from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
@@ -24,7 +25,7 @@ class ToolRegistry:
             RunTempScriptTool(),
         )
         for tool in default_tools:
-            self.register(tool)
+            self.register(cast(ToolProtocol, tool))
 
     def register(self, tool: ToolProtocol) -> None:
         self._tools[tool.name] = tool

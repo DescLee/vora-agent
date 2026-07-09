@@ -7,6 +7,25 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+AgentErrorCode = Literal[
+    "FILE_NOT_FOUND",
+    "PATH_OUT_OF_WORKSPACE",
+    "INVALID_TOOL_PARAMS",
+    "USER_CANCELLED",
+    "MAX_STEPS_REACHED",
+    "MAX_REACT_ITERATIONS_REACHED",
+    "MAX_REFLECTION_ROUNDS_REACHED",
+    "RUNTIME_TIMEOUT",
+    "TOKEN_BUDGET_EXCEEDED",
+    "TOOL_TIMEOUT",
+    "TOOL_RETRY_EXHAUSTED",
+    "INVALID_LLM_OUTPUT",
+    "LLM_ERROR",
+    "UNKNOWN_ERROR",
+]
+MemoryScope = Literal["user", "project", "session", "artifact"]
+MemoryKind = Literal["preference", "project_summary", "artifact_summary", "decision", "constraint"]
+
 
 def new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
@@ -18,6 +37,7 @@ class LoopLimits(BaseModel):
     max_reflection_rounds: int = 3
     max_tool_calls_per_iteration: int = 99
     max_tool_retries: int = 3
+    tool_retry_backoff_seconds: float = 0.1
     max_tool_timeout_seconds: int | None = None
     max_estimated_tokens: int = 128_000
 
@@ -53,22 +73,7 @@ class Message(BaseModel):
 
 
 class AgentError(BaseModel):
-    code: Literal[
-        "FILE_NOT_FOUND",
-        "PATH_OUT_OF_WORKSPACE",
-        "INVALID_TOOL_PARAMS",
-        "USER_CANCELLED",
-        "MAX_STEPS_REACHED",
-        "MAX_REACT_ITERATIONS_REACHED",
-        "MAX_REFLECTION_ROUNDS_REACHED",
-        "RUNTIME_TIMEOUT",
-        "TOKEN_BUDGET_EXCEEDED",
-        "TOOL_TIMEOUT",
-        "TOOL_RETRY_EXHAUSTED",
-        "INVALID_LLM_OUTPUT",
-        "LLM_ERROR",
-        "UNKNOWN_ERROR",
-    ]
+    code: AgentErrorCode
     message: str
     retryable: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -164,8 +169,8 @@ class CompressionSnapshot(BaseModel):
 
 class MemoryItem(BaseModel):
     id: str = Field(default_factory=lambda: new_id("memory"))
-    scope: Literal["user", "project", "session", "artifact"]
-    kind: Literal["preference", "project_summary", "artifact_summary", "decision", "constraint"]
+    scope: MemoryScope
+    kind: MemoryKind
     content: str
     tags: list[str] = Field(default_factory=list)
     confidence: float = 1.0

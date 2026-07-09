@@ -10,7 +10,18 @@ from manus_mini.context import (
     complete_interrupted_tool_messages,
     estimate_session_context_usage,
 )
-from manus_mini.models import AgentError, Artifact, LoopLimits, Message, PlanStep, SessionState, TaskState, TraceEvent
+from manus_mini.models import (
+    AgentError,
+    AgentErrorCode,
+    Artifact,
+    LoopLimits,
+    MemoryItem,
+    Message,
+    PlanStep,
+    SessionState,
+    TaskState,
+    TraceEvent,
+)
 from manus_mini.memory import MemoryManager
 from manus_mini.planner import Planner
 from manus_mini.reflection import ReflectionLoop
@@ -151,7 +162,7 @@ class AgentRuntime:
                 try:
                     reflection = self.reflection_loop.run(task, session)
                 except Exception as error:
-                    error_code = "MAX_REACT_ITERATIONS_REACHED"
+                    error_code: AgentErrorCode = "MAX_REACT_ITERATIONS_REACHED"
                     if str(error) == "TOKEN_BUDGET_EXCEEDED":
                         error_code = "TOKEN_BUDGET_EXCEEDED"
                     elif str(error) != "MAX_REACT_ITERATIONS_REACHED":
@@ -319,7 +330,7 @@ class AgentRuntime:
                 try:
                     reflection = self.reflection_loop.run(task, session)
                 except Exception as error:
-                    error_code = "MAX_REACT_ITERATIONS_REACHED"
+                    error_code: AgentErrorCode = "MAX_REACT_ITERATIONS_REACHED"
                     if str(error) == "TOKEN_BUDGET_EXCEEDED":
                         error_code = "TOKEN_BUDGET_EXCEEDED"
                     elif str(error) != "MAX_REACT_ITERATIONS_REACHED":
@@ -496,7 +507,7 @@ class AgentRuntime:
             return _normalize_plan_result(build_plan(content, session, run_id=run_id), self.planner)
         return _normalize_plan_result(build_plan(content, session), self.planner)
 
-    def _inject_relevant_memories(self, session: SessionState, content: str) -> None:
+    def _inject_relevant_memories(self, session: SessionState, content: str) -> list[MemoryItem]:
         if self.memory_manager is None:
             return []
         memories = self.memory_manager.search(content, limit=3)

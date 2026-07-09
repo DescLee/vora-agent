@@ -1893,13 +1893,19 @@ def test_react_loop_marks_tool_retry_exhausted(tmp_path: Path) -> None:
             return LLMResult(content="fallback")
 
     session = SessionState.create(cwd=tmp_path)
-    task = TaskState.create(goal="重试耗尽", cwd=tmp_path, limits=LoopLimits(max_tool_retries=1))
+    task = TaskState.create(
+        goal="重试耗尽",
+        cwd=tmp_path,
+        limits=LoopLimits(max_tool_retries=1, tool_retry_backoff_seconds=0),
+    )
 
     result = ReActLoop(RetryExhaustedLLM(), ToolRegistry(tools=[AlwaysFailTool()])).run(task, session)
 
     assert result == "fallback"
     assert task.observations[-1].ok is False
     assert task.observations[-1].summary == "still failing"
+    retry_events = [event for event in task.trace_events if event.message == "Tool retry scheduled"]
+    assert retry_events[-1].data["delay_seconds"] == 0
 
 
 def test_react_loop_sanitizes_llm_supplied_workspace_argument(tmp_path: Path) -> None:

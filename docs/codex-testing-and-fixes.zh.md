@@ -557,6 +557,102 @@
 - 目标包含生产代码且尚未执行测试时，必须被测试前置门禁拒绝。
 - 同一命令同时创建测试文件和生产代码文件时，生产代码目标不能被遗漏。
 
+### 29. 工具调用超时后，后台线程可能继续重试或执行 shell 子进程
+
+#### 现象
+
+- `Future.cancel()` 无法终止已经开始运行的 Python 线程。
+- 旧实现返回 `TOOL_TIMEOUT` 后，工具线程仍可能继续运行；如果工具包含副作用，用户看到超时并不代表执行已经停止。
+- shell 只依赖 `subprocess.run(timeout=...)`，对子进程树的回收语义不够明确。
+
+#### 修复
+
+- `Executor` 为每次工具调用创建协作式取消信号，超时、中断和批次超时时都会设置该信号。
+- 工具重试前检查取消状态，避免超时后继续发起下一次执行。
+- shell 工具改用独立进程组；超时或取消时先发送 `SIGTERM`，未退出再发送 `SIGKILL`，防止后台子进程残留。
+- 明确边界：不响应取消信号的第三方 Python 工具仍无法在线程内安全强杀，生产环境必须使用进程或容器隔离。
+
+#### 回归点
+
+- shell 超时或取消后，其后台子进程不能继续创建文件。
+- 工具收到取消信号后不能继续进入下一轮重试。
+
+### 30. 工具和 LLM 瞬时失败重试没有退避
+
+#### 现象
+
+- 旧实现遇到 retryable tool error、HTTP 429/5xx、网络错误或超时后立即重试。
+- 连续立即重试会放大上游压力，也没有遵循服务端 `Retry-After`。
+
+#### 修复
+
+- 工具重试增加指数退避，并在 trace 中记录 `delay_seconds`。
+- LLM 重试增加指数退避和 jitter，支持 HTTP `Retry-After`，并限制单次等待最多 30 秒。
+- 新增 `LLM_MAX_ATTEMPTS`、`LLM_RETRY_BACKOFF_SECONDS` 配置。
+
+#### 回归点
+
+- 429 响应携带 `Retry-After` 时优先采用服务端等待时间。
+- 工具重试事件必须包含实际退避时长。
+
+### 31. 工程质量检查只停留在文档，没有实际 CI
+
+#### 现象
+
+- 仓库虽然记录了 pytest、ruff 和 eval 命令，但没有 CI workflow。
+- 缺少覆盖率阈值、类型检查和构建验证，无法阻止回归进入主分支。
+
+#### 修复
+
+- 新增 `.github/workflows/quality.yml`。
+- 门禁包含 Ruff、mypy、pytest 分支覆盖率、Agent eval 和 Python 包构建。
+- 覆盖率低于 80% 时失败，并上传 coverage XML 与 eval 报告。
+- 为运行时依赖增加兼容版本边界，开发依赖增加 `pytest-cov`、`mypy` 和 `build`。
+
+#### 回归点
+
+- 本地 `mypy` 必须无错误。
+- 全量测试覆盖率必须不低于 80%。
+- `python -m build` 必须同时生成 wheel 和 sdist。
+
+### 32. Eval 用例硬编码且缺少可归档报告
+
+#### 现象
+
+- 旧 eval 的元数据和执行函数全部硬编码在脚本中。
+- 只能向 stdout 输出 JSON，不方便 CI 保存和人工审阅。
+
+#### 修复
+
+- 新增 `evals/cases.zh.json`，统一声明用例 ID、类别和中文目标。
+- runner 校验重复 ID、缺失 runner 和未声明 runner，避免声明与实现漂移。
+- 支持 `--json-report` 和 `--markdown-report`。
+- 安全 eval 增加写入确认和危险命令拒绝，当前共 9 个产品约束用例。
+
+#### 回归点
+
+- 声明式用例必须与 runner 一一对应。
+- JSON 和 Markdown 报告必须能在一次运行中同时生成。
+
+### 33. 静态类型检查暴露多处潜在模型不一致
+
+#### 现象
+
+- Memory 的 `scope/kind` 使用普通字符串传递，与 Pydantic Literal 模型不一致。
+- tool exchange 分组时没有向类型系统证明 `tool_call_id` 非空。
+- runtime 的错误码和 memory 注入返回类型声明不准确。
+
+#### 修复
+
+- 提取 `AgentErrorCode`、`MemoryScope`、`MemoryKind` 类型别名。
+- 修正 Runtime、MemoryManager、Context 和 ToolRegistry 的类型声明。
+- 将 mypy 纳入 CI，当前 29 个源码文件检查通过。
+
+#### 回归点
+
+- `mypy` 输出必须为 `Success: no issues found`。
+- 类型修复不能改变现有运行行为。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -566,6 +662,7 @@
   - `resume` 缺失会话时输出友好错误
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
+  - LLM 指数退避和 `Retry-After`
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
   - 用户目录不可写时路径回退
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
@@ -593,6 +690,14 @@
   - `run_bash` 的 `touch` / `Path(...).touch()` 写入必须进入确认流
   - `run_bash` 的 `touch` / `Path(...).touch()` 写生产代码也必须先通过测试前置门禁
   - 复合 shell 命令中后续生产代码写入也必须先通过测试前置门禁
+  - 工具重试 trace 记录退避时长
+- [tests/test_shell_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_shell_tools.py)
+  - shell 超时终止整个子进程组
+  - shell 响应 Executor 协作式取消信号
+- [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
+  - 声明式 eval 与 runner 一一对应
+  - JSON/Markdown 报告生成
+  - 未知 runner 配置拒绝
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在 TUI 中直接展示并保留长度截断
 
@@ -606,7 +711,10 @@ pytest -q
 
 结果：
 
-- `371 passed`
+- `377 passed`
+- `mypy`：29 个源码文件无错误
+- 分支覆盖率：83%（门禁 80%）
+- Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 

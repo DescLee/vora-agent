@@ -1,0 +1,47 @@
+[
+  {
+    "id": "reflection_rejects_unvalidated_code",
+    "category": "reflection",
+    "target": "代码任务没有测试证据时不能通过 Reflection"
+  },
+  {
+    "id": "reflection_accepts_validated_code",
+    "category": "reflection",
+    "target": "代码任务有测试证据时执行 pytest gate 并通过"
+  },
+  {
+    "id": "non_code_task_bypasses_pytest_gate",
+    "category": "reflection",
+    "target": "非代码任务当前版本不运行 pytest gate"
+  },
+  {
+    "id": "sensitive_memory_is_rejected",
+    "category": "memory",
+    "target": "敏感信息不会写入长期记忆"
+  },
+  {
+    "id": "tool_exchange_integrity_is_enforced",
+    "category": "context",
+    "target": "tool_call 与 tool result 必须成组完整"
+  },
+  {
+    "id": "scheduler_batches_read_only_tools",
+    "category": "tools",
+    "target": "无依赖只读工具可进入同一并行批次"
+  },
+  {
+    "id": "path_escape_is_rejected",
+    "category": "security",
+    "target": "文件工具拒绝 workspace 外路径"
+  },
+  {
+    "id": "write_requires_confirmation",
+    "category": "security",
+    "target": "文件写入在执行前必须生成人工确认预览"
+  },
+  {
+    "id": "dangerous_command_is_rejected",
+    "category": "security",
+    "target": "明确危险的系统命令必须被本地规则拒绝"
+  }
+]

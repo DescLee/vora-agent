@@ -83,17 +83,27 @@ class Executor:
 
     def execute(self, call: ToolCall, session: SessionState, task: TaskState) -> ToolResult:
         timeout_seconds = _tool_timeout_seconds(task.limits.max_tool_timeout_seconds)
-        future = self._tool_pool.submit(self._execute_sync, call, session, task)
+        cancel_event = threading.Event()
+        future = self._tool_pool.submit(self._execute_sync, call, session, task, cancel_event)
         try:
             return future.result(timeout=timeout_seconds)
         except KeyboardInterrupt:
+            cancel_event.set()
             future.cancel()
             return self._cancelled_result(call.name)
         except FuturesTimeoutError:
+            cancel_event.set()
             future.cancel()
             return ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
 
-    def _execute_sync(self, call: ToolCall, session: SessionState, task: TaskState) -> ToolResult:
+    def _execute_sync(
+        self,
+        call: ToolCall,
+        session: SessionState,
+        task: TaskState,
+        cancel_event: threading.Event | None = None,
+    ) -> ToolResult:
+        cancel_event = cancel_event or threading.Event()
         max_attempts = max(1, task.limits.max_tool_retries + 1)
         last_result: ToolResult | None = None
         tool = self.registry.get(call.name)
@@ -146,8 +156,10 @@ class Executor:
             )
 
         for attempt in range(1, max_attempts + 1):
+            if cancel_event.is_set():
+                return self._cancelled_result(call.name)
             try:
-                result = tool.run(**call.args)
+                result = tool.run(**call.args, _cancel_event=cancel_event)
             except KeyboardInterrupt:
                 return self._cancelled_result(call.name)
             except PermissionError as error:
@@ -160,6 +172,7 @@ class Executor:
 
             last_result = result
             if attempt < max_attempts and self._should_retry(result):
+                delay = max(0.0, task.limits.tool_retry_backoff_seconds) * (2 ** (attempt - 1))
                 task.trace_events.append(
                     TraceEvent(
                         phase="tool",
@@ -170,9 +183,12 @@ class Executor:
                             "attempt": attempt,
                             "max_attempts": max_attempts,
                             "error_code": result.error_code,
+                            "delay_seconds": delay,
                         },
                     )
                 )
+                if cancel_event.wait(delay):
+                    return self._cancelled_result(call.name)
                 continue
             if not self._should_retry(result):
                 return last_result
@@ -248,20 +264,26 @@ class Executor:
             return {call.id: self.execute(call, session, task)}
 
         timeout_seconds = _tool_timeout_seconds(task.limits.max_tool_timeout_seconds)
-        futures = {self._tool_pool.submit(self._execute_sync, call, session, task): call for call in batch}
+        cancel_events = {call.id: threading.Event() for call in batch}
+        futures = {
+            self._tool_pool.submit(self._execute_sync, call, session, task, cancel_events[call.id]): call
+            for call in batch
+        }
         results: dict[str, ToolResult] = {}
         try:
             for future in as_completed(futures, timeout=timeout_seconds):
                 call = futures[future]
                 results[call.id] = future.result()
         except FuturesTimeoutError:
-            for future in futures:
+            for future, call in futures.items():
+                cancel_events[call.id].set()
                 future.cancel()
             for call in batch:
                 if call.id not in results:
                     results[call.id] = ToolResult(tool_name=call.name, ok=False, summary="tool execution timed out", error_code="TOOL_TIMEOUT")
         except KeyboardInterrupt:
-            for future in futures:
+            for future, call in futures.items():
+                cancel_events[call.id].set()
                 future.cancel()
             task.trace_events.append(
                 TraceEvent(
@@ -289,7 +311,7 @@ class Executor:
 def _detach_threads_from_python_shutdown(threads) -> None:
     for thread in threads:
         try:
-            futures_thread._threads_queues.pop(thread, None)
+            futures_thread._threads_queues.pop(thread, None)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             pass
         lock = getattr(thread, "_tstate_lock", None)
@@ -320,7 +342,7 @@ def _detach_live_tool_threads_from_python_shutdown() -> None:
 
 _LIVE_EXECUTORS = weakref.WeakSet()
 try:
-    threading._register_atexit(_detach_live_tool_threads_from_python_shutdown)
+    threading._register_atexit(_detach_live_tool_threads_from_python_shutdown)  # type: ignore[attr-defined]
 except Exception:  # noqa: BLE001
     pass
 

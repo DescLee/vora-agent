@@ -35,6 +35,7 @@ def test_openai_compatible_client_wraps_http_error(monkeypatch) -> None:
 
 def test_openai_compatible_client_retries_transient_http_error(monkeypatch) -> None:
     calls = {"count": 0}
+    delays = []
 
     def fake_urlopen(*args, **kwargs):  # noqa: ARG001
         calls["count"] += 1
@@ -49,6 +50,7 @@ def test_openai_compatible_client_retries_transient_http_error(monkeypatch) -> N
         return io.BytesIO(b'{"choices":[{"message":{"content":"done","tool_calls":[]}}]}')
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", delays.append)
     client = OpenAICompatibleLLMClient(
         AppConfig(
             llm_provider="openai-compatible",
@@ -62,6 +64,39 @@ def test_openai_compatible_client_retries_transient_http_error(monkeypatch) -> N
 
     assert calls["count"] == 2
     assert result.content == "done"
+    assert len(delays) == 1
+    assert 0.25 <= delays[0] <= 0.3
+
+
+def test_openai_compatible_client_honors_retry_after(monkeypatch) -> None:
+    calls = {"count": 0}
+    delays = []
+
+    def fake_urlopen(*args, **kwargs):  # noqa: ARG001
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.HTTPError(
+                url="http://localhost/v1/chat/completions",
+                code=429,
+                msg="Too Many Requests",
+                hdrs={"Retry-After": "2"},
+                fp=io.BytesIO(b'{"error":"rate limited"}'),
+            )
+        return io.BytesIO(b'{"choices":[{"message":{"content":"done","tool_calls":[]}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", delays.append)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost/v1",
+            llm_api_key="test-key",
+            llm_model="test-model",
+        )
+    )
+
+    assert client.complete_with_tools([Message.user("hi")], []).content == "done"
+    assert delays == [2.0]
 
 
 def test_openai_compatible_client_wraps_malformed_success_response(monkeypatch) -> None:

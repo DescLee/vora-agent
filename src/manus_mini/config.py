@@ -6,6 +6,8 @@ from pathlib import Path
 
 
 DEFAULT_LLM_TIMEOUT_SECONDS = 120
+DEFAULT_LLM_MAX_ATTEMPTS = 3
+DEFAULT_LLM_RETRY_BACKOFF_SECONDS = 0.25
 
 
 def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
@@ -56,6 +58,8 @@ class AppConfig:
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: int = DEFAULT_LLM_TIMEOUT_SECONDS
+    llm_max_attempts: int = DEFAULT_LLM_MAX_ATTEMPTS
+    llm_retry_backoff_seconds: float = DEFAULT_LLM_RETRY_BACKOFF_SECONDS
     llm_config_source: str = ""
 
     @classmethod
@@ -71,6 +75,8 @@ class AppConfig:
             "LLM_API_KEY": os.environ.get("LLM_API_KEY"),
             "LLM_MODEL": os.environ.get("LLM_MODEL"),
             "LLM_TIMEOUT_SECONDS": os.environ.get("LLM_TIMEOUT_SECONDS"),
+            "LLM_MAX_ATTEMPTS": os.environ.get("LLM_MAX_ATTEMPTS"),
+            "LLM_RETRY_BACKOFF_SECONDS": os.environ.get("LLM_RETRY_BACKOFF_SECONDS"),
         }
         loaded_env = load_dotenv(env_path)
         loaded_user_env = load_dotenv(user_env_path or Path.home() / ".manus-mini" / ".env")
@@ -96,6 +102,16 @@ class AppConfig:
             timeout_seconds = int(timeout_value)
         except ValueError:
             timeout_seconds = DEFAULT_LLM_TIMEOUT_SECONDS
+        try:
+            max_attempts = int(resolve("LLM_MAX_ATTEMPTS", str(DEFAULT_LLM_MAX_ATTEMPTS)))
+        except ValueError:
+            max_attempts = DEFAULT_LLM_MAX_ATTEMPTS
+        try:
+            retry_backoff_seconds = float(
+                resolve("LLM_RETRY_BACKOFF_SECONDS", str(DEFAULT_LLM_RETRY_BACKOFF_SECONDS))
+            )
+        except ValueError:
+            retry_backoff_seconds = DEFAULT_LLM_RETRY_BACKOFF_SECONDS
 
         return cls(
             llm_provider=resolve("LLM_PROVIDER", "").strip().lower(),
@@ -103,6 +119,8 @@ class AppConfig:
             llm_api_key=resolve("LLM_API_KEY", "").strip(),
             llm_model=resolve("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
             llm_timeout_seconds=max(1, timeout_seconds),
+            llm_max_attempts=max(1, max_attempts),
+            llm_retry_backoff_seconds=max(0.0, retry_backoff_seconds),
             llm_config_source=sources.get("LLM_PROVIDER")
             or sources.get("LLM_BASE_URL")
             or sources.get("LLM_API_KEY")

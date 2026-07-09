@@ -4,8 +4,11 @@ import os
 import re
 import json
 import shlex
+import signal
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -109,6 +112,7 @@ class RunBashTool(BaseTool):
             cwd=workspace,
             timeout_seconds=timeout_seconds,
             output_limit=output_limit,
+            cancel_event=kwargs.get("_cancel_event"),
         )
 
 
@@ -190,6 +194,7 @@ class RunTempScriptTool(BaseTool):
                     cwd=workspace,
                     timeout_seconds=timeout_seconds,
                     output_limit=output_limit,
+                    cancel_event=kwargs.get("_cancel_event"),
                 )
                 result.data["script_path"] = str(script_path)
                 return result
@@ -204,50 +209,94 @@ def _run_command(
     cwd: Path,
     timeout_seconds: int | None,
     output_limit: int,
+    cancel_event: threading.Event | None = None,
 ) -> ToolResult:
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-            env=_safe_command_env(cwd),
-        )
-    except subprocess.TimeoutExpired as error:
-        stdout = _coerce_output(error.stdout)
-        stderr = _coerce_output(error.stderr)
-        return ToolResult(
-            tool_name=tool_name,
-            ok=False,
-            summary=f"command timed out after {timeout_seconds}s",
-            content=_combined_output(stdout, stderr, output_limit),
-            data={
-                "exit_code": None,
-                "stdout": _truncate(stdout, output_limit),
-                "stderr": _truncate(stderr, output_limit),
-                "timed_out": True,
-            },
-            error_code="COMMAND_TIMEOUT",
-        )
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_safe_command_env(cwd),
+        start_new_session=True,
+    )
+    started_at = time.monotonic()
+    stdout = ""
+    stderr = ""
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            stdout, stderr = _terminate_process_group(process)
+            return ToolResult(
+                tool_name=tool_name,
+                ok=False,
+                summary="command cancelled",
+                content=_combined_output(stdout, stderr, output_limit),
+                data={
+                    "exit_code": process.returncode,
+                    "stdout": _truncate(stdout, output_limit),
+                    "stderr": _truncate(stderr, output_limit),
+                    "timed_out": False,
+                    "cancelled": True,
+                },
+                error_code="USER_CANCELLED",
+            )
+        if timeout_seconds is not None and time.monotonic() - started_at >= timeout_seconds:
+            stdout, stderr = _terminate_process_group(process)
+            return ToolResult(
+                tool_name=tool_name,
+                ok=False,
+                summary=f"command timed out after {timeout_seconds}s",
+                content=_combined_output(stdout, stderr, output_limit),
+                data={
+                    "exit_code": process.returncode,
+                    "stdout": _truncate(stdout, output_limit),
+                    "stderr": _truncate(stderr, output_limit),
+                    "timed_out": True,
+                    "cancelled": False,
+                },
+                error_code="COMMAND_TIMEOUT",
+            )
+        try:
+            stdout, stderr = process.communicate(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            continue
 
-    stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    ok = completed.returncode == 0
+    stdout = stdout or ""
+    stderr = stderr or ""
+    ok = process.returncode == 0
     return ToolResult(
         tool_name=tool_name,
         ok=ok,
-        summary=f"command exited {completed.returncode}",
+        summary=f"command exited {process.returncode}",
         content=_combined_output(stdout, stderr, output_limit),
         data={
-            "exit_code": completed.returncode,
+            "exit_code": process.returncode,
             "stdout": _truncate(stdout, output_limit),
             "stderr": _truncate(stderr, output_limit),
             "timed_out": False,
+            "cancelled": False,
         },
         error_code=None if ok else "COMMAND_FAILED",
     )
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        return process.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        stdout, stderr = process.communicate()
+        return stdout or "", stderr or ""
 
 
 def _positive_int(value: Any, default: int) -> int:

@@ -7,7 +7,15 @@ from manus_mini.llm import OpenAICompatibleLLMClient, get_default_llm_client
 
 
 def clear_llm_env_vars(monkeypatch) -> None:
-    for key in ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT_SECONDS"]:
+    for key in [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_TIMEOUT_SECONDS",
+        "LLM_MAX_ATTEMPTS",
+        "LLM_RETRY_BACKOFF_SECONDS",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
 
@@ -62,7 +70,9 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
         "LLM_BASE_URL=http://localhost:1234/v1\n"
         "LLM_API_KEY=test-key\n"
         "LLM_MODEL=qwen-turbo\n"
-        "LLM_TIMEOUT_SECONDS=15\n",
+        "LLM_TIMEOUT_SECONDS=15\n"
+        "LLM_MAX_ATTEMPTS=5\n"
+        "LLM_RETRY_BACKOFF_SECONDS=0.5\n",
         encoding="utf-8",
     )
 
@@ -73,6 +83,8 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
     assert config.llm_api_key == "test-key"
     assert config.llm_model == "qwen-turbo"
     assert config.llm_timeout_seconds == 15
+    assert config.llm_max_attempts == 5
+    assert config.llm_retry_backoff_seconds == 0.5
     assert config.llm_config_source == str(env_path)
 
 
@@ -131,6 +143,8 @@ def test_app_config_defaults_to_longer_llm_timeout(tmp_path: Path, monkeypatch) 
     config = AppConfig.from_env(tmp_path / ".env")
 
     assert config.llm_timeout_seconds == 120
+    assert config.llm_max_attempts == 3
+    assert config.llm_retry_backoff_seconds == 0.25
 
 
 def test_get_default_llm_client_requires_explicit_provider(tmp_path: Path, monkeypatch) -> None:

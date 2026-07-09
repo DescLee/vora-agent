@@ -58,6 +58,8 @@ LLM_BASE_URL=http://localhost:1234/v1
 LLM_API_KEY=your-api-key
 LLM_MODEL=gpt-4o-mini
 LLM_TIMEOUT_SECONDS=120
+LLM_MAX_ATTEMPTS=3
+LLM_RETRY_BACKOFF_SECONDS=0.25
 ```
 
 ## 运行
@@ -80,6 +82,8 @@ manus-mini resume <session_id>
 ```bash
 pytest -q
 ruff check src tests evals
+mypy
+pytest --cov=manus_mini --cov-report=term-missing
 python evals/run_evals.py
 ```
 
@@ -92,6 +96,8 @@ python evals/run_evals.py
 3. 代码门禁：让 Agent 做代码修改，说明 Reflection 会生成 pytest 验收 case，不通过则回流继续执行。
 
 面试讲法应明确：这是本地单用户 Agent Runtime MVP，核心价值在于 Agent 工程治理，而不是完整生产平台。
+
+仓库内的 GitHub Actions 会自动执行 lint、类型检查、测试覆盖率、Agent eval 和 Python 包构建；覆盖率低于 80% 时门禁失败。
 
 ## 版本号规则
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import random
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -10,8 +12,8 @@ from pydantic import BaseModel, Field
 from manus_mini.config import AppConfig
 from manus_mini.models import ToolCall
 
-DEFAULT_LLM_MAX_ATTEMPTS = 3
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_RETRY_AFTER_SECONDS = 30.0
 
 
 class LLMResult(BaseModel):
@@ -280,27 +282,39 @@ class OpenAICompatibleLLMClient(LLMClient):
 
     def _send_request_with_retries(self, request: urllib.request.Request) -> dict[str, Any]:
         last_error: Exception | None = None
-        for attempt in range(1, DEFAULT_LLM_MAX_ATTEMPTS + 1):
+        max_attempts = self.config.llm_max_attempts
+        for attempt in range(1, max_attempts + 1):
             try:
                 with urllib.request.urlopen(request, timeout=self.config.llm_timeout_seconds) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
-                if error.code not in RETRYABLE_HTTP_STATUS_CODES or attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                if error.code not in RETRYABLE_HTTP_STATUS_CODES or attempt == max_attempts:
                     body = error.read().decode("utf-8", errors="replace")
                     detail = body[:800] if body else error.reason
                     raise LLMRequestError(f"LLM HTTP {error.code}: {detail}") from error
                 last_error = error
+                self._wait_before_retry(attempt, error.headers.get("Retry-After"))
             except urllib.error.URLError as error:
-                if attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                if attempt == max_attempts:
                     raise LLMRequestError(f"LLM request failed: {error.reason}") from error
                 last_error = error
+                self._wait_before_retry(attempt)
             except TimeoutError as error:
-                if attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                if attempt == max_attempts:
                     raise LLMRequestError("LLM request timed out") from error
                 last_error = error
+                self._wait_before_retry(attempt)
             except json.JSONDecodeError as error:
                 raise LLMRequestError("LLM returned invalid JSON") from error
         raise LLMRequestError(f"LLM request failed: {last_error or 'unknown error'}")
+
+    def _wait_before_retry(self, attempt: int, retry_after: str | None = None) -> None:
+        delay = _retry_after_seconds(retry_after)
+        if delay is None:
+            base = self.config.llm_retry_backoff_seconds * (2 ** (attempt - 1))
+            delay = base + random.uniform(0, base * 0.2)
+        if delay > 0:
+            time.sleep(min(delay, MAX_RETRY_AFTER_SECONDS))
 
     def _extract_message(self, body: dict[str, Any]) -> dict[str, Any]:
         choices = body["choices"]
@@ -371,6 +385,16 @@ def _looks_like_raw_tool_call_markup(content: str) -> bool:
     if not stripped:
         return False
     return any(snippet in stripped for snippet in _RAW_TOOL_CALL_MARKUP_SNIPPETS)
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return max(0.0, parsed)
 
 
 def get_default_llm_client(config: AppConfig | None = None) -> LLMClient:

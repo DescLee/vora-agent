@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import json
+import argparse
 import sys
 import tempfile
 from collections.abc import Callable
@@ -21,8 +22,9 @@ from manus_mini.memory import MemoryManager
 from manus_mini.models import Message, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.reflection import ReflectionLoop
 from manus_mini.scheduler import ToolScheduler
-from manus_mini.tools.file_tools import ReadFileTool
+from manus_mini.tools.file_tools import ReadFileTool, WriteFileTool
 from manus_mini.tools.registry import ToolRegistry
+from manus_mini.tools.shell_tools import RunBashTool
 
 
 @dataclass(frozen=True)
@@ -160,55 +162,87 @@ def eval_path_escape_is_rejected() -> None:
             raise AssertionError("path escape should be rejected")
 
 
-CASES = [
-    EvalCase(
-        "reflection_rejects_unvalidated_code",
-        "reflection",
-        "代码任务没有测试证据时不能通过 Reflection",
-        eval_reflection_rejects_unvalidated_code,
-    ),
-    EvalCase(
-        "reflection_accepts_validated_code",
-        "reflection",
-        "代码任务有测试证据时执行 pytest gate 并通过",
-        eval_reflection_accepts_validated_code,
-    ),
-    EvalCase(
-        "non_code_task_bypasses_pytest_gate",
-        "reflection",
-        "非代码任务当前版本不运行 pytest gate",
-        eval_non_code_task_bypasses_pytest_gate,
-    ),
-    EvalCase(
-        "sensitive_memory_is_rejected",
-        "memory",
-        "敏感信息不会写入长期记忆",
-        eval_sensitive_memory_is_rejected,
-    ),
-    EvalCase(
-        "tool_exchange_integrity_is_enforced",
-        "context",
-        "tool_call 与 tool result 必须成组完整",
-        eval_tool_exchange_integrity_is_enforced,
-    ),
-    EvalCase(
-        "scheduler_batches_read_only_tools",
-        "tools",
-        "无依赖只读工具可进入同一并行批次",
-        eval_scheduler_batches_read_only_tools,
-    ),
-    EvalCase(
-        "path_escape_is_rejected",
-        "security",
-        "文件工具拒绝 workspace 外路径",
-        eval_path_escape_is_rejected,
-    ),
-]
+def eval_write_requires_confirmation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        preview = WriteFileTool().preview(workspace=cwd, path="result.md", content="draft")
+        assert preview.requires_confirmation is True
+        assert not (cwd / "result.md").exists()
 
 
-def main() -> int:
+def eval_dangerous_command_is_rejected() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        result = RunBashTool().run(workspace=Path(directory), command="sudo rm -rf /")
+        assert result.ok is False
+        assert result.error_code == "COMMAND_REJECTED"
+
+
+CASE_RUNNERS: dict[str, Callable[[], None]] = {
+    "reflection_rejects_unvalidated_code": eval_reflection_rejects_unvalidated_code,
+    "reflection_accepts_validated_code": eval_reflection_accepts_validated_code,
+    "non_code_task_bypasses_pytest_gate": eval_non_code_task_bypasses_pytest_gate,
+    "sensitive_memory_is_rejected": eval_sensitive_memory_is_rejected,
+    "tool_exchange_integrity_is_enforced": eval_tool_exchange_integrity_is_enforced,
+    "scheduler_batches_read_only_tools": eval_scheduler_batches_read_only_tools,
+    "path_escape_is_rejected": eval_path_escape_is_rejected,
+    "write_requires_confirmation": eval_write_requires_confirmation,
+    "dangerous_command_is_rejected": eval_dangerous_command_is_rejected,
+}
+
+
+def load_cases(path: Path = ROOT / "evals" / "cases.zh.json") -> list[EvalCase]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("eval case file must contain a JSON array")
+    cases: list[EvalCase] = []
+    seen_ids: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("each eval case must be an object")
+        case_id = str(item.get("id") or "").strip()
+        category = str(item.get("category") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if not case_id or not category or not target:
+            raise ValueError("eval case requires id, category and target")
+        if case_id in seen_ids:
+            raise ValueError(f"duplicate eval case id: {case_id}")
+        try:
+            runner = CASE_RUNNERS[case_id]
+        except KeyError as error:
+            raise ValueError(f"eval case has no runner: {case_id}") from error
+        seen_ids.add(case_id)
+        cases.append(EvalCase(case_id, category, target, runner))
+    missing = CASE_RUNNERS.keys() - seen_ids
+    if missing:
+        raise ValueError(f"eval runners are not declared: {', '.join(sorted(missing))}")
+    return cases
+
+
+def _markdown_report(report: dict[str, Any]) -> str:
+    lines = [
+        "# Manus Mini Eval 报告",
+        "",
+        f"- 总数：{report['total']}",
+        f"- 通过：{report['passed']}",
+        f"- 失败：{report['failed']}",
+        "",
+        "| 用例 | 类别 | 结果 | 目标 |",
+        "|---|---|---:|---|",
+    ]
+    for result in report["results"]:
+        status = "通过" if result["ok"] else f"失败：{result['error']}"
+        lines.append(f"| `{result['id']}` | {result['category']} | {status} | {result['target']} |")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="运行 Manus Mini 产品约束评测")
+    parser.add_argument("--cases", type=Path, default=ROOT / "evals" / "cases.zh.json")
+    parser.add_argument("--json-report", type=Path)
+    parser.add_argument("--markdown-report", type=Path)
+    args = parser.parse_args(argv)
     results = []
-    for case in CASES:
+    for case in load_cases(args.cases):
         try:
             case.run()
         except Exception as error:  # noqa: BLE001
@@ -240,6 +274,12 @@ def main() -> int:
         "results": results,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.json_report:
+        args.json_report.parent.mkdir(parents=True, exist_ok=True)
+        args.json_report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if args.markdown_report:
+        args.markdown_report.parent.mkdir(parents=True, exist_ok=True)
+        args.markdown_report.write_text(_markdown_report(report), encoding="utf-8")
     return 0 if report["failed"] == 0 else 1
 
 

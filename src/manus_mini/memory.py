@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 
-from manus_mini.models import MemoryItem
+from manus_mini.models import MemoryItem, MemoryKind, MemoryScope
 from manus_mini.redaction import contains_sensitive_text
 
 SENSITIVE_PATTERN = re.compile(r"(API_KEY|TOKEN=|PASSWORD=|SECRET)", re.IGNORECASE)
@@ -68,8 +68,8 @@ class MemoryManager:
 
     def add(
         self,
-        scope: str,
-        kind: str,
+        scope: MemoryScope,
+        kind: MemoryKind,
         content: str,
         tags: Iterable[str],
         confidence: float = 1.0,
@@ -111,8 +111,8 @@ class MemoryManager:
 
     def add_if_allowed(
         self,
-        scope: str,
-        kind: str,
+        scope: MemoryScope,
+        kind: MemoryKind,
         content: str,
         tags: Iterable[str],
         confidence: float = 1.0,

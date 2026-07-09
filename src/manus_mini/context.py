@@ -203,6 +203,7 @@ def build_segments(messages: Sequence[Message]) -> list[ContextSegment]:
             while expected_ids:
                 next_message = messages[index]
                 group.append(next_message)
+                assert next_message.tool_call_id is not None
                 expected_ids.remove(next_message.tool_call_id)
                 index += 1
 
