@@ -1206,6 +1206,10 @@ def _shell_write_path(call) -> str | None:
     if match is None:
         match = re.search(r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)", text)
     if match is None:
+        match = re.search(r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.write_text\s*\(", text)
+    if match is None:
+        match = re.search(r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]", text)
+    if match is None:
         return None
     return _normalize_relative_path(match.group(1))
 

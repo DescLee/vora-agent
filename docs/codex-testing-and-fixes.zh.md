@@ -357,6 +357,28 @@
 - `manus-mini resume <missing>` 不应输出 Python traceback。
 - 命令应打印友好错误，并以非 0 状态退出。
 
+### 19. `run_bash` 通过 Python 写生产代码时会绕过测试前置门禁
+
+#### 现象
+
+- 本地风险启发式已经能把 `Path('app.py').write_text(...)` / `open('app.py', 'w')` 这类命令拦进确认流。
+- 但确认后，`react.py` 的 shell 写代码目标解析还没有覆盖 Python 文件写入表达式。
+- 如果模型通过 `python -c "Path('app.py').write_text(...)"` 修改生产代码，仍可能绕过“先测试再改代码”的门禁。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展 `_shell_write_path()`。
+- 新增识别：
+  - `Path('file').write_text(...)`
+  - `open('file', 'w'/'a')`
+- 命中生产代码文件且没有测试执行证据时，同样返回：
+  - `CODE_CHANGE_REQUIRES_TEST_FIRST`
+
+#### 回归点
+
+- `run_bash` 通过 Python 写入 `app.py` 这类生产代码文件时，也必须先有测试执行证据。
+- Python 写文件表达式不应成为绕过代码测试门禁的旁路。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -381,6 +403,7 @@
   - `run_bash` 的 `tee` 写文件命令必须进入确认流
   - `run_bash` 的 `tee` 写生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的原地编辑生产代码命令也必须先通过测试前置门禁
+  - `run_bash` 的 Python 写生产代码命令也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
@@ -394,7 +417,7 @@ pytest -q
 
 结果：
 
-- `356 passed`
+- `357 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -410,6 +433,7 @@ pytest -q
 - `run_bash` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `tee` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 原地编辑生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` 通过 Python 写生产代码时也不能绕过“先测试再改代码”的门禁
 - 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议
