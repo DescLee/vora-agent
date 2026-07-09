@@ -95,7 +95,11 @@ def _run_list(cwd: Path) -> None:
 
 def _run_resume(cwd: Path, session_id: str) -> None:
     store = SessionStore(cwd)
-    session = store.load(session_id)
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError:
+        print(f"Error: session '{session_id}' not found.")
+        raise SystemExit(1) from None
     limits = session.active_task.limits if session.active_task is not None else LoopLimits()
     PromptTui(
         options=PromptTuiOptions(cwd=cwd, limits=limits),

@@ -337,12 +337,33 @@
 - `run_bash` 执行 `sed -i ... app.py` 这类原地编辑生产代码命令时，也必须先有测试执行证据。
 - `sed -i` / `perl -pi` 不应成为绕过代码测试门禁的旁路。
 
+### 18. `manus-mini resume` 恢复不存在的会话时直接抛 Python 异常
+
+#### 现象
+
+- 按普通用户路径执行 `manus-mini resume missing-session --cwd <目录>` 时，旧实现直接让 `FileNotFoundError` 冒泡。
+- 用户会看到 Python traceback，而不是清晰的 CLI 错误信息。
+- 同类的 `remove` 子命令已经有友好错误提示，`resume` 行为不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获 `FileNotFoundError`。
+- 缺失会话时输出：
+  - `Error: session '<session_id>' not found.`
+- 随后以 `SystemExit(1)` 退出，和 `remove` 的失败语义保持一致。
+
+#### 回归点
+
+- `manus-mini resume <missing>` 不应输出 Python traceback。
+- 命令应打印友好错误，并以非 0 状态退出。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
   - 顶层 `--cwd` 兼容
   - 旧写法子命令参数兼容
   - `clear` 必须先确认再删除会话
+  - `resume` 缺失会话时输出友好错误
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
@@ -373,7 +394,7 @@ pytest -q
 
 结果：
 
-- `355 passed`
+- `356 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 

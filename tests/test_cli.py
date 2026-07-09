@@ -49,6 +49,17 @@ def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch
     assert seen["initial_session"] == session.session_id
 
 
+def test_cli_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    with pytest.raises(SystemExit) as error:
+        main(["resume", "missing-session", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: session 'missing-session' not found." in out
+
+
 def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkeypatch) -> None:
     seen = {}
 
