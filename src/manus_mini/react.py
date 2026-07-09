@@ -820,13 +820,19 @@ class ReActLoop:
         )
 
     def _report_write_precondition_error(self, call, task: TaskState) -> ToolResult | None:
-        if call.name not in CODE_WRITE_TOOLS:
+        if call.name in CODE_WRITE_TOOLS:
+            path = _tool_write_path(call) or ""
+        elif call.name in SHELL_CODE_WRITE_TOOLS:
+            paths = _shell_write_paths(call)
+            if not paths:
+                return None
+            path = paths[0]
+        else:
             return None
         if not _looks_like_report_goal(task.goal):
             return None
         if _goal_explicitly_requests_file_output(task.goal):
             return None
-        path = _tool_write_path(call) or ""
         return ToolResult(
             tool_name=call.name,
             ok=False,

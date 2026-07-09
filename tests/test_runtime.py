@@ -2320,6 +2320,40 @@ def test_report_query_rejects_unsolicited_write_file_and_stays_in_chat(tmp_path:
     assert session.pending_confirmation is None
 
 
+def test_report_query_rejects_unsolicited_shell_file_write_and_stays_in_chat(tmp_path: Path) -> None:
+    class ReportShellWriteLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-write-report",
+                            name="run_bash",
+                            args={
+                                "command": "mkdir -p docs && cat <<'EOF' > docs/report.md\n# report\nEOF",
+                                "confirmed": True,
+                            },
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" in tool_messages[-1].content
+            return LLMResult(content="下面直接在对话里给你摘要，不落文件。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请给我一份 AI Agent 框架行研摘要", cwd=tmp_path)
+
+    result = ReActLoop(ReportShellWriteLLM()).run(task, session)
+
+    assert result == "下面直接在对话里给你摘要，不落文件。"
+    assert not (tmp_path / "docs" / "report.md").exists()
+    assert session.pending_confirmation is None
+
+
 def test_react_loop_adds_disclaimer_when_web_search_has_no_results(tmp_path: Path) -> None:
     class NoResultsSearchTool:
         name = "web_search"

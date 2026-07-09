@@ -399,6 +399,26 @@
 - 同一条 `run_bash` 同时写测试文件和生产代码文件时，也必须先有测试执行证据。
 - 测试文件写入不应掩盖后续生产代码写入。
 
+### 21. 普通行研问答可通过 `run_bash` 写报告文件，绕过“默认对话内回答”约束
+
+#### 现象
+
+- 之前普通行研/报告问答已经会拒绝 `write_file` / `replace_in_file` / `append_file` 的非显式文件输出。
+- 但如果模型改用 `run_bash` 通过重定向写 `docs/report.md`，报告写入前置条件没有覆盖 shell 写文件路径。
+- 用户只是要“给我一份行研摘要”时，Agent 仍可能直接落文件，偏离“默认在对话内回答”的预期。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展报告写入前置条件。
+- 对 `run_bash` / `run_temp_script` 中可识别的写文件路径，同样应用：
+  - `REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST`
+- 只有用户明确要求“保存到文件 / 写入文件 / 生成文件”等场景，才允许报告类任务落文件。
+
+#### 回归点
+
+- 普通行研/报告问答不应通过 shell 命令写报告文件。
+- `run_bash` 不应成为绕过“默认对话内回答”的旁路。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -414,6 +434,7 @@
   - fallback 高价值回答
   - 空结果保护
   - 行研问答默认不落文件
+  - 行研问答不能通过 `run_bash` 绕过默认不落文件策略
   - 搜索 0 结果时增加证据不足提示
   - 搜索失败时增加证据不足提示
   - `replace_in_file` 必须进入确认流
@@ -438,7 +459,7 @@ pytest -q
 
 结果：
 
-- `358 passed`
+- `359 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -446,6 +467,7 @@ pytest -q
 - LLM 不可用时回答启动问题
 - LLM 返回空字符串时，最终仍有可展示结果
 - 普通行研问答不会误入写文件确认流程
+- 普通行研问答不会通过 `run_bash` 绕过默认不落文件策略
 - `web_search` 无结果时，最终答案会主动提示“未获取到有效搜索结果”
 - `web_search` 执行失败时，最终答案也会主动提示“未获取到有效搜索结果”
 - `replace_in_file` 不会再直接修改文件，而是先等待确认
