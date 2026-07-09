@@ -67,7 +67,20 @@ IDENTITY_GOAL_KEYWORDS = ("你是谁", "你的名字", "你叫什么")
 STARTUP_GOAL_KEYWORDS = ("怎么启动", "如何启动", "怎么运行", "如何运行", "怎么使用", "如何使用")
 UNAVAILABLE_GOAL_KEYWORDS = ("模型不可用", "llm 不可用", "llm不可用", "模型挂了", "模型异常")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
-EXPLICIT_WRITE_INTENT_KEYWORDS = ("保存到", "写入文件", "生成文件", "落到文件", "保存成", "写入 ", "创建文件", "新建文件")
+EXPLICIT_WRITE_INTENT_KEYWORDS = (
+    "保存到",
+    "写到",
+    "输出到",
+    "放到",
+    "写入文件",
+    "生成文件",
+    "落到文件",
+    "保存成",
+    "输出成",
+    "写入 ",
+    "创建文件",
+    "新建文件",
+)
 
 
 def format_tool_result_message(tool_result) -> str:
