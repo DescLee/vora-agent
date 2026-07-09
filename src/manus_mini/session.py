@@ -67,6 +67,10 @@ class SessionManager:
                 return self._save_current(self.accept_pending_confirmation())
             if normalized in DENIAL_WORDS:
                 return self._save_current(self.reject_pending_confirmation())
+            self.current.messages.append(
+                Message.system("当前有待确认的写入操作，请先输入 `确认` 或 `取消`，再继续新的请求。")
+            )
+            return self._save_current(self.current)
         try:
             self.current = self.runtime.on_user_message(content, self.current, append_user_message=append_user_message)
         except KeyboardInterrupt:

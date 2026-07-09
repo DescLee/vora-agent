@@ -419,6 +419,26 @@
 - 普通行研/报告问答不应通过 shell 命令写报告文件。
 - `run_bash` 不应成为绕过“默认对话内回答”的旁路。
 
+### 22. 等待写入确认时，普通消息会绕过待确认状态并开启新任务
+
+#### 现象
+
+- 当会话存在 `pending_confirmation` 时，用户如果没有输入 `确认` / `取消`，而是继续发普通问题，旧实现会继续调用 runtime 开启新任务。
+- 这会让待确认写入悬而未决，同时新任务继续推进，用户容易误以为上一项修改已被取消或已处理。
+- 对真实 TUI 使用来说，这会造成确认流状态混乱。
+
+#### 修复
+
+- 在 [src/manus_mini/session.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session.py) 中收紧待确认状态处理。
+- 如果存在待确认写入，除 `确认` / `取消` 和已有内置指令外，普通消息不会进入 runtime。
+- 系统会提示：
+  - `当前有待确认的写入操作，请先输入 \`确认\` 或 \`取消\`，再继续新的请求。`
+
+#### 回归点
+
+- 待确认状态下，普通消息不能开启新任务。
+- 待确认项必须保持不变，直到用户明确确认或取消。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -430,6 +450,8 @@
   - 原始工具调用 DSL 收口
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
   - 用户目录不可写时路径回退
+- [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
+  - 待确认状态下普通消息不能绕过确认流
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - fallback 高价值回答
   - 空结果保护
@@ -459,7 +481,7 @@ pytest -q
 
 结果：
 
-- `359 passed`
+- `360 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 

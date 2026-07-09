@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from manus_mini.context import validate_tool_call_pairs
-from manus_mini.models import Message, SessionState, TaskState
+from manus_mini.models import Message, PendingConfirmation, SessionState, TaskState
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.session_store import SessionStore
@@ -94,6 +94,29 @@ def test_session_manager_help_command_lists_available_commands(monkeypatch, tmp_
     assert "/compact" in help_text
     assert "manus-mini list" in help_text
     assert "manus-mini resume" in help_text
+
+
+def test_session_manager_keeps_pending_confirmation_when_user_sends_unrelated_message(tmp_path: Path) -> None:
+    class RuntimeShouldNotRun:
+        def on_user_message(self, content: str, session, append_user_message: bool = True):  # noqa: ANN001, ARG002
+            raise AssertionError("runtime should not run while a confirmation is pending")
+
+    session = SessionState.create(cwd=tmp_path)
+    session.active_task = TaskState.create(goal="创建文件", cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_call_id="call-write",
+        tool_name="write_file",
+        tool_args={"path": "note.md", "content": "hello"},
+        summary="Write note.md",
+    )
+    manager = SessionManager(cwd=tmp_path, runtime=RuntimeShouldNotRun(), initial_session=session)
+
+    result = manager.handle_user_message("先不用改，告诉我这个项目是什么")
+
+    assert result.pending_confirmation is not None
+    assert result.pending_confirmation.tool_call_id == "call-write"
+    assert result.messages[-1].role == "system"
+    assert "请先输入 `确认` 或 `取消`" in result.messages[-1].content
 
 
 def test_session_manager_saves_state_when_runtime_is_interrupted(monkeypatch, tmp_path: Path) -> None:
