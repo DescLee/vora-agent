@@ -106,6 +106,7 @@ def format_process(
     sections = [
         format_task_overview(task),
         format_plan(task),
+        format_reflection_activity(trace_events, limit=None if full_history else 5),
         format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5),
     ]
     return "\n\n".join(section for section in sections if section)
@@ -184,9 +185,43 @@ def format_llm_tool_rounds(task: TaskState, events: list[TraceEvent], limit: int
     return "\n\n".join(visible_rounds)
 
 
+def format_reflection_activity(events: list[TraceEvent], limit: int | None = 5) -> str:
+    reflection_events = [event for event in events if event.phase == "reflection"]
+    if not reflection_events:
+        return ""
+
+    visible_events = reflection_events if limit is None else reflection_events[-limit:]
+    lines = ["反思校验"]
+    hidden_count = len(reflection_events) - len(visible_events)
+    if hidden_count > 0:
+        lines.append(f"- 已折叠较早 {hidden_count} 条反思记录。")
+    for event in visible_events:
+        decision = str(event.data.get("decision") or "").strip()
+        accepted = event.data.get("accepted")
+        reason = str(event.data.get("reason") or "").strip()
+        message = str(event.message or "").strip()
+        status = _format_reflection_status(accepted)
+        headline = decision or message or "reflection"
+        detail = reason or message
+        line = f"- {headline}"
+        if status:
+            line += f"（{status}）"
+        if detail and detail != headline:
+            line += f"：{_short_text(redact_sensitive_text(detail), limit=240)}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_reflection_status(accepted) -> str:
+    if accepted is True:
+        return "通过"
+    if accepted is False:
+        return "未通过"
+    return ""
+
+
 def format_llm_tool_round(llm_event: TraceEvent, following_events: list[TraceEvent], task: TaskState, iteration) -> str:
-    title = f"LLM 回合 {iteration}" if iteration else "LLM 回合"
-    lines = [title]
+    lines = []
     reasoning = format_llm_reasoning_summary(llm_event.data.get("reasoning_content"))
     if reasoning:
         lines.append(f"- 推理: {reasoning}")
@@ -255,16 +290,14 @@ def format_tool_batch_sections(
     iteration,
 ) -> list[str]:
     if not batch_groups:
-        return ["工具调度", "- 暂无工具调用。"]
+        return ["- 暂无工具调用。"]
 
-    total_batches = len(batch_groups)
-    lines = ["工具调度", f"- 共 {total_batches} 个批次"]
+    lines = []
     call_index = 1
     for batch_index, batch_calls in batch_groups:
-        lines.append(f"- 第 {batch_index} 批（{len(batch_calls)} 个工具）")
         batch_lines = format_tool_batch_lines(batch_index, iteration, batch_calls, events, task, start_index=call_index)
         call_index += len(batch_calls)
-        lines.extend([f"  {line}" for line in batch_lines] or ["  - 等待工具返回。"])
+        lines.extend(batch_lines or ["- 等待工具返回。"])
     return lines
 
 
@@ -924,6 +957,7 @@ def _is_process_control_line(line: str) -> bool:
             "工具调度",
             "步骤概览",
             "执行计划",
+            "反思校验",
         )
     )
 
@@ -933,7 +967,7 @@ def _looks_like_standalone_process_text(text: str) -> bool:
         stripped = line.strip()
         if not stripped:
             continue
-        return stripped.startswith(("执行过程", "步骤概览", "执行计划", "LLM 回合", "工具调度"))
+        return stripped.startswith(("执行过程", "步骤概览", "执行计划", "工具活动", "反思校验")) or stripped.endswith("变更预览:")
     return False
 
 

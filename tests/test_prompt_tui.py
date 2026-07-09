@@ -225,9 +225,8 @@ def test_output_fragments_style_process_section_with_dim_text() -> None:
 def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> None:
     fragments = style_output_fragments(
         "执行过程\n"
-        "LLM 回合 1\n"
         "- 推理: 需要读取项目文件。\n"
-        "工具调度\n"
+        "- 1.1 调用 read_file(call-read) path: README.md\n"
     )
 
     reasoning_fragment = next(fragment for fragment in fragments if "推理:" in fragment[1])
@@ -238,14 +237,13 @@ def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> 
 def test_output_fragments_styles_wrapped_reasoning_continuation_lines() -> None:
     fragments = style_output_fragments(
         "执行过程\n"
-        "LLM 回合 1\n"
         "- 推理: 第一行推理内容\n"
         "第二行推理内容\n"
-        "工具调度\n"
+        "- 1.1 调用 read_file(call-read) path: README.md\n"
     )
 
     continuation_fragment = next(fragment for fragment in fragments if "第二行推理内容" in fragment[1])
-    tool_fragment = next(fragment for fragment in fragments if "工具调度" in fragment[1])
+    tool_fragment = next(fragment for fragment in fragments if "调用 read_file" in fragment[1])
 
     assert continuation_fragment[0] == "class:process.reasoning"
     assert tool_fragment[0] == "class:process"
@@ -254,7 +252,7 @@ def test_output_fragments_styles_wrapped_reasoning_continuation_lines() -> None:
 def test_output_fragments_color_diff_additions_and_removals_in_process_section() -> None:
     text = "\n\n".join(
         [
-            "────────────────────────────────────────\n执行过程\nLLM 回合 1\n- 1 replace_in_file(call) 变更预览:\n  --- a/app.py\n  +++ b/app.py\n  @@ -1 +1 @@\n  -old\n  +new\n  context",
+            "────────────────────────────────────────\n执行过程\n- 1 replace_in_file(call) 变更预览:\n  --- a/app.py\n  +++ b/app.py\n  @@ -1 +1 @@\n  -old\n  +new\n  context",
             "────────────────────────────────────────\n最终产物\n+not diff",
         ]
     )
@@ -273,8 +271,6 @@ def test_output_fragments_color_diff_additions_and_removals_in_process_section()
 
 def test_output_fragments_color_diff_when_process_text_is_rendered_standalone() -> None:
     fragments = style_output_fragments(
-        "LLM 回合 1\n"
-        "工具调度\n"
         "- 1 replace_in_file(call) 变更预览:\n"
         "  --- a/app.py\n"
         "  +++ b/app.py\n"
@@ -423,9 +419,10 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "[已完成] 扫描工作目录并识别项目结构" in process
     assert "[进行中] 读取关键文档" in process
     assert "动作" in process
-    assert "工具调度" in process
-    assert "共 1 个批次" in process
-    assert "第 1 批（1 个工具）" in process
+    assert "LLM 回合" not in process
+    assert "工具调度" not in process
+    assert "共 1 个批次" not in process
+    assert "第 1 批" not in process
     assert "1.1 调用 read_file(call-read) path: README.md" in process
     assert "1.1 read_file(call-read) 已返回: read README.md" in process
     assert "# demo project" not in process
@@ -465,10 +462,12 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
 
     process = format_process(session)
 
-    llm_index = process.index("LLM 回合")
-    schedule_index = process.index("工具调度")
-    batch_index = process.index("第 1 批（1 个工具）")
-    assert llm_index < schedule_index < batch_index
+    tool_call_index = process.index("1.1 调用 read_file(call-read) path: README.md")
+    tool_result_index = process.index("1.1 read_file(call-read) 成功: read README.md")
+    assert tool_call_index < tool_result_index
+    assert "LLM 回合" not in process
+    assert "工具调度" not in process
+    assert "第 1 批" not in process
     assert "我需要先确认 README 内容。" not in process
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
@@ -538,10 +537,10 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
 
     process = format_process(session)
 
-    assert "LLM 回合 10" in process
-    assert "工具调度" in process
-    assert "共 1 个批次" in process
-    assert "第 1 批（2 个工具）" in process
+    assert "LLM 回合" not in process
+    assert "工具调度" not in process
+    assert "共 1 个批次" not in process
+    assert "第 1 批" not in process
     assert "10.1 调用 list_files(call-list) path: ." in process
     assert "10.2 调用 read_file(call-read) path: README.md" in process
     assert "10.2 read_file(call-read) 成功: read README.md" in process
@@ -602,10 +601,11 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
 
     process = format_process(session)
 
-    assert "LLM 回合 10" in process
-    assert "共 2 个批次" in process
-    assert "第 1 批（2 个工具）" in process
-    assert "第 2 批（1 个工具）" in process
+    assert "LLM 回合" not in process
+    assert "工具调度" not in process
+    assert "共 2 个批次" not in process
+    assert "第 1 批" not in process
+    assert "第 2 批" not in process
     assert "10.1 调用 list_files(call-list) path: ." in process
     assert "10.2 调用 read_file(call-read) path: README.md" in process
     assert "10.3 调用 read_file(call-docs) path: docs/design.md" in process
@@ -733,6 +733,44 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
     assert status == "状态 正在执行 | 当前上下文 0.0%"
 
 
+def test_format_process_shows_reflection_decisions_and_reasons(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修复测试", cwd=tmp_path)
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="reflection",
+                message="Reflection decided local_update: 缺少测试输出",
+                data={
+                    "decision": "local_update",
+                    "accepted": False,
+                    "reason": "缺少测试输出，需要补充 pytest 运行结果。",
+                    "draft_preview": "代码修改已完成，测试已通过。",
+                },
+            ),
+            TraceEvent(
+                phase="reflection",
+                message="Reflection decided local_update: 仍未看到测试结果",
+                data={
+                    "decision": "local_update",
+                    "accepted": False,
+                    "reason": "仍未看到测试结果，不能接受当前草稿。",
+                },
+            ),
+        ]
+    )
+    session.active_task = task
+
+    process = format_process(session, full_history=True)
+
+    assert "反思校验" in process
+    assert "local_update" in process
+    assert "未通过" in process
+    assert "缺少测试输出，需要补充 pytest 运行结果。" in process
+    assert "仍未看到测试结果，不能接受当前草稿。" in process
+    assert "代码修改已完成，测试已通过。" not in process
+
+
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
@@ -815,7 +853,7 @@ def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
 
     assert "sk-live-secret" not in process
     assert "password=abc123" not in process
-    assert "LLM 回合" in process
+    assert "LLM 回合" not in process
     assert "最近过程（折叠）" not in process
 
 
@@ -1545,8 +1583,9 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     tui.render_progress()
 
-    assert "LLM 回合" in tui.output.text
-    assert "工具调度" in tui.output.text
+    assert "LLM 回合" not in tui.output.text
+    assert "工具调度" not in tui.output.text
+    assert "调用 read_file" in tui.output.text
     assert "最近过程（折叠）" not in tui.output.text
     assert "返回预览" not in tui.output.text
 
