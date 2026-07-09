@@ -4,6 +4,7 @@ from manus_mini.tools.code_tools import apply_text_edit, propose_patch, read_cod
 from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
 from manus_mini.tools.research_tools import collect_local_docs, generate_markdown_report, summarize_text
 from manus_mini.tools.registry import ToolRegistry
+from manus_mini.tools.search_tools import FetchWebpageTool, WebSearchTool
 from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "AppendFileTool",
     "collect_local_docs",
     "extract_todos",
+    "FetchWebpageTool",
     "generate_checklist",
     "generate_markdown_report",
     "ListFilesTool",
@@ -30,5 +32,6 @@ __all__ = [
     "ToolProtocol",
     "ToolRegistry",
     "ToolResult",
+    "WebSearchTool",
     "WriteFileTool",
 ]

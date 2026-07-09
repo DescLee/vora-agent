@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from manus_mini.context import complete_interrupted_tool_messages
 from manus_mini.logging import migrate_legacy_project_storage, project_logs_dir, project_sessions_dir
 from manus_mini.models import SessionState
 
@@ -62,6 +63,7 @@ class SessionStore:
         session.cwd = self.cwd
         if session.active_task is not None:
             session.active_task.cwd = self.cwd
+        complete_interrupted_tool_messages(session.messages)
         return session
 
     def list_sessions(self) -> list[SessionSummary]:

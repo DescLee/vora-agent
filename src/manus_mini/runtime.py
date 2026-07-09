@@ -7,6 +7,7 @@ from pathlib import Path
 from manus_mini.logging import EventLogger, project_logs_dir, project_outputs_dir
 from manus_mini.context import (
     build_context_bundle,
+    complete_interrupted_tool_messages,
     estimate_session_context_usage,
 )
 from manus_mini.models import AgentError, Artifact, LoopLimits, Message, PlanStep, SessionState, TaskState, TraceEvent
@@ -241,6 +242,7 @@ class AgentRuntime:
                 task.status = "failed"
         except KeyboardInterrupt:
             interrupted = True
+            complete_interrupted_tool_messages(session.messages)
             self._mark_user_cancelled(task)
 
         artifact_path = self.reporter.write_task_report(
@@ -259,6 +261,170 @@ class AgentRuntime:
                 "status": task.status,
                 "artifact": artifact.path.as_posix(),
                 "interrupted": interrupted,
+            },
+        )
+        self.logger.record_summary(
+            session.session_id,
+            task.run_id,
+            user_input=content,
+            result=task.result,
+            status=task.status,
+        )
+        session.messages.append(Message.agent(task.result))
+        if task.status in {"done", "failed"}:
+            session.pending_confirmation = None
+        session.active_task = task
+        return session
+
+    def continue_active_task_after_confirmation(self, session: SessionState) -> SessionState:
+        task = session.active_task
+        if task is None:
+            return session
+
+        content = task.goal
+        interrupted = False
+        try:
+            last_result = ""
+            remaining_steps = max(1, task.limits.max_engineering_steps - task.step_count)
+            for _ in range(remaining_steps):
+                task.step_count += 1
+                self._mark_plan_running(task)
+                task.status = "reflecting"
+                self.logger.record(
+                    session.session_id,
+                    task.run_id,
+                    {
+                        "type": "engineering_step",
+                        "step_count": task.step_count,
+                        "goal": task.goal,
+                        "resumed_after_confirmation": True,
+                    },
+                )
+                try:
+                    reflection = self.reflection_loop.run(task, session)
+                except Exception as error:
+                    error_code = "MAX_REACT_ITERATIONS_REACHED"
+                    if str(error) == "TOKEN_BUDGET_EXCEEDED":
+                        error_code = "TOKEN_BUDGET_EXCEEDED"
+                    elif str(error) != "MAX_REACT_ITERATIONS_REACHED":
+                        error_code = "LLM_ERROR"
+                    task.errors.append(
+                        AgentError(
+                            code=error_code,
+                            message=str(error) or error.__class__.__name__,
+                            retryable=True,
+                        )
+                    )
+                    task.trace_events.append(
+                        TraceEvent(
+                            phase="runtime",
+                            message="Runtime caught execution error after confirmation",
+                            data={"code": error_code, "message": task.errors[-1].message},
+                        )
+                    )
+                    task.result = format_runtime_exception(error)
+                    task.status = "failed"
+                    self.logger.record(
+                        session.session_id,
+                        task.run_id,
+                        {
+                            "type": "error",
+                            "code": task.errors[-1].code,
+                            "message": task.errors[-1].message,
+                        },
+                    )
+                    break
+                else:
+                    last_result = reflection.content
+                    task.result = reflection.content
+                    task.trace_events.append(
+                        TraceEvent(
+                            phase="runtime",
+                            message="Reflection result applied after confirmation",
+                            data={
+                                "decision": reflection.decision,
+                                "accepted": reflection.accepted,
+                                "reason": reflection.reason,
+                            },
+                        )
+                    )
+                    if session.pending_confirmation is not None and not session.pending_confirmation.approved:
+                        task.status = "waiting_confirmation"
+                        task.result = session.pending_confirmation.prompt or session.pending_confirmation.summary or "需要用户确认写入"
+                        break
+                    if reflection.accepted:
+                        self._mark_plan_done(task)
+                        task.status = "done"
+                        break
+                    if _reflection_waits_for_user_choice(reflection.reason, reflection.content):
+                        task.trace_events.append(
+                            TraceEvent(
+                                phase="runtime",
+                                message="Runtime stopped after confirmation: waiting for user choice",
+                                data={
+                                    "decision": reflection.decision,
+                                    "reason": reflection.reason,
+                                },
+                            )
+                        )
+                        task.status = "done"
+                        break
+                    if reflection.decision == "replan":
+                        plan_steps, plan_reasoning = self._build_plan(f"{content}\n{reflection.reason}", session, task.run_id)
+                        task.plan = plan_steps
+                        task.plan_reasoning_content = plan_reasoning
+                        self._mark_plan_running(task)
+                        task.trace_events.append(
+                            TraceEvent(
+                                phase="runtime",
+                                message="Planner regenerated plan after confirmation reflection",
+                                data={
+                                    "reason": reflection.reason,
+                                    "steps": [
+                                        {
+                                            "description": step.description,
+                                            "intent": step.intent,
+                                            "status": step.status,
+                                        }
+                                        for step in task.plan
+                                    ],
+                                },
+                            )
+                        )
+                    elif reflection.decision == "regenerate":
+                        session.messages.append(
+                            Message.system(f"请基于现有草稿重新生成，并补强细节：{reflection.reason}")
+                        )
+                    elif reflection.decision == "local_update":
+                        session.messages.append(
+                            Message.system(f"请对当前草稿做局部修订：{reflection.reason}")
+                        )
+                    task.status = "planning"
+            else:
+                task.result = last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。"
+                task.status = "failed"
+        except KeyboardInterrupt:
+            interrupted = True
+            complete_interrupted_tool_messages(session.messages)
+            self._mark_user_cancelled(task)
+
+        artifact_path = self.reporter.write_task_report(
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{task.run_id}.md",
+            task,
+            content,
+        )
+        artifact = Artifact(path=artifact_path, kind="markdown", summary="runtime result")
+        task.artifacts.append(artifact)
+        self._persist_memory_from_turn(session, task, content)
+        self.logger.record(
+            session.session_id,
+            task.run_id,
+            {
+                "type": "result",
+                "status": task.status,
+                "artifact": artifact.path.as_posix(),
+                "interrupted": interrupted,
+                "resumed_after_confirmation": True,
             },
         )
         self.logger.record_summary(

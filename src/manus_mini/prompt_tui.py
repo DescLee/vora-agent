@@ -28,13 +28,16 @@ from manus_mini.prompt_tui_formatting import (  # noqa: F401
     build_line_starts,
     format_artifact,
     format_context_usage,
+    format_latest_request_context_usage,
     format_current_action,
     format_display_value,
     format_event_details,
     format_event_summary,
     format_inline_args,
     format_latest_activity,
+    format_messages,
     format_message_block,
+    format_section,
     format_messages,
     format_phase_label,
     format_process,
@@ -269,13 +272,13 @@ class PromptTui:
         self.visible_trace_count = 0
         self.trace_reveal_batch_size = 3
         self.follow_output = True
-        self.completed_transcript_blocks: list[str] = []
+        self.completed_transcript_blocks: list[str] = self._initial_completed_transcript_blocks(initial_session)
         self.confirmation_in_progress = False
         self.confirmation_scroll_batch_size = 5
         self.confirmation_render_signature: tuple[str, str, str, str, bool] | None = None
         initial_output = (
-            format_transcript(self.manager.current, show_process=False)
-            if initial_session is not None and initial_session.messages
+            self.format_history()
+            if self.completed_transcript_blocks
             else self._format_initial_welcome()
         )
         self.output_line_starts = build_line_starts(initial_output)
@@ -315,6 +318,17 @@ class PromptTui:
             llm_configured=llm_configured,
             llm_config_source=config.llm_config_source,
         )
+
+    def _initial_completed_transcript_blocks(self, initial_session: SessionState | None) -> list[str]:
+        if initial_session is None or not initial_session.messages:
+            return []
+        return [self._format_resume_history(initial_session)]
+
+    def _format_resume_history(self, session: SessionState) -> str:
+        blocks = [format_section("历史消息", format_messages(session, omit_last_agent=True))]
+        if session.active_task is not None:
+            blocks.append(format_transcript(session, show_process=False))
+        return "\n\n".join(block for block in blocks if block)
 
     def _build_app(self) -> Application:
         install_shift_enter_mapping()
@@ -564,7 +578,7 @@ class PromptTui:
         self.is_running = False
         self.is_streaming_artifact = False
         self.set_output_text(f"{self.output.text}\n\n最终产物\n执行失败：{error}")
-        self.status.text = "failed | Enter 发送 | Shift+Enter 换行"
+        self.status.text = "failed"
         self.app.layout.focus(self.input)
         self.app.invalidate()
 
@@ -626,11 +640,7 @@ class PromptTui:
             session = await asyncio.to_thread(self.manager.handle_user_message, content, False)
             await self.stream_session(session)
         except (KeyboardInterrupt, asyncio.CancelledError):
-            self.manager._save_current(self.manager.current)
-            self.is_running = False
-            self.is_streaming_artifact = False
-            self.status.text = format_status(self.manager.current, is_running=False)
-            self.app.invalidate()
+            self.handle_interrupted_execution()
             return
         except Exception as error:
             self.render_unexpected_error(error)
@@ -722,7 +732,18 @@ class PromptTui:
         try:
             self.app.run()
         except KeyboardInterrupt:
-            self.manager._save_current(self.manager.current)
+            self.handle_interrupted_execution()
+        finally:
+            self.manager.runtime.react_loop.executor.shutdown(detach=True)
+
+    def handle_interrupted_execution(self) -> None:
+        self.manager._mark_current_interrupted()
+        self.manager._save_current(self.manager.current)
+        self.is_running = False
+        self.is_streaming_artifact = False
+        self.status.text = format_status(self.manager.current, is_running=False)
+        self.manager.runtime.react_loop.executor.shutdown(detach=True)
+        self.app.invalidate()
 
 
 def main() -> None:

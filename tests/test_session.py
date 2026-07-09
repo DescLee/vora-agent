@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from manus_mini.models import Message
+from manus_mini.context import validate_tool_call_pairs
+from manus_mini.models import Message, SessionState, TaskState
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session import SessionManager
 from manus_mini.session_store import SessionStore
@@ -87,3 +88,36 @@ def test_session_manager_saves_state_when_runtime_is_interrupted(monkeypatch, tm
     assert loaded.messages[-1].role == "system"
     assert "用户中断" in loaded.messages[-1].content
     assert loaded.active_task is None or loaded.active_task.status == "failed"
+
+
+def test_session_manager_interruption_completes_pending_tool_messages(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.active_task = TaskState.create(goal="读取文件", cwd=tmp_path)
+    session.messages.append(Message.user("读取文件"))
+    session.messages.append(Message.agent("需要读取", tool_call_ids=["call-read"]))
+    manager = SessionManager(cwd=tmp_path, initial_session=session)
+
+    manager._mark_current_interrupted()
+
+    assert manager.current.active_task is not None
+    assert manager.current.active_task.status == "failed"
+    validate_tool_call_pairs(manager.current.messages[:-1])
+    tool_messages = [message for message in manager.current.messages if message.role == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0].tool_call_id == "call-read"
+    assert "USER_CANCELLED" in tool_messages[0].content
+
+
+def test_session_store_repairs_interrupted_tool_messages_on_load(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("读取文件"))
+    session.messages.append(Message.agent("需要读取", tool_call_ids=["call-read"]))
+    store.save(session)
+
+    loaded = store.load(session.session_id)
+
+    validate_tool_call_pairs(loaded.messages)
+    assert loaded.messages[-1].role == "tool"
+    assert loaded.messages[-1].tool_call_id == "call-read"
+    assert "USER_CANCELLED" in loaded.messages[-1].content

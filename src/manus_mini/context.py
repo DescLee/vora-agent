@@ -112,6 +112,56 @@ def validate_tool_call_pairs(messages: Sequence[Message]) -> None:
         index += 1
 
 
+def complete_interrupted_tool_messages(messages: list[Message]) -> int:
+    inserted = 0
+    repaired: list[Message] = []
+    index = 0
+    total = len(messages)
+
+    while index < total:
+        message = messages[index]
+        if message.role == "agent" and message.tool_call_ids:
+            repaired.append(message)
+            expected_ids = list(message.tool_call_ids)
+            index += 1
+            while expected_ids and index < total:
+                next_message = messages[index]
+                if next_message.role != "tool":
+                    break
+                if next_message.tool_call_id not in expected_ids:
+                    break
+                repaired.append(next_message)
+                expected_ids.remove(next_message.tool_call_id)
+                index += 1
+            for tool_call_id in expected_ids:
+                repaired.append(_interrupted_tool_message(tool_call_id))
+                inserted += 1
+            continue
+
+        if message.role == "tool":
+            repaired.append(
+                Message.system(
+                    "orphan tool result converted after interruption"
+                    f" ({message.tool_call_id or 'unknown'}):\n{message.content}"
+                )
+            )
+            index += 1
+            continue
+
+        repaired.append(message)
+        index += 1
+
+    messages[:] = repaired
+    return inserted
+
+
+def _interrupted_tool_message(tool_call_id: str) -> Message:
+    return Message.tool(
+        "tool execution interrupted by user\n\nerror_code: USER_CANCELLED",
+        tool_call_id=tool_call_id,
+    )
+
+
 def build_segments(messages: Sequence[Message]) -> list[ContextSegment]:
     validate_tool_call_pairs(messages)
 
@@ -434,6 +484,7 @@ __all__ = [
     "build_context_bundle",
     "compact_messages",
     "compact_messages_with_snapshot",
+    "complete_interrupted_tool_messages",
     "estimate_context_usage",
     "estimate_session_context_usage",
     "estimate_message_tokens",

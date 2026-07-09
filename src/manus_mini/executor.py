@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import concurrent.futures.thread as futures_thread
+import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures import as_completed
@@ -16,6 +19,8 @@ RETRYABLE_TOOL_ERROR_CODES = {"TOOL_TIMEOUT", "TOOL_ERROR"}
 USER_CANCELLED_ERROR_CODE = "USER_CANCELLED"
 MAX_DIFF_PREVIEW_CHARS = 4000
 DEFAULT_TOOL_THREAD_POOL_WORKERS = 8
+TOOL_THREAD_NAME_PREFIX = "manus-tool"
+_LIVE_EXECUTORS: weakref.WeakSet[Executor]
 
 
 def sanitize_tool_args(args: dict) -> dict:
@@ -37,7 +42,8 @@ class Executor:
     ) -> None:
         self.registry = registry
         self.dry_run = dry_run
-        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_workers), thread_name_prefix="manus-tool")
+        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_workers), thread_name_prefix=TOOL_THREAD_NAME_PREFIX)
+        _LIVE_EXECUTORS.add(self)
 
     def prepare_tool_call(self, call: ToolCall, session: SessionState) -> ToolCall:
         run_args = sanitize_tool_args(call.args)
@@ -272,8 +278,51 @@ class Executor:
                     results[call.id] = self._cancelled_result(call.name)
         return results
 
-    def shutdown(self) -> None:
+    def shutdown(self, detach: bool = False) -> None:
+        threads = list(getattr(self._tool_pool, "_threads", ()))
         self._tool_pool.shutdown(wait=False, cancel_futures=True)
+        if detach:
+            _detach_threads_from_python_shutdown(threads)
+        _LIVE_EXECUTORS.discard(self)
+
+
+def _detach_threads_from_python_shutdown(threads) -> None:
+    for thread in threads:
+        try:
+            futures_thread._threads_queues.pop(thread, None)
+        except Exception:  # noqa: BLE001
+            pass
+        lock = getattr(thread, "_tstate_lock", None)
+        if lock is None:
+            continue
+        shutdown_locks = getattr(threading, "_shutdown_locks", None)
+        shutdown_locks_lock = getattr(threading, "_shutdown_locks_lock", None)
+        if shutdown_locks is None or shutdown_locks_lock is None:
+            continue
+        try:
+            with shutdown_locks_lock:
+                shutdown_locks.discard(lock)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _detach_live_tool_threads_from_python_shutdown() -> None:
+    threads = []
+    for executor in list(_LIVE_EXECUTORS):
+        threads.extend(list(getattr(executor._tool_pool, "_threads", ())))
+    threads.extend(
+        thread
+        for thread in list(futures_thread._threads_queues.keys())
+        if thread.name.startswith(TOOL_THREAD_NAME_PREFIX)
+    )
+    _detach_threads_from_python_shutdown(threads)
+
+
+_LIVE_EXECUTORS = weakref.WeakSet()
+try:
+    threading._register_atexit(_detach_live_tool_threads_from_python_shutdown)
+except Exception:  # noqa: BLE001
+    pass
 
 
 def _read_text_preview(path: Path) -> str:

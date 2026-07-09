@@ -5,11 +5,13 @@ import pytest
 from manus_mini.tools.base import resolve_workspace_path
 from manus_mini.tools import (
     AppendFileTool,
+    FetchWebpageTool,
     ListFilesTool,
     MakeDirectoryTool,
     ReadFileTool,
     ReplaceInFileTool,
     ToolRegistry,
+    WebSearchTool,
     WriteFileTool,
 )
 
@@ -469,6 +471,116 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     assert registry.get("replace_in_file").requires_confirmation is False
     assert isinstance(registry.get("append_file"), AppendFileTool)
     assert isinstance(registry.get("make_directory"), MakeDirectoryTool)
+    assert isinstance(registry.get("web_search"), WebSearchTool)
+    assert isinstance(registry.get("fetch_webpage"), FetchWebpageTool)
+
+
+def test_web_search_validates_query() -> None:
+    result = WebSearchTool().run(query="")
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "query" in result.summary
+
+
+def test_web_search_formats_results(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+
+    class FakeDDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def text(self, query, max_results):  # noqa: ANN001, ANN201
+            assert query == "manus"
+            assert max_results == 2
+            return [
+                {"title": "Manus", "body": "Agent product", "href": "https://example.com/manus"},
+            ]
+
+    monkeypatch.setattr(search_tools, "DDGS", FakeDDGS)
+
+    result = WebSearchTool().run(query="manus", max_results=2)
+
+    assert result.ok is True
+    assert result.summary == "Found 1 results for: manus"
+    assert "1. Manus" in result.content
+    assert "Agent product" in result.content
+    assert "URL: https://example.com/manus" in result.content
+    assert result.data["result_count"] == 1
+
+
+def test_web_search_suppresses_duckduckgo_package_rename_warning(monkeypatch, recwarn, capsys) -> None:
+    from manus_mini.tools import search_tools
+    import sys
+    import warnings
+
+    class WarningDDGS:
+        def __init__(self) -> None:
+            print("failed to load native root certificate", file=sys.stderr)
+            warnings.warn(
+                "This package (`duckduckgo_search`) has been renamed to `ddgs`!",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def text(self, query, max_results):  # noqa: ANN001, ANN201, ARG002
+            return []
+
+    monkeypatch.setattr(search_tools, "DDGS", WarningDDGS)
+
+    result = WebSearchTool().run(query="manus")
+
+    assert result.ok is True
+    assert len(recwarn) == 0
+    assert capsys.readouterr().err == ""
+    assert result.data["warnings"] == [
+        "RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`!"
+    ]
+    assert result.data["stderr"] == ["failed to load native root certificate"]
+
+
+def test_fetch_webpage_validates_url() -> None:
+    result = FetchWebpageTool().run(url="ftp://example.com")
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "http" in result.summary
+
+
+def test_fetch_webpage_strips_html(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+        text = "<html><head><title>x</title></head><body><h1>Hello</h1><script>bad()</script><p>A&amp;B</p></body></html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout, headers):  # noqa: ANN001, ANN201
+        assert url == "https://example.com"
+        assert timeout == 15
+        assert "User-Agent" in headers
+        return FakeResponse()
+
+    monkeypatch.setattr(search_tools.requests, "get", fake_get)
+
+    result = FetchWebpageTool().run(url="https://example.com", max_chars=1000)
+
+    assert result.ok is True
+    assert "Hello" in result.content
+    assert "A&B" in result.content
+    assert "bad()" not in result.content
+    assert result.data["content_type"] == "text/html"
 
 
 def test_append_file_appends_content_with_confirmation(tmp_path: Path) -> None:

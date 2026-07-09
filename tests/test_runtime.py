@@ -1194,6 +1194,99 @@ def test_executor_runs_tools_in_shared_thread_pool_capped_at_eight(tmp_path: Pat
     assert tool.max_active <= 8
 
 
+def test_executor_shutdown_can_detach_running_tool_threads_from_python_exit_join(tmp_path: Path) -> None:
+    import concurrent.futures.thread as futures_thread
+
+    class BlockingTool:
+        name = "blocking"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            kwargs["started"].set()
+            kwargs["release"].wait(timeout=5)
+            return ToolResult(tool_name=self.name, ok=True, summary="done")
+
+    started = threading.Event()
+    release = threading.Event()
+    executor = Executor(ToolRegistry(tools=[BlockingTool()]))
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="阻塞工具", cwd=tmp_path)
+    future = executor._tool_pool.submit(
+        executor._execute_sync,
+        ToolCall(
+            id="call-blocking",
+            name="blocking",
+            args={"workspace": tmp_path, "started": started, "release": release},
+        ),
+        session,
+        task,
+    )
+    assert started.wait(timeout=1)
+    worker_threads = list(executor._tool_pool._threads)
+    assert worker_threads
+    assert any(thread in futures_thread._threads_queues for thread in worker_threads)
+
+    executor.shutdown(detach=True)
+
+    assert all(thread not in futures_thread._threads_queues for thread in worker_threads)
+    release.set()
+    assert future.result(timeout=1).ok is True
+
+
+def test_executor_threading_exit_hook_detaches_live_tool_threads(tmp_path: Path) -> None:
+    import concurrent.futures.thread as futures_thread
+    from manus_mini import executor as executor_module
+
+    class BlockingTool:
+        name = "blocking_exit"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            kwargs["started"].set()
+            kwargs["release"].wait(timeout=5)
+            return ToolResult(tool_name=self.name, ok=True, summary="done")
+
+    started = threading.Event()
+    release = threading.Event()
+    executor = Executor(ToolRegistry(tools=[BlockingTool()]))
+    future = executor._tool_pool.submit(
+        executor._execute_sync,
+        ToolCall(
+            id="call-blocking-exit",
+            name="blocking_exit",
+            args={"workspace": tmp_path, "started": started, "release": release},
+        ),
+        SessionState.create(cwd=tmp_path),
+        TaskState.create(goal="阻塞工具", cwd=tmp_path),
+    )
+    assert started.wait(timeout=1)
+    worker_threads = list(executor._tool_pool._threads)
+    assert any(thread in futures_thread._threads_queues for thread in worker_threads)
+
+    executor_module._detach_live_tool_threads_from_python_shutdown()
+
+    assert all(thread not in futures_thread._threads_queues for thread in worker_threads)
+    release.set()
+    assert future.result(timeout=1).ok is True
+    executor.shutdown(detach=True)
+
+
 def test_react_loop_does_not_time_out_tool_execution(tmp_path: Path) -> None:
     class SlowTool:
         name = "slow"
@@ -1332,6 +1425,44 @@ def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) ->
     assert (tmp_path / "helloworld.py").read_text(encoding="utf-8") == "print('hello world')\n"
     assert any(observation.ok and observation.summary == "wrote helloworld.py" for observation in second_turn.active_task.observations)
     assert any(observation.ok and observation.summary == "command exited 0" for observation in second_turn.active_task.observations)
+
+
+def test_confirm_pending_confirmation_executes_stored_tool_call_before_follow_up(tmp_path: Path) -> None:
+    class WriteOnceThenAnswerLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
+            if not tool_names:
+                return LLMResult(content="创建 notes.txt | code")
+            tool_text = "\n".join(message.content for message in messages if message.role == "tool")
+            if not tool_text:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-write-notes",
+                            name="write_file",
+                            args={"path": "notes.txt", "content": "confirmed write\n"},
+                        )
+                    ]
+                )
+            return LLMResult(content=f"已收到工具结果：{tool_text}")
+
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=WriteOnceThenAnswerLLM()))
+
+    first_turn = manager.handle_user_message("创建 notes.txt")
+
+    assert first_turn.pending_confirmation is not None
+    pending_tool_call_id = first_turn.pending_confirmation.tool_call_id
+    assert not (tmp_path / "notes.txt").exists()
+
+    second_turn = manager.handle_user_message("确认")
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "confirmed write\n"
+    assert second_turn.pending_confirmation is None
+    assert any(
+        message.role == "tool"
+        and message.tool_call_id == pending_tool_call_id
+        and "wrote notes.txt" in message.content
+        for message in second_turn.messages
+    )
 
 
 def test_dry_run_does_not_write_files(tmp_path: Path) -> None:

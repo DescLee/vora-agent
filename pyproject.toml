@@ -9,8 +9,10 @@ description = "Manus mini demo project"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "duckduckgo_search",
   "prompt_toolkit",
   "pydantic",
+  "requests",
   "rich",
 ]
 

@@ -146,3 +146,6 @@ def test_session_manager_can_compact_context_manually(tmp_path: Path) -> None:
     assert session.messages[0].role == "system"
     assert session.messages[0].content.startswith("历史上下文摘要：")
     assert session.messages[-1].content.startswith("已手动压缩上下文")
+    assert "压缩前估算" in session.messages[-1].content
+    assert "目标预算" in session.messages[-1].content
+    assert "保留消息" in session.messages[-1].content

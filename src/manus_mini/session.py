@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens
-from manus_mini.models import Message, SessionState
+from manus_mini.context import complete_interrupted_tool_messages, compact_messages_with_snapshot, estimate_message_tokens
+from manus_mini.executor import sanitize_tool_args
+from manus_mini.models import Message, SessionState, ToolCall, TraceEvent
 from manus_mini.memory import MemoryManager
+from manus_mini.react import format_tool_result_message
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session_store import SessionStore
 
@@ -61,19 +63,61 @@ class SessionManager:
     def accept_pending_confirmation(self) -> SessionState:
         if self.current.pending_confirmation is None:
             return self.current
-        confirmed_tool_call_id = self.current.pending_confirmation.tool_call_id
-        self.current.pending_confirmation.approved = True
-        self.current.pending_confirmation.prompt = self.current.pending_confirmation.prompt or "confirmed"
-        self.current = self.runtime.on_user_message(
-            self.current.active_task.goal if self.current.active_task else "",
-            self.current,
-            append_user_message=False,
-        )
-        if (
-            self.current.pending_confirmation is not None
-            and self.current.pending_confirmation.tool_call_id == confirmed_tool_call_id
-        ):
+        pending = self.current.pending_confirmation
+        task = self.current.active_task
+        if task is None:
             self.current.pending_confirmation = None
+            self.current.messages.append(Message.system("无法执行待确认写入：当前没有活动任务。"))
+            return self.current
+
+        pending.approved = True
+        pending.prompt = pending.prompt or "confirmed"
+        original_call = ToolCall(
+            id=pending.tool_call_id,
+            name=pending.tool_name,
+            args=dict(pending.tool_args),
+        )
+        executable_call = self.runtime.react_loop.executor.prepare_tool_call(original_call, self.current)
+        tool_result = self.runtime.react_loop.executor.execute(executable_call, self.current, task)
+        self.current.pending_confirmation = None
+
+        iteration_index = _latest_react_iteration(task) or 1
+        event_data = self.runtime.react_loop._tool_event_data(iteration_index, executable_call, tool_result)
+        if self.runtime.react_loop.logger is not None:
+            self.runtime.react_loop.logger.record(
+                self.current.session_id,
+                task.run_id,
+                {
+                    "type": "tool_result",
+                    "stage": "tool",
+                    "iteration": iteration_index,
+                    "tool_call_id": original_call.id,
+                    "tool_name": original_call.name,
+                    "args": sanitize_tool_args(executable_call.args),
+                    "ok": tool_result.ok,
+                    "result": tool_result.model_dump(mode="json"),
+                },
+            )
+        task.trace_events.append(
+            TraceEvent(
+                phase="tool",
+                message=f"Tool {original_call.name} finished after confirmation: {'ok' if tool_result.ok else 'failed'}",
+                data=event_data,
+            )
+        )
+        task.observations.append(self.runtime.react_loop.observer.observe(original_call, tool_result))
+        _replace_or_append_tool_message(
+            self.current,
+            original_call.id,
+            format_tool_result_message(tool_result),
+        )
+
+        if not tool_result.ok:
+            task.status = "failed"
+            task.result = tool_result.summary
+            return self.current
+
+        self.current = self.runtime.continue_active_task_after_confirmation(self.current)
         return self.current
 
     def reject_pending_confirmation(self) -> SessionState:
@@ -102,9 +146,12 @@ class SessionManager:
 
         self.current.messages = compacted
         self.current.compression_snapshots.append(snapshot)
+        compacted_tokens = estimate_message_tokens(compacted)
         self.current.messages.append(
             Message.system(
-                f"已手动压缩上下文：原 {original_count} 条消息，现 {len(compacted)} 条消息。"
+                f"已手动压缩上下文：原 {original_count} 条消息，现 {len(compacted)} 条消息；"
+                f"压缩前估算 {estimated_tokens} tokens，目标预算 {target_budget} tokens，"
+                f"压缩后估算 {compacted_tokens} tokens，保留消息 {len(compacted)} 条，摘要 ID {snapshot.id}。"
             )
         )
         return self.current
@@ -175,6 +222,8 @@ class SessionManager:
         return session
 
     def _mark_current_interrupted(self) -> None:
+        complete_interrupted_tool_messages(self.current.messages)
+        self.current.pending_confirmation = None
         if self.current.active_task is not None:
             self.current.active_task.status = "failed"
             self.current.active_task.result = "执行已被用户中断，已保留当前进度。"
@@ -199,3 +248,20 @@ def format_help_text() -> str:
             "- `manus-mini resume <session_id> --cwd <目录>`：恢复指定对话并继续执行。",
         ]
     )
+
+
+def _latest_react_iteration(task) -> int | None:
+    iterations = [
+        event.data.get("iteration")
+        for event in task.trace_events
+        if event.phase == "react" and isinstance(event.data.get("iteration"), int)
+    ]
+    return max(iterations) if iterations else None
+
+
+def _replace_or_append_tool_message(session: SessionState, tool_call_id: str, content: str) -> None:
+    for message in reversed(session.messages):
+        if message.role == "tool" and message.tool_call_id == tool_call_id:
+            message.content = content
+            return
+    session.messages.append(Message.tool(content, tool_call_id=tool_call_id))

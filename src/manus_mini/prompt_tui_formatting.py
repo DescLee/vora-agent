@@ -663,28 +663,39 @@ def format_phase_label(task: TaskState) -> str:
 def format_status(session: SessionState, is_running: bool | None = None) -> str:
     task = session.active_task
     if task is None:
-        return "就绪 | Enter 发送消息 | Shift+Enter 换行 | Ctrl-C 退出"
+        return "就绪"
 
     state_label = format_status_label(task, is_running=is_running)
 
-    return f"状态 {state_label} | {format_context_usage(session)} | Enter 发送消息 | Shift+Enter 换行"
+    return (
+        f"状态 {state_label} | {format_context_usage(session)} | "
+        f"{format_latest_request_context_usage(session)}"
+    )
 
 
 def format_context_usage(session: SessionState) -> str:
     task = session.active_task
     if task is None:
-        return "上下文 --"
+        return "当前上下文 --"
     limit = task.model_context_limit or task.limits.max_estimated_tokens
     if limit <= 0:
-        return "上下文 --"
-    if task.last_prompt_tokens is not None:
-        usage = task.last_prompt_tokens / limit
-    else:
-        _, usage = estimate_context_usage(session.messages, limit)
+        return "当前上下文 --"
+    _, usage = estimate_context_usage(session.messages, limit)
     if usage is None:
-        return "上下文 --"
+        return "当前上下文 --"
     percent = min(999.9, usage * 100)
-    return f"上下文 {percent:.1f}%"
+    return f"当前上下文 {percent:.1f}%"
+
+
+def format_latest_request_context_usage(session: SessionState) -> str:
+    task = session.active_task
+    if task is None:
+        return "最新请求 --"
+    limit = task.model_context_limit or task.limits.max_estimated_tokens
+    if limit <= 0 or task.last_prompt_tokens is None:
+        return "最新请求 --"
+    percent = min(999.9, task.last_prompt_tokens / limit * 100)
+    return f"最新请求 {percent:.1f}%"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:

@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from manus_mini.tools.base import ToolProtocol
 from manus_mini.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
+from manus_mini.tools.search_tools import FetchWebpageTool, WebSearchTool
 from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 
@@ -17,6 +18,8 @@ class ToolRegistry:
             ReplaceInFileTool(),
             AppendFileTool(),
             MakeDirectoryTool(),
+            WebSearchTool(),
+            FetchWebpageTool(),
             RunBashTool(),
             RunTempScriptTool(),
         )

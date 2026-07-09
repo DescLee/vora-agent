@@ -40,6 +40,7 @@ outputs/
 context-*/
 *.log
 logs/
+Library/
 
 # Local environment and secrets
 .env

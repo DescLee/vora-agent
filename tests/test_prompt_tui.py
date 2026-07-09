@@ -16,6 +16,7 @@ from manus_mini.prompt_tui import (
     format_artifact,
     format_current_action,
     format_context_usage,
+    format_latest_request_context_usage,
     format_inline_args,
     format_latest_activity,
     format_message_block,
@@ -312,7 +313,7 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
     assert "最近过程（折叠）" not in process
 
 
-def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
+def test_format_context_usage_counts_current_session_messages(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -329,10 +330,10 @@ def test_format_context_usage_counts_only_messages(tmp_path: Path) -> None:
     task.limits.max_estimated_tokens = 100
     usage = format_context_usage(session)
 
-    assert usage == "上下文 5.0%"
+    assert usage == "当前上下文 5.0%"
 
 
-def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -> None:
+def test_format_context_usage_does_not_use_latest_llm_prompt_tokens(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="统计上下文", cwd=tmp_path)
     task.model_context_limit = 1_000
@@ -343,7 +344,8 @@ def test_format_context_usage_prefers_llm_usage_when_available(tmp_path: Path) -
 
     usage = format_context_usage(session)
 
-    assert usage == "上下文 25.0%"
+    assert usage == "当前上下文 0.5%"
+    assert format_latest_request_context_usage(session) == "最新请求 25.0%"
 
 
 def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> None:
@@ -363,7 +365,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -729,7 +731,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -892,13 +894,14 @@ def test_format_transcript_final_artifact_keeps_full_process_history(tmp_path: P
     assert "仅展示最近" not in transcript
 
 
-def test_format_status_keeps_send_hint(tmp_path: Path) -> None:
+def test_format_status_hides_send_hints(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
 
     status = format_status(session)
 
-    assert "Enter 发送" in status
-    assert "Shift+Enter 换行" in status
+    assert status == "就绪"
+    assert "Enter 发送" not in status
+    assert "Shift+Enter 换行" not in status
 
 
 def test_format_status_shows_context_usage(tmp_path: Path) -> None:
@@ -910,9 +913,10 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert "上下文 25%" not in status
-    assert "上下文 25.0%" in status
-    assert format_context_usage(session) == "上下文 25.0%"
+    assert "当前上下文 25%" not in status
+    assert "当前上下文 25.0%" in status
+    assert "最新请求 --" in status
+    assert format_context_usage(session) == "当前上下文 25.0%"
 
 
 def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
@@ -1096,7 +1100,7 @@ def test_format_status_context_usage_includes_active_task_process(tmp_path: Path
     session.active_task = task
     session.messages.append(Message.user("hi"))
 
-    assert format_context_usage(session) == "上下文 0.0%"
+    assert format_context_usage(session) == "当前上下文 0.0%"
 
 
 def test_format_status_describes_current_step_while_running(tmp_path: Path) -> None:
@@ -1158,7 +1162,7 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
+    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
     assert "当前 准备调用工具 list_files(call-list)" not in status
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
@@ -1238,6 +1242,25 @@ def test_tui_initial_session_uses_project_isolated_memory(monkeypatch, tmp_path:
     assert tui.manager.memory_manager.db_path == project_memory_path(tmp_path)
 
 
+def test_resume_initial_output_shows_full_message_history(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("第一轮问题"))
+    session.messages.append(Message.agent("第一轮回答"))
+    session.messages.append(Message.user("第二轮问题"))
+    task = TaskState.create(goal="第二轮问题", cwd=tmp_path)
+    task.status = "done"
+    task.result = "第二轮结果"
+    session.active_task = task
+
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    assert "历史消息" in tui.output.text
+    assert "第一轮问题" in tui.output.text
+    assert "第一轮回答" in tui.output.text
+    assert "第二轮问题" in tui.output.text
+    assert "第二轮结果" in tui.output.text
+
+
 def test_send_current_input_starts_background_turn_without_blocking(monkeypatch) -> None:
     tui = PromptTui()
     started: list[str] = []
@@ -1278,6 +1301,32 @@ def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_pat
     assert f"Run ID: {tui.manager.current.active_task.run_id}" in tui.output.text
 
 
+def test_resume_stream_session_preserves_existing_history(tmp_path: Path) -> None:
+    async def run() -> None:
+        session = SessionState.create(cwd=tmp_path)
+        session.messages.append(Message.user("第一轮"))
+        first_task = TaskState.create(goal="第一轮", cwd=tmp_path)
+        first_task.status = "done"
+        first_task.result = "第一轮结果"
+        session.active_task = first_task
+        tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+        session.messages.append(Message.user("第二轮"))
+        second_task = TaskState.create(goal="第二轮", cwd=tmp_path)
+        second_task.status = "done"
+        second_task.result = "第二轮结果"
+        session.active_task = second_task
+
+        await tui.stream_session(session)
+
+        assert "第一轮结果" in tui.output.text
+        assert f"Run ID: {first_task.run_id}" in tui.output.text
+        assert "第二轮结果" in tui.output.text
+        assert f"Run ID: {second_task.run_id}" in tui.output.text
+
+    asyncio.run(run())
+
+
 def test_run_agent_turn_resets_state_after_exception(monkeypatch) -> None:
     class FailingManager:
         current = SessionState.create(cwd=Path("."))
@@ -1299,6 +1348,31 @@ def test_run_agent_turn_resets_state_after_exception(monkeypatch) -> None:
         assert tui.status.text.startswith("failed")
 
     asyncio.run(run())
+
+
+def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(tmp_path: Path) -> None:
+    from manus_mini.context import validate_tool_call_pairs
+
+    tui = PromptTui(cwd=tmp_path)
+    task = TaskState.create(goal="读取文件", cwd=tmp_path)
+    tui.manager.current.active_task = task
+    tui.manager.current.messages.append(Message.user("读取文件"))
+    tui.manager.current.messages.append(Message.agent("需要读取", tool_call_ids=["call-read"]))
+    tui.is_running = True
+
+    tui.handle_interrupted_execution()
+
+    assert tui.is_running is False
+    assert tui.manager.current.active_task is not None
+    assert tui.manager.current.active_task.status == "failed"
+    assert tui.status.text == "状态 执行失败 | 当前上下文 0.0% | 最新请求 --"
+    validate_tool_call_pairs(tui.manager.current.messages[:-1])
+    assert any(
+        message.role == "tool"
+        and message.tool_call_id == "call-read"
+        and "USER_CANCELLED" in message.content
+        for message in tui.manager.current.messages
+    )
 
 
 def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
@@ -1543,7 +1617,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert tui.status.text == "状态 正在执行 | 上下文 0.0% | Enter 发送消息 | Shift+Enter 换行"
+    assert tui.status.text == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

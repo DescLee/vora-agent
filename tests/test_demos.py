@@ -141,3 +141,7 @@ def test_demo_long_session_compresses_context(tmp_path: Path) -> None:
 
     assert result.compression_snapshots
     assert any(message.role == "system" and "已压缩较早的上下文" in message.content for message in result.messages)
+    compression_notice = next(message.content for message in result.messages if message.role == "system" and "已压缩较早的上下文" in message.content)
+    assert "压缩前估算" in compression_notice
+    assert "目标预算" in compression_notice
+    assert "保留消息" in compression_notice

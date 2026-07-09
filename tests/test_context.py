@@ -5,6 +5,7 @@ from manus_mini.context import (
     build_project_code_overview,
     build_segments,
     compact_messages,
+    complete_interrupted_tool_messages,
     estimate_tokens,
     should_include_project_code_overview,
     validate_tool_call_pairs,
@@ -40,6 +41,35 @@ def test_validate_tool_call_pairs_rejects_orphan_tool_result() -> None:
         assert "tool_call_id" in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("expected ContextIntegrityError")
+
+
+def test_complete_interrupted_tool_messages_adds_cancelled_results_for_missing_tool_calls() -> None:
+    messages = [
+        Message.user("start"),
+        Message.agent("need file", tool_call_ids=["call-1", "call-2"]),
+        Message.tool("file content", tool_call_id="call-1"),
+        Message.user("next"),
+    ]
+
+    inserted = complete_interrupted_tool_messages(messages)
+
+    assert inserted == 1
+    validate_tool_call_pairs(messages)
+    assert messages[3].role == "tool"
+    assert messages[3].tool_call_id == "call-2"
+    assert "USER_CANCELLED" in messages[3].content
+    assert messages[4].content == "next"
+
+
+def test_complete_interrupted_tool_messages_converts_orphan_tool_results() -> None:
+    messages = [Message.tool("orphan", tool_call_id="call-1")]
+
+    inserted = complete_interrupted_tool_messages(messages)
+
+    assert inserted == 0
+    validate_tool_call_pairs(messages)
+    assert messages[0].role == "system"
+    assert "orphan tool result" in messages[0].content
 
 
 def test_build_segments_keeps_tool_exchange_together() -> None:

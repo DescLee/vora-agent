@@ -309,7 +309,15 @@ class ReActLoop:
             raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
         if snapshot is not None:
             session.compression_snapshots.append(snapshot)
-            session.messages.append(Message.system(f"[System] 已压缩较早的上下文：{snapshot.summary}"))
+            compacted_tokens = self._estimated_context_tokens(compacted)
+            session.messages.append(
+                Message.system(
+                    "[System] 已压缩较早的上下文："
+                    f"压缩前估算 {original_estimated} tokens，目标预算 {effective_budget} tokens，"
+                    f"压缩后估算 {compacted_tokens} tokens，保留消息 {len(compacted)} 条，摘要 ID {snapshot.id}。\n"
+                    f"{snapshot.summary}"
+                )
+            )
         return compacted
 
     def _context_limit(self, task: TaskState) -> int:
