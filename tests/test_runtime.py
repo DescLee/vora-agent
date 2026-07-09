@@ -847,6 +847,32 @@ def test_run_bash_in_place_file_edit_requires_confirmation(tmp_path: Path) -> No
     assert (tmp_path / "note.md").read_text(encoding="utf-8") == "# Note\n\nold line\n"
 
 
+def test_run_bash_redirected_file_write_requires_confirmation(tmp_path: Path) -> None:
+    class RedirectWriteLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-cat-write",
+                        name="run_bash",
+                        args={"command": "cat <<'EOF' > note.md\nnew line\nEOF"},
+                    )
+                ]
+            )
+
+    (tmp_path / "note.md").write_text("old line\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请把 note.md 改成 new line。", cwd=tmp_path)
+
+    result = ReActLoop(RedirectWriteLLM(), ToolRegistry()).run(task, session)
+
+    assert "确认" in result or "即将执行" in result
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "run_bash"
+    assert "modifies workspace files" in session.pending_confirmation.summary
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "old line\n"
+
+
 def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_path: Path) -> None:
     class RootPathLLM:
         def __init__(self) -> None:

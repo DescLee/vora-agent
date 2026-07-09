@@ -239,6 +239,25 @@
 - `web_search` 返回 0 结果时，最终答案必须提示证据不足。
 - `web_search` 执行失败时，最终答案也必须提示证据不足。
 
+### 13. `run_bash` 的重定向写文件命令会绕过确认流
+
+#### 现象
+
+- 上一轮只拦截了 `sed -i`、`perl -pi`、`echo/printf > file` 等常见写入形式。
+- 但真实代码修改中，模型也常用 `cat <<EOF > file`、`python ... > file` 或其他命令重定向到工作区文件。
+- 这类命令旧实现不会识别为工作区文件修改，可能直接执行并改写文件。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地命令风险启发式。
+- 新增对相对路径输出重定向的识别，例如 `> note.md`、`>> logs/result.txt`。
+- 规则只针对相对路径，避免把 `/tmp/...` 这类非工作区输出路径误判为工作区文件修改。
+
+#### 回归点
+
+- `run_bash` 执行 `cat <<EOF > note.md` 这类重定向写入时，必须先进入确认流。
+- 未确认前，目标文件内容不得被改写。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -257,6 +276,7 @@
   - 搜索失败时增加证据不足提示
   - `replace_in_file` 必须进入确认流
   - `run_bash` 的原地文件修改命令必须进入确认流
+  - `run_bash` 的重定向写文件命令必须进入确认流
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
@@ -270,7 +290,7 @@ pytest -q
 
 结果：
 
-- `350 passed`
+- `351 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -282,6 +302,7 @@ pytest -q
 - `web_search` 执行失败时，最终答案也会主动提示“未获取到有效搜索结果”
 - `replace_in_file` 不会再直接修改文件，而是先等待确认
 - `run_bash` 中明显会改文件的命令会被拦到确认流
+- `run_bash` 中重定向写入工作区文件的命令也会被拦到确认流
 - 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议
