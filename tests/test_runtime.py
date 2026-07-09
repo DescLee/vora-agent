@@ -97,6 +97,28 @@ def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
     assert result.messages[-1].content == "LLM chat reply"
 
 
+def test_runtime_does_not_inject_failed_task_result_as_existing_artifact(tmp_path: Path) -> None:
+    class ChatLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="可以继续。")
+
+    session = SessionState.create(cwd=tmp_path)
+    failed_task = TaskState.create(goal="创建文件", cwd=tmp_path)
+    failed_task.status = "failed"
+    failed_task.result = "用户拒绝了待确认写入。"
+    session.active_task = failed_task
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = ChatLLM()
+
+    result = runtime.on_user_message("你好", session)
+
+    assert not [
+        message
+        for message in result.messages
+        if message.role == "system" and "已有产物" in message.content and "用户拒绝" in message.content
+    ]
+
+
 def test_runtime_identity_question_uses_manus_mini_system_identity(tmp_path: Path) -> None:
     class IdentityLLM:
         def __init__(self) -> None:

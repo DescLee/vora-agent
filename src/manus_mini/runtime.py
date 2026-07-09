@@ -62,7 +62,7 @@ class AgentRuntime:
             user_message = Message.user(content)
             session.messages.append(user_message)
             user_message_id = user_message.id
-        if session.active_task is not None and session.active_task.result:
+        if session.active_task is not None and session.active_task.status == "done" and session.active_task.result:
             session.messages.append(
                 Message.system(
                     "已有产物:\n"
