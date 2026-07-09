@@ -1022,6 +1022,11 @@ class ReActLoop:
         )
 
     def _finalize_answer_content(self, task: TaskState, content: str) -> str:
+        if _has_only_failed_webpage_fetches_after_search(task):
+            if "页面内容读取失败" in content:
+                return content
+            disclaimer = "注意：本次联网搜索虽返回了搜索结果，但页面内容读取失败，下面内容不能视为已完成网页来源核实的结论。\n\n"
+            return disclaimer + content
         if not _has_no_effective_web_search_results(task):
             return content
         if "未获取到有效搜索结果" in content:
@@ -1060,6 +1065,26 @@ def _has_no_effective_web_search_results(task: TaskState) -> bool:
         if data.get("ok") is True and not summary.startswith("No results found for:"):
             return False
     return saw_search
+
+
+def _has_only_failed_webpage_fetches_after_search(task: TaskState) -> bool:
+    saw_effective_search = False
+    saw_fetch = False
+    saw_successful_fetch = False
+    for event in task.trace_events:
+        if event.phase != "tool":
+            continue
+        data = event.data
+        tool_name = data.get("tool_name")
+        if tool_name == "web_search":
+            summary = str(data.get("summary") or "")
+            if data.get("ok") is True and not summary.startswith("No results found for:"):
+                saw_effective_search = True
+        elif tool_name == "fetch_webpage":
+            saw_fetch = True
+            if data.get("ok") is True:
+                saw_successful_fetch = True
+    return saw_effective_search and saw_fetch and not saw_successful_fetch
 
 
 def _compression_target_label(strategies: list[str]) -> str:

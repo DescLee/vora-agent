@@ -2497,6 +2497,88 @@ def test_react_loop_adds_disclaimer_when_web_search_fails(tmp_path: Path) -> Non
     assert "三类方向" in result
 
 
+def test_react_loop_adds_disclaimer_when_webpage_fetches_fail_after_search(tmp_path: Path) -> None:
+    class SearchWithResultTool:
+        name = "web_search"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201, ARG002
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary="Found 1 results for: AI Agent framework landscape",
+                content="1. Agent Framework Report\n   URL: https://example.com/report",
+                data={"result_count": 1, "query": "AI Agent framework landscape"},
+            )
+
+    class FailingFetchTool:
+        name = "fetch_webpage"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201, ARG002
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="Failed to fetch https://example.com/report: timeout",
+                error_code="FETCH_FAILED",
+            )
+
+    class SearchFetchThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-search",
+                            name="web_search",
+                            args={"query": "AI Agent framework landscape"},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-fetch",
+                            name="fetch_webpage",
+                            args={"url": "https://example.com/report"},
+                        )
+                    ]
+                )
+            return LLMResult(content="根据联网资料，AI Agent 框架可分为编排型和运行时治理型。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请做一份 AI Agent 框架简短行研摘要", cwd=tmp_path)
+
+    result = ReActLoop(
+        SearchFetchThenAnswerLLM(),
+        ToolRegistry(tools=[SearchWithResultTool(), FailingFetchTool()]),
+    ).run(task, session)
+
+    assert "页面内容读取失败" in result
+    assert "AI Agent 框架" in result
+
+
 def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tmp_path: Path) -> None:
     class FakeReactLoop:
         def __init__(self) -> None:
