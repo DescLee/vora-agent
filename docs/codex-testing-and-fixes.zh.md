@@ -201,11 +201,31 @@
 - 中文 TUI 中不应再直接显示大段英文 reasoning 原文。
 - `推理` 和 `规划理由` 两处展示应保持一致的中文收口行为。
 
+### 11. `manus-mini clear` 会先删除会话，再询问用户是否确认
+
+#### 现象
+
+- 按普通用户路径执行 `manus-mini clear --cwd <目录>` 时，旧实现会先调用 `clear_all()` 删除全部会话。
+- 然后才弹出确认提示；即使用户输入 `n` 或直接取消，会话其实已经被删掉了。
+- 这会导致 CLI 确认流形同虚设，属于明显的数据删除顺序错误。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中调整 `clear` 子命令流程。
+- 先用 `list_sessions()` 统计当前会话数量，仅用于展示确认提示。
+- 只有用户明确确认后，才真正执行 `clear_all()` 和日志清理。
+
+#### 回归点
+
+- 用户拒绝 `manus-mini clear` 后，已有会话必须仍然存在。
+- 只有确认通过后，CLI 才能真正删除会话和对应日志。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
   - 顶层 `--cwd` 兼容
   - 旧写法子命令参数兼容
+  - `clear` 必须先确认再删除会话
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)

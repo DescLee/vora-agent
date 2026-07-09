@@ -129,7 +129,8 @@ def _run_clear(cwd: Path, force: bool) -> None:
     Prints the number of sessions and log dirs that were deleted.
     """
     store = SessionStore(cwd)
-    count = store.clear_all()
+    sessions = store.list_sessions()
+    count = len(sessions)
     if count == 0:
         print("No saved sessions to clear.")
         return
@@ -139,6 +140,7 @@ def _run_clear(cwd: Path, force: bool) -> None:
             print("Clear cancelled.")
             return
 
+    count = store.clear_all()
     logs_deleted = store.clear_all_logs()
     print(f"All {count} saved session(s) have been cleared (also cleaned {logs_deleted} log dir(s)).")
 

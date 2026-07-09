@@ -80,3 +80,18 @@ def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, 
 def test_cli_rejects_unknown_subcommand_even_with_global_options(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         main(["--cwd", str(tmp_path), "unknown"])
+
+
+def test_cli_clear_requires_confirmation_before_deleting_sessions(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+
+    main(["clear", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "Clear cancelled." in out
+    summaries = store.list_sessions()
+    assert [item.session_id for item in summaries] == [session.session_id]
