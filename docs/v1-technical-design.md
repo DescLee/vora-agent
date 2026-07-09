@@ -4,6 +4,8 @@
 
 第一版目标是实现一个可运行的 TUI Agent 应用，支持在终端页面中连续对话，并围绕同一个会话迭代完成三类任务：资料调研、本地项目助手、任务自动化。系统需要体现现代 Agent 工程设计，而不是简单的单轮问答。
 
+本文以当前代码实现为准：已经落地的能力直接描述为实现；仍处于演进方向的能力会明确标为后续规划，避免文档承诺超过实际系统。
+
 核心技术关键词：
 
 - Loop Engineering：分为 ReAct 工具循环、Reflection 质量反馈循环、工程兜底重试循环三层。
@@ -12,6 +14,7 @@
 - Session State：会话历史、当前产物、工具观察和待确认动作统一管理。
 - Long-term Memory：跨会话保存用户偏好、项目摘要、产物摘要和重要决策。
 - Context Compression：长会话自动压缩旧消息和工具观察，控制上下文规模。
+- LLM-assisted Compression：压缩摘要优先由 LLM 生成语义摘要，失败时回退本地规则摘要。
 - Human-in-the-loop：文件写入等高风险动作必须人工确认。
 - Observability：每一步都有结构化日志和最终执行摘要。
 - Testable Agent Core：Loop、工具协议、权限确认可单元测试。
@@ -31,13 +34,13 @@
 
 ### 2.2 关键依赖
 
-- `textual`：构建 TUI 页面、消息区、输入区、状态栏和快捷键。
-- `rich`：渲染 Markdown、表格、日志和确认提示。
+- `prompt_toolkit`：构建当前 TUI 页面、消息区、输入区、状态栏、滚动输出和确认面板。
+- `rich`：用于 Markdown、表格、日志和确认提示等富文本输出场景。
 - `pydantic`：定义任务状态、工具参数、工具结果。
-- `sqlite-utils` 或标准库 `sqlite3`：保存长期记忆和会话索引。第一版也可用 JSONL 起步，但接口需保持可替换。
+- 标准库 `sqlite3`：保存长期记忆。会话状态使用 JSON 文件持久化。
 - `pytest`：单元测试。
 - `ruff`：格式与静态检查。
-- LLM SDK：可抽象为 `LLMClient`，运行时通过显式 provider 配置接入 OpenAI-compatible client。
+- `urllib.request`：当前 OpenAI-compatible LLM client 的 HTTP 实现。后续可替换为官方 SDK 或多 provider adapter。
 
 ## 3. 总体架构
 
@@ -99,7 +102,7 @@ AgentRuntime
 
 #### Reflector
 
-评判当前结果是否满足用户目标，决定接受结果、局部更新、重新生成内容或重新规划。
+评判当前结果是否满足用户目标，决定接受结果、局部更新、重新生成内容或重新规划。当前实现中，非代码任务先直接放过；代码类任务会在 Reflection 阶段生成临时 pytest 验收 case 并执行，不通过时把原始输入、case 和失败原因回流到下一轮执行。
 
 #### Reporter
 
@@ -111,7 +114,7 @@ AgentRuntime
 
 #### ContextCompressor
 
-负责构建每轮模型输入上下文，并在消息、工具观察或产物版本过长时生成压缩摘要。压缩结果要进入会话状态和运行日志，避免压缩过程不可追踪。
+负责构建每轮模型输入上下文，并在消息、工具观察或产物版本过长时生成压缩摘要。当前实现先按本地规则分段和保留上下文，保证 tool call / tool result 成组完整；对被移除的旧片段优先请求 LLM 生成语义摘要，失败时回退规则摘要。压缩结果进入会话状态、trace event 和运行日志，避免压缩过程不可追踪。
 
 #### EventLogger
 
@@ -119,7 +122,7 @@ AgentRuntime
 
 ## 4. 目录结构
 
-推荐第一版目录：
+当前实现目录：
 
 ```text
 manus-mini/
@@ -128,7 +131,8 @@ manus-mini/
   src/
     manus_mini/
       __init__.py
-      app.py
+      prompt_tui.py
+      prompt_tui_formatting.py
       runtime.py
       models.py
       llm.py
@@ -142,11 +146,6 @@ manus-mini/
       reflector.py
       reporter.py
       logging.py
-      tui/
-        __init__.py
-        layout.py
-        widgets.py
-        keybindings.py
       tools/
         __init__.py
         base.py
@@ -155,17 +154,24 @@ manus-mini/
         research_tools.py
         code_tools.py
         automation_tools.py
+        shell_tools.py
+        search_tools.py
   tests/
     test_runtime.py
     test_tools.py
-    test_permissions.py
+    test_prompt_tui.py
     test_memory.py
-    test_context_compression.py
+    test_context.py
   docs/
     v1-product-design.md
     v1-technical-design.md
-  outputs/
-  runs/
+    adr/
+  evals/
+    run_evals.py
+  .manus-mini/
+    sessions/
+    logs/
+    outputs/
 ```
 
 ## 5. 核心数据模型

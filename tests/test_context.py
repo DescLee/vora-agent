@@ -5,11 +5,13 @@ from manus_mini.context import (
     build_project_code_overview,
     build_segments,
     compact_messages,
+    compact_messages_with_snapshot,
     complete_interrupted_tool_messages,
     estimate_tokens,
     should_include_project_code_overview,
     validate_tool_call_pairs,
 )
+from manus_mini.llm import LLMResult
 from manus_mini.models import Message
 
 
@@ -123,6 +125,49 @@ def test_compact_messages_redacts_sensitive_content_in_summary() -> None:
     assert "sk-live-secret" not in compacted[0].content
     assert "password=abc123" not in compacted[0].content
     assert "[REDACTED]" in compacted[0].content
+
+
+def test_compact_messages_can_use_llm_summary() -> None:
+    class SummaryLLM:
+        def __init__(self) -> None:
+            self.messages = []
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
+            self.messages.append(messages)
+            self.tool_names.append(tool_names)
+            return LLMResult(content="历史上下文摘要：\n- LLM 语义摘要：用户要保留架构决策。")
+
+    llm = SummaryLLM()
+    messages = [
+        Message.user("很早以前的需求：" + "A" * 80),
+        Message.agent("已记录架构决策：" + "B" * 80),
+        Message.user("最新需求：继续"),
+    ]
+
+    compacted, snapshot = compact_messages_with_snapshot(messages, token_budget=30, llm=llm)
+
+    assert snapshot is not None
+    assert compacted[0].content == "历史上下文摘要：\n- LLM 语义摘要：用户要保留架构决策。"
+    assert snapshot.summary == compacted[0].content
+    assert llm.tool_names == [[]]
+
+
+def test_compact_messages_falls_back_when_llm_summary_fails() -> None:
+    class FailingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise RuntimeError("llm unavailable")
+
+    messages = [
+        Message.user("旧需求：" + "A" * 80),
+        Message.user("最新需求：继续"),
+    ]
+
+    compacted, snapshot = compact_messages_with_snapshot(messages, token_budget=20, llm=FailingLLM())
+
+    assert snapshot is not None
+    assert compacted[0].content.startswith("历史上下文摘要：")
+    assert "旧需求" in compacted[0].content
 
 
 def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path) -> None:

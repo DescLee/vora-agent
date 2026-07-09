@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from bisect import bisect_right
+from datetime import UTC, datetime
 
 from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
@@ -660,24 +661,107 @@ def format_phase_label(task: TaskState) -> str:
     return labels.get(task.status, task.status)
 
 
-def format_status(session: SessionState, is_running: bool | None = None) -> str:
+MIN_COMPRESSION_RUNNING_SECONDS = 2.0
+
+
+def format_status(
+    session: SessionState,
+    is_running: bool | None = None,
+    now: datetime | None = None,
+) -> str:
     task = session.active_task
     if task is None:
-        return "就绪"
+        window_limit = format_context_window_limit(session)
+        return " | ".join(part for part in ["就绪", window_limit] if part)
 
     state_label = format_status_label(task, is_running=is_running)
+    parts = [f"状态 {state_label}", format_context_usage(session)]
+    compression_status = format_compression_status(session, now=now)
+    if compression_status:
+        parts.append(compression_status)
+    window_limit = format_context_window_limit(session)
+    if window_limit:
+        parts.append(window_limit)
 
-    return (
-        f"状态 {state_label} | {format_context_usage(session)} | "
-        f"{format_latest_request_context_usage(session)}"
-    )
+    return " | ".join(parts)
+
+
+def format_compression_status(session: SessionState, now: datetime | None = None) -> str:
+    task = session.active_task
+    if task is not None:
+        started_event: TraceEvent | None = None
+        completed_event: TraceEvent | None = None
+        for event in reversed(task.trace_events):
+            message_type = event.data.get("message_type")
+            if message_type == "context_compression_started":
+                started_event = event
+                break
+            if message_type == "context_compression_completed":
+                completed_event = event
+                continue
+        if started_event is not None:
+            if _should_keep_compression_running(started_event, completed_event, now=now):
+                return _format_compression_running(started_event)
+            if completed_event is not None:
+                return _format_compression_completed(completed_event)
+
+    start_index = _compression_snapshot_start_index(task)
+    new_snapshots = session.compression_snapshots[start_index:]
+    if new_snapshots:
+        snapshot = new_snapshots[-1]
+        covered_count = len(snapshot.covered_message_ids)
+        if covered_count > 0:
+            return f"上下文已压缩 {covered_count} 条"
+        return "上下文已压缩"
+    return ""
+
+
+def _should_keep_compression_running(
+    started_event: TraceEvent,
+    completed_event: TraceEvent | None,
+    now: datetime | None,
+) -> bool:
+    if completed_event is None:
+        return True
+    current_time = now or datetime.now(UTC)
+    elapsed_seconds = (current_time - started_event.created_at).total_seconds()
+    return elapsed_seconds < MIN_COMPRESSION_RUNNING_SECONDS
+
+
+def _format_compression_running(event: TraceEvent) -> str:
+    usage_percent = event.data.get("trigger_usage_percent")
+    target = str(event.data.get("compression_target") or "较早的上下文消息")
+    prefix = "上下文达到"
+    if isinstance(usage_percent, int | float):
+        prefix = f"上下文达到 {usage_percent:.1f}%"
+    covered_count = event.data.get("covered_message_count")
+    suffix = ""
+    if isinstance(covered_count, int) and covered_count > 0:
+        suffix = f"（预计 {covered_count} 条）"
+    return f"{prefix}，将对{target}进行压缩{suffix}，压缩进行中"
+
+
+def _format_compression_completed(event: TraceEvent) -> str:
+    covered_count = event.data.get("covered_message_count")
+    if isinstance(covered_count, int) and covered_count > 0:
+        return f"上下文已压缩 {covered_count} 条"
+    return "上下文已压缩"
+
+
+def _compression_snapshot_start_index(task: TaskState | None) -> int:
+    if task is None:
+        return 0
+    raw_value = task.metadata.get("compression_snapshot_start_index", 0)
+    if isinstance(raw_value, int) and raw_value >= 0:
+        return raw_value
+    return 0
 
 
 def format_context_usage(session: SessionState) -> str:
     task = session.active_task
     if task is None:
         return "当前上下文 --"
-    limit = task.model_context_limit or task.limits.max_estimated_tokens
+    limit = session.model_context_limit or task.model_context_limit or task.limits.max_estimated_tokens
     if limit <= 0:
         return "当前上下文 --"
     _, usage = estimate_context_usage(session.messages, limit)
@@ -687,15 +771,12 @@ def format_context_usage(session: SessionState) -> str:
     return f"当前上下文 {percent:.1f}%"
 
 
-def format_latest_request_context_usage(session: SessionState) -> str:
+def format_context_window_limit(session: SessionState) -> str:
     task = session.active_task
-    if task is None:
-        return "最新请求 --"
-    limit = task.model_context_limit or task.limits.max_estimated_tokens
-    if limit <= 0 or task.last_prompt_tokens is None:
-        return "最新请求 --"
-    percent = min(999.9, task.last_prompt_tokens / limit * 100)
-    return f"最新请求 {percent:.1f}%"
+    limit = session.model_context_limit or (task.model_context_limit if task is not None else None)
+    if limit is None or limit <= 0:
+        return ""
+    return f"窗口 {limit:,}"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:

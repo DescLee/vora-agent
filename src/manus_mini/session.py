@@ -5,7 +5,7 @@ from pathlib import Path
 
 from manus_mini.context import complete_interrupted_tool_messages, compact_messages_with_snapshot, estimate_message_tokens
 from manus_mini.executor import sanitize_tool_args
-from manus_mini.models import Message, SessionState, ToolCall, TraceEvent
+from manus_mini.models import LoopLimits, Message, SessionState, ToolCall, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.react import format_tool_result_message
 from manus_mini.runtime import AgentRuntime
@@ -34,8 +34,21 @@ class SessionManager:
         self.current.cwd = cwd
         self.memory_manager = memory_manager or getattr(self.runtime, "memory_manager", None)
         self.session_store = session_store or SessionStore(cwd)
+        self._ensure_session_model_context_limit()
+
+    def _ensure_session_model_context_limit(self) -> None:
+        if self.current.model_context_limit is not None and self.current.model_context_limit > 0:
+            return
+        default_limits = getattr(self.runtime, "default_limits", None)
+        fallback_limit = (default_limits or LoopLimits()).max_estimated_tokens
+        react_loop = getattr(self.runtime, "react_loop", None)
+        llm = getattr(react_loop, "llm", None)
+        context_limit_getter = getattr(llm, "context_limit", None)
+        model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
+        self.current.model_context_limit = model_context_limit or fallback_limit
 
     def handle_user_message(self, content: str, append_user_message: bool = True) -> SessionState:
+        self._ensure_session_model_context_limit()
         normalized = content.strip().lower()
         if normalized in HELP_COMMANDS:
             self.current.messages.append(Message.system(format_help_text()))

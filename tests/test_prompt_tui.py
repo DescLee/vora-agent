@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from prompt_toolkit.data_structures import Point
@@ -16,7 +17,6 @@ from manus_mini.prompt_tui import (
     format_artifact,
     format_current_action,
     format_context_usage,
-    format_latest_request_context_usage,
     format_inline_args,
     format_latest_activity,
     format_message_block,
@@ -345,7 +345,6 @@ def test_format_context_usage_does_not_use_latest_llm_prompt_tokens(tmp_path: Pa
     usage = format_context_usage(session)
 
     assert usage == "当前上下文 0.5%"
-    assert format_latest_request_context_usage(session) == "最新请求 25.0%"
 
 
 def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> None:
@@ -365,7 +364,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
     status = format_status(session)
 
     assert format_latest_activity(task) == "ReAct：第 1 轮开始"
-    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
+    assert status == "状态 正在执行 | 当前上下文 0.0%"
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
@@ -731,7 +730,7 @@ def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
+    assert status == "状态 正在执行 | 当前上下文 0.0%"
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
@@ -896,10 +895,11 @@ def test_format_transcript_final_artifact_keeps_full_process_history(tmp_path: P
 
 def test_format_status_hides_send_hints(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 1_000_000
 
     status = format_status(session)
 
-    assert status == "就绪"
+    assert status == "就绪 | 窗口 1,000,000"
     assert "Enter 发送" not in status
     assert "Shift+Enter 换行" not in status
 
@@ -908,6 +908,7 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
     task.limits.max_estimated_tokens = 100
+    session.model_context_limit = 100
     session.active_task = task
     session.messages.append(Message.user("x" * 50))
 
@@ -915,7 +916,8 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     assert "当前上下文 25%" not in status
     assert "当前上下文 25.0%" in status
-    assert "最新请求 --" in status
+    assert status.endswith("窗口 100")
+    assert "最新请求" not in status
     assert format_context_usage(session) == "当前上下文 25.0%"
 
 
@@ -1162,10 +1164,102 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert status == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
+    assert status == "状态 正在执行 | 当前上下文 0.0%"
     assert "当前 准备调用工具 list_files(call-list)" not in status
     assert "ReAct 上限" not in status
     assert "Reflection 上限" not in status
+
+
+def test_format_status_shows_context_compression_running(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    started_at = datetime(2026, 7, 9, tzinfo=UTC)
+    task.trace_events.append(
+        TraceEvent(
+            phase="runtime",
+            message="Context compression started",
+            created_at=started_at,
+            data={
+                "message_type": "context_compression_started",
+                "trigger_usage_percent": 70.0,
+                "compression_target": "较早的上下文消息",
+                "covered_message_count": 8,
+            },
+        )
+    )
+    session.active_task = task
+
+    status = format_status(session, now=started_at + timedelta(seconds=1))
+
+    assert "上下文达到 70.0%" in status
+    assert "将对较早的上下文消息进行压缩" in status
+    assert "压缩进行中" in status
+
+
+def test_format_status_keeps_compression_running_for_two_seconds_after_completion(tmp_path: Path) -> None:
+    from manus_mini.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    started_at = datetime(2026, 7, 9, tzinfo=UTC)
+    completed_at = started_at + timedelta(milliseconds=200)
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="runtime",
+                message="Context compression started",
+                created_at=started_at,
+                data={
+                    "message_type": "context_compression_started",
+                    "trigger_usage_percent": 70.0,
+                    "compression_target": "较早的上下文消息",
+                    "covered_message_count": 8,
+                },
+            ),
+            TraceEvent(
+                phase="runtime",
+                message="Context compression completed",
+                created_at=completed_at,
+                data={
+                    "message_type": "context_compression_completed",
+                    "covered_message_count": 8,
+                },
+            ),
+        ]
+    )
+    session.active_task = task
+
+    status = format_status(session, now=started_at + timedelta(seconds=1))
+
+    assert "压缩进行中" in status
+    assert "上下文已压缩" not in status
+
+    status_after_minimum = format_status(session, now=started_at + timedelta(seconds=3))
+
+    assert "上下文已压缩 8 条" in status_after_minimum
+
+
+def test_format_status_shows_context_compression_done(tmp_path: Path) -> None:
+    from manus_mini.models import CompressionSnapshot
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    session.active_task = task
+    session.compression_snapshots.append(
+        CompressionSnapshot(
+            covered_message_ids=["msg-a", "msg-b"],
+            covered_observation_ids=[],
+            summary="旧上下文摘要",
+            retained_facts=["用户要总结项目"],
+        )
+    )
+
+    status = format_status(session)
+
+    assert "上下文已压缩" in status
+    assert "2 条" in status
 
 
 def test_format_status_does_not_say_running_after_done_or_failed(tmp_path: Path) -> None:
@@ -1301,6 +1395,66 @@ def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_pat
     assert f"Run ID: {tui.manager.current.active_task.run_id}" in tui.output.text
 
 
+def test_send_current_input_carries_previous_result_into_context_usage(monkeypatch, tmp_path: Path) -> None:
+    tui = PromptTui(cwd=tmp_path)
+    previous_task = TaskState.create(goal="第一轮", cwd=tmp_path)
+    previous_task.status = "done"
+    previous_task.result = "上一轮结果" + ("x" * 1000)
+    previous_task.limits.max_estimated_tokens = 10_000
+    tui.manager.current.messages.append(Message.user("第一轮"))
+    tui.manager.current.active_task = previous_task
+    tui.append_completed_transcript(tui.manager.current)
+    monkeypatch.setattr(tui, "start_agent_turn", lambda content: None)
+
+    tui.input.text = "第二轮"
+    tui.send_current_input()
+
+    assert any(message.role == "system" and "上一轮结果" in message.content for message in tui.manager.current.messages)
+    assert tui.status.text == "状态 正在执行 | 当前上下文 0.4% | 窗口 128,000"
+
+
+def test_send_current_input_hides_previous_compression_status(monkeypatch, tmp_path: Path) -> None:
+    from manus_mini.models import CompressionSnapshot
+
+    tui = PromptTui(cwd=tmp_path)
+    tui.manager.current.compression_snapshots.append(
+        CompressionSnapshot(
+            covered_message_ids=["msg-a", "msg-b"],
+            covered_observation_ids=[],
+            summary="上一轮压缩摘要",
+        )
+    )
+    previous_task = TaskState.create(goal="第一轮", cwd=tmp_path)
+    previous_task.status = "done"
+    previous_task.result = "第一轮结果"
+    tui.manager.current.active_task = previous_task
+    monkeypatch.setattr(tui, "start_agent_turn", lambda content: None)
+
+    tui.input.text = "第二轮"
+    tui.send_current_input()
+
+    assert "上下文已压缩" not in tui.status.text
+    assert tui.manager.current.active_task is not None
+    assert tui.manager.current.active_task.metadata["compression_snapshot_start_index"] == 1
+
+
+def test_send_current_input_uses_session_context_limit_before_background_turn(monkeypatch, tmp_path: Path) -> None:
+    tui = PromptTui(cwd=tmp_path)
+    tui.manager.current.model_context_limit = 1_000_000
+    previous_task = TaskState.create(goal="第一轮", cwd=tmp_path)
+    previous_task.status = "done"
+    previous_task.result = "x" * 64_000
+    tui.manager.current.active_task = previous_task
+    monkeypatch.setattr(tui, "start_agent_turn", lambda content: None)
+
+    tui.input.text = "第二轮"
+    tui.send_current_input()
+
+    assert tui.manager.current.active_task is not None
+    assert tui.manager.current.active_task.model_context_limit == 1_000_000
+    assert tui.status.text == "状态 正在执行 | 当前上下文 3.2% | 窗口 1,000,000"
+
+
 def test_resume_stream_session_preserves_existing_history(tmp_path: Path) -> None:
     async def run() -> None:
         session = SessionState.create(cwd=tmp_path)
@@ -1365,7 +1519,7 @@ def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(t
     assert tui.is_running is False
     assert tui.manager.current.active_task is not None
     assert tui.manager.current.active_task.status == "failed"
-    assert tui.status.text == "状态 执行失败 | 当前上下文 0.0% | 最新请求 --"
+    assert tui.status.text == "状态 执行失败 | 当前上下文 0.0% | 窗口 128,000"
     validate_tool_call_pairs(tui.manager.current.messages[:-1])
     assert any(
         message.role == "tool"
@@ -1617,7 +1771,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert tui.status.text == "状态 正在执行 | 当前上下文 0.0% | 最新请求 --"
+    assert tui.status.text == "状态 正在执行 | 当前上下文 0.0% | 窗口 128,000"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

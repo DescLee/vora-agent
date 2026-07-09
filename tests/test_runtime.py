@@ -5,6 +5,7 @@ import threading
 from time import perf_counter, sleep
 
 from manus_mini.llm import LLMResult
+from manus_mini.context import estimate_message_tokens
 from manus_mini.executor import Executor
 from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop, format_tool_result_message
@@ -65,7 +66,8 @@ def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> 
     roles = [message.role for message in result.messages]
     assert "agent" in roles
     assert "tool" in roles
-    assert any(message.tool_call_id == "call-read-readme" for message in result.messages if message.role == "tool")
+    tool_messages = [message for message in result.messages if message.role == "tool" and message.tool_call_id == "call-read-readme"]
+    assert len(tool_messages) == 1
 
 
 def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
@@ -1554,7 +1556,7 @@ def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: P
 
     assert result.accepted is True
     assert result.content == "当前最佳结果"
-    assert result.reason == "reflection forced accept"
+    assert result.reason == "non-code task accepted without pytest reflection gate"
 
 
 def test_reflection_loop_accepts_even_when_reflector_requests_replan(tmp_path: Path) -> None:
@@ -1582,7 +1584,7 @@ def test_reflection_loop_accepts_even_when_reflector_requests_replan(tmp_path: P
     assert result.accepted is True
     assert result.decision == "accept"
     assert result.content == "当前草稿"
-    assert result.reason == "reflection forced accept"
+    assert result.reason == "non-code task accepted without pytest reflection gate"
 
 
 def test_runtime_respects_engineering_step_limit(tmp_path: Path) -> None:
@@ -1667,6 +1669,7 @@ def test_runtime_marks_token_budget_exceeded_error_code(tmp_path: Path) -> None:
 
 def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 100
     session.messages.extend(Message.user("x" * 120) for _ in range(4))
     runtime = AgentRuntime(
         default_limits=LoopLimits(max_estimated_tokens=100),
@@ -1686,6 +1689,73 @@ def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: 
     assert row["model_context_limit"] == 100
     assert row["context_usage"] >= 0.70
     assert row["compression_triggered"] is True
+
+
+def test_runtime_persists_auto_compacted_context(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 1_000
+    session.messages.extend(Message.user(f"历史 {index} " + ("x" * 180)) for index in range(12))
+    before_tokens = estimate_message_tokens(session.messages)
+    runtime = AgentRuntime(
+        default_limits=LoopLimits(max_estimated_tokens=1_000),
+        logger=EventLogger(tmp_path / "logs", enabled=True),
+        llm=ScriptedLLM(),
+    )
+
+    result = runtime.on_user_message("继续", session)
+
+    assert result.compression_snapshots
+    assert estimate_message_tokens(result.messages) < before_tokens
+    assert result.messages[0].content.startswith("历史上下文摘要：")
+    assert any(message.role == "system" and "已压缩较早的上下文" in message.content for message in result.messages)
+
+
+def test_react_context_compression_uses_llm_summary_when_available(tmp_path: Path) -> None:
+    class SummaryLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            return LLMResult(content="历史上下文摘要：\n- LLM 压缩摘要保留了关键决策。")
+
+    llm = SummaryLLM()
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.extend(Message.user(f"历史 {index} " + ("x" * 180)) for index in range(12))
+    task = TaskState.create(goal="继续", cwd=tmp_path, limits=LoopLimits(max_estimated_tokens=1_000))
+    task.model_context_limit = 1_000
+    loop = ReActLoop(llm=llm)
+
+    context = loop._conversation_context(task, session)
+
+    assert llm.calls == 1
+    assert context[0].content == "历史上下文摘要：\n- LLM 压缩摘要保留了关键决策。"
+    assert session.compression_snapshots[-1].summary == context[0].content
+    completed_events = [
+        event
+        for event in task.trace_events
+        if event.data.get("message_type") == "context_compression_completed"
+    ]
+    assert completed_events[-1].data["summary_source"] == "llm"
+
+
+def test_runtime_keeps_session_context_limit_stable(tmp_path: Path) -> None:
+    class ChangingLimitLLM(ScriptedLLM):
+        def context_limit(self) -> int:
+            return 1_000_000
+
+    session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 128_000
+    runtime = AgentRuntime(
+        logger=EventLogger(tmp_path / "logs", enabled=True),
+        llm=ChangingLimitLLM(),
+    )
+
+    result = runtime.on_user_message("你好", session)
+
+    assert result.model_context_limit == 128_000
+    assert result.active_task is not None
+    assert result.active_task.model_context_limit == 128_000
 
 
 def test_runtime_exposes_active_task_before_reflection_runs(tmp_path: Path) -> None:
@@ -1793,7 +1863,7 @@ def test_reflection_loop_carries_follow_up_context_into_next_round(tmp_path: Pat
     result = reflection_loop.run(task, session)
 
     assert result.decision == "accept"
-    assert result.reason == "reflection forced accept"
+    assert result.reason == "non-code task accepted without pytest reflection gate"
     assert session.messages == []
 
 

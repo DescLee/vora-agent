@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -34,8 +39,44 @@ class ReflectionLoop:
 
     def run(self, task: TaskState, session: SessionState) -> ReflectionResult:
         draft = self.react_loop.run(task, session)
-        decision = "accept"
-        reason = "reflection forced accept"
+        if not _is_code_modification_task(task):
+            decision = "accept"
+            reason = "non-code task accepted without pytest reflection gate"
+            task.trace_events.append(
+                TraceEvent(
+                    phase="reflection",
+                    message=f"Reflection decided {decision}: {reason}",
+                    data={
+                        "decision": decision,
+                        "reason": reason,
+                        "draft_preview": draft[:500],
+                    },
+                )
+            )
+            self._record_reflection_result(task, draft, decision, reason)
+            return ReflectionResult(accepted=True, content=draft, reason=reason, decision=decision)
+
+        pytest_gate = _run_pytest_reflection_gate(task, draft)
+        task.trace_events.append(
+            TraceEvent(
+                phase="reflection",
+                message=(
+                    "Reflection pytest gate passed"
+                    if pytest_gate["ok"]
+                    else "Reflection pytest gate failed"
+                ),
+                data=pytest_gate,
+            )
+        )
+        if not pytest_gate["ok"]:
+            decision = "local_update"
+            reason = _format_pytest_gate_failure_reason(task, pytest_gate)
+            self._record_reflection_result(task, draft, decision, reason)
+            return ReflectionResult(accepted=False, content=draft, reason=reason, decision=decision)
+
+        reflection_decision = self._decide(task, session, draft)
+        decision = reflection_decision.decision
+        reason = reflection_decision.reason
         task.trace_events.append(
             TraceEvent(
                 phase="reflection",
@@ -48,7 +89,7 @@ class ReflectionLoop:
             )
         )
         self._record_reflection_result(task, draft, decision, reason)
-        return ReflectionResult(accepted=True, content=draft, reason=reason, decision=decision)
+        return ReflectionResult(accepted=decision == "accept", content=draft, reason=reason, decision=decision)
 
     def _decide(self, task: TaskState, session: SessionState, draft: str) -> ReflectionDecision:
         llm = self._resolve_llm()
@@ -319,6 +360,101 @@ TEST_COMMAND_KEYWORDS = (
     "yarn test",
     "ruff",
 )
+REFLECTION_PYTEST_TIMEOUT_SECONDS = 30
+
+
+def _run_pytest_reflection_gate(task: TaskState, draft: str) -> dict:
+    case_content = _build_reflection_pytest_case(task, draft)
+    with tempfile.TemporaryDirectory(prefix="manus-mini-reflection-") as directory:
+        case_path = Path(directory) / "test_reflection_acceptance.py"
+        case_path.write_text(case_content, encoding="utf-8")
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-m", "pytest", case_path.as_posix(), "-q"],
+                cwd=task.cwd,
+                text=True,
+                capture_output=True,
+                timeout=REFLECTION_PYTEST_TIMEOUT_SECONDS,
+                check=False,
+            )
+            return {
+                "ok": completed.returncode == 0,
+                "case_path": case_path.as_posix(),
+                "case_content": case_content,
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+            }
+        except subprocess.TimeoutExpired as error:
+            return {
+                "ok": False,
+                "case_path": case_path.as_posix(),
+                "case_content": case_content,
+                "exit_code": None,
+                "stdout": error.stdout or "",
+                "stderr": error.stderr or f"pytest timed out after {REFLECTION_PYTEST_TIMEOUT_SECONDS}s",
+            }
+
+
+def _build_reflection_pytest_case(task: TaskState, draft: str) -> str:
+    payload = {
+        "original_input": task.goal,
+        "draft": draft,
+        "has_passing_test_after_latest_code_change": _has_passing_test_after_latest_code_change(task),
+        "test_failures": [
+            _format_test_failure(event)
+            for event in _test_events_after_latest_code_change(task)
+            if not _test_event_passed(event)
+        ],
+    }
+    payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    return textwrap.dedent(
+        f"""
+        import json
+
+
+        PAYLOAD = json.loads({payload_json!r})
+
+
+        def test_reflection_draft_is_not_empty():
+            assert PAYLOAD["draft"].strip(), "reflection draft is empty"
+
+
+        def test_code_task_has_passing_validation_after_latest_change():
+            assert PAYLOAD["has_passing_test_after_latest_code_change"], (
+                "代码类任务需要在最新代码变更后有通过的测试证据；"
+                f"original_input={{PAYLOAD['original_input']!r}}; "
+                f"test_failures={{PAYLOAD['test_failures']!r}}"
+            )
+        """
+    ).lstrip()
+
+
+def _has_passing_test_after_latest_code_change(task: TaskState) -> bool:
+    test_events = _test_events_after_latest_code_change(task)
+    return bool(test_events) and all(_test_event_passed(event) for event in test_events)
+
+
+def _format_pytest_gate_failure_reason(task: TaskState, result: dict) -> str:
+    stdout = str(result.get("stdout") or "").strip()
+    stderr = str(result.get("stderr") or "").strip()
+    output = "\n".join(part for part in [stdout, stderr] if part).strip()
+    if len(output) > 1200:
+        output = output[:1200] + "\n... [truncated]"
+    case_content = str(result.get("case_content") or "")
+    if len(case_content) > 1200:
+        case_content = case_content[:1200] + "\n... [truncated]"
+    return "\n".join(
+        [
+            "Reflection pytest gate failed; executor must continue from the failed acceptance case.",
+            f"原始输入：{task.goal}",
+            f"pytest_case_path：{result.get('case_path')}",
+            "pytest_case：",
+            case_content,
+            "pytest_output：",
+            output or "[empty]",
+        ]
+    )
 
 
 def apply_code_test_gate(task: TaskState, decision: ReflectionDecision, draft: str = "") -> ReflectionDecision:

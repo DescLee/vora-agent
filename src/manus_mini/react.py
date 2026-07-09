@@ -294,7 +294,24 @@ class ReActLoop:
         elif original_usage >= 0.70:
             effective_budget = max(1, int(context_limit * 0.69))
 
-        compacted, snapshot = compact_messages_with_snapshot(history, token_budget=effective_budget)
+        if effective_budget < context_limit:
+            task.trace_events.append(
+                TraceEvent(
+                    phase="runtime",
+                    message="Context compression started",
+                    data={
+                        "message_type": "context_compression_started",
+                        "estimated_tokens": original_estimated,
+                        "context_limit": context_limit,
+                        "trigger_usage_percent": original_usage * 100,
+                        "compression_target": "较早的上下文消息和工具观察",
+                        "covered_message_count": len(history),
+                        "target_budget": effective_budget,
+                    },
+                )
+            )
+
+        compacted, snapshot = compact_messages_with_snapshot(history, token_budget=effective_budget, llm=self.llm)
         if (
             original_estimated > context_limit * 2
             and self._estimated_context_tokens(compacted) > context_limit
@@ -310,12 +327,29 @@ class ReActLoop:
         if snapshot is not None:
             session.compression_snapshots.append(snapshot)
             compacted_tokens = self._estimated_context_tokens(compacted)
+            task.trace_events.append(
+                TraceEvent(
+                    phase="runtime",
+                    message="Context compression completed",
+                    data={
+                        "message_type": "context_compression_completed",
+                        "estimated_tokens": original_estimated,
+                        "context_limit": context_limit,
+                        "target_budget": effective_budget,
+                        "compacted_tokens": compacted_tokens,
+                        "covered_message_count": len(snapshot.covered_message_ids),
+                        "retained_fact_count": len(snapshot.retained_facts),
+                        "snapshot_id": snapshot.id,
+                        "summary_source": snapshot.metadata.get("summary_source", "rule"),
+                    },
+                )
+            )
+            session.messages = list(compacted)
             session.messages.append(
                 Message.system(
                     "[System] 已压缩较早的上下文："
                     f"压缩前估算 {original_estimated} tokens，目标预算 {effective_budget} tokens，"
-                    f"压缩后估算 {compacted_tokens} tokens，保留消息 {len(compacted)} 条，摘要 ID {snapshot.id}。\n"
-                    f"{snapshot.summary}"
+                    f"压缩后估算 {compacted_tokens} tokens，保留消息 {len(compacted)} 条，摘要 ID {snapshot.id}。"
                 )
             )
         return compacted

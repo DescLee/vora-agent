@@ -133,6 +133,7 @@ class TaskState(BaseModel):
     step_count: int = 0
     result: str = ""
     plan_reasoning_content: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def create(cls, goal: str, cwd: Path, limits: LoopLimits | None = None) -> "TaskState":
@@ -157,6 +158,7 @@ class CompressionSnapshot(BaseModel):
     retained_facts: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -183,6 +185,7 @@ class SessionState(BaseModel):
     compression_snapshots: list[CompressionSnapshot] = Field(default_factory=list)
     pending_confirmation: PendingConfirmation | None = None
     run_ids: list[str] = Field(default_factory=list)
+    model_context_limit: int | None = None
 
     @classmethod
     def create(cls, cwd: Path) -> "SessionState":

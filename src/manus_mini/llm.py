@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from manus_mini.config import AppConfig
 from manus_mini.models import ToolCall
 
+DEFAULT_LLM_MAX_ATTEMPTS = 3
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
 
 class LLMResult(BaseModel):
     content: str = ""
@@ -137,19 +140,7 @@ class OpenAICompatibleLLMClient(LLMClient):
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.llm_timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            detail = body[:800] if body else error.reason
-            raise LLMRequestError(f"LLM HTTP {error.code}: {detail}") from error
-        except urllib.error.URLError as error:
-            raise LLMRequestError(f"LLM request failed: {error.reason}") from error
-        except TimeoutError as error:
-            raise LLMRequestError("LLM request timed out") from error
-        except json.JSONDecodeError as error:
-            raise LLMRequestError("LLM returned invalid JSON") from error
+        body = self._send_request_with_retries(request)
 
         try:
             message = self._extract_message(body)
@@ -159,6 +150,30 @@ class OpenAICompatibleLLMClient(LLMClient):
 
     def context_limit(self) -> int | None:
         return infer_model_context_limit(self.config.llm_model)
+
+    def _send_request_with_retries(self, request: urllib.request.Request) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for attempt in range(1, DEFAULT_LLM_MAX_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.config.llm_timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                if error.code not in RETRYABLE_HTTP_STATUS_CODES or attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                    body = error.read().decode("utf-8", errors="replace")
+                    detail = body[:800] if body else error.reason
+                    raise LLMRequestError(f"LLM HTTP {error.code}: {detail}") from error
+                last_error = error
+            except urllib.error.URLError as error:
+                if attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                    raise LLMRequestError(f"LLM request failed: {error.reason}") from error
+                last_error = error
+            except TimeoutError as error:
+                if attempt == DEFAULT_LLM_MAX_ATTEMPTS:
+                    raise LLMRequestError("LLM request timed out") from error
+                last_error = error
+            except json.JSONDecodeError as error:
+                raise LLMRequestError("LLM returned invalid JSON") from error
+        raise LLMRequestError(f"LLM request failed: {last_error or 'unknown error'}")
 
     def _extract_message(self, body: dict[str, Any]) -> dict[str, Any]:
         choices = body["choices"]

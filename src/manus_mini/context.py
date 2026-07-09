@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal, Protocol, Sequence
 
 from manus_mini.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation, SessionState
 from manus_mini.redaction import redact_sensitive_text
@@ -9,6 +9,11 @@ from manus_mini.redaction import redact_sensitive_text
 
 class ContextIntegrityError(ValueError):
     pass
+
+
+class ContextSummaryLLM(Protocol):
+    def complete_with_tools(self, messages: list[Any], tool_names: list[str]) -> Any:
+        ...
 
 
 PROJECT_OVERVIEW_HINT = "project_code_overview"
@@ -307,7 +312,11 @@ def build_context_bundle(
     )
 
 
-def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: int) -> tuple[list[Message], CompressionSnapshot | None]:
+def compact_messages_with_snapshot(
+    messages: Sequence[Message],
+    token_budget: int,
+    llm: ContextSummaryLLM | None = None,
+) -> tuple[list[Message], CompressionSnapshot | None]:
     if not messages:
         return [], None
 
@@ -316,10 +325,12 @@ def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: in
     if total_tokens <= token_budget:
         return list(messages), None
 
+    summary_token_budget = max(16, min(256, token_budget // 5))
+    keep_token_budget = max(1, token_budget - summary_token_budget)
     kept_reversed: list[ContextSegment] = []
     kept_tokens = 0
     for segment in reversed(segments):
-        if kept_reversed and kept_tokens + segment.estimated_tokens > token_budget:
+        if kept_reversed and kept_tokens + segment.estimated_tokens > keep_token_budget:
             break
         kept_reversed.append(segment)
         kept_tokens += segment.estimated_tokens
@@ -330,7 +341,7 @@ def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: in
         return [message for segment in kept_segments for message in segment.messages], None
 
     covered_segments = segments[:removed_count]
-    summary_text = _summarize_segments(covered_segments)
+    summary_text, summary_source = _summarize_segments_with_llm(covered_segments, llm=llm, token_budget=summary_token_budget)
     summary = Message.system(summary_text)
     snapshot = CompressionSnapshot(
         covered_message_ids=[message.id for segment in covered_segments for message in segment.messages],
@@ -338,6 +349,7 @@ def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: in
         summary=summary_text,
         retained_facts=[line for line in summary_text.splitlines() if line.startswith("- ")],
     )
+    snapshot.metadata["summary_source"] = summary_source
     compacted = [summary]
     for segment in kept_segments:
         compacted.extend(segment.messages)
@@ -345,9 +357,66 @@ def compact_messages_with_snapshot(messages: Sequence[Message], token_budget: in
     return compacted, snapshot
 
 
-def _summarize_segments(segments: Sequence[ContextSegment]) -> str:
-    parts = ["历史上下文摘要："]
+def _summarize_segments_with_llm(
+    segments: Sequence[ContextSegment],
+    llm: ContextSummaryLLM | None,
+    token_budget: int | None = None,
+) -> tuple[str, str]:
+    fallback = _summarize_segments(segments, token_budget=token_budget)
+    if llm is None:
+        return fallback, "rule"
+    try:
+        result = llm.complete_with_tools(_build_context_summary_prompt(segments, fallback), [])
+    except Exception:  # noqa: BLE001
+        return fallback, "rule_fallback"
+    content = str(getattr(result, "content", "") or "").strip()
+    if not content:
+        return fallback, "rule_fallback"
+    return _normalize_summary_text(redact_sensitive_text(content)), "llm"
+
+
+def _build_context_summary_prompt(segments: Sequence[ContextSegment], fallback: str) -> list[Message]:
+    source_lines = []
     for segment in segments:
+        for message in segment.messages:
+            if message.role == "tool":
+                source_lines.append(f"tool({message.tool_call_id or 'unknown'}): {_preview(message.content, limit=500)}")
+            else:
+                source_lines.append(f"{message.role}: {_preview(message.content, limit=500)}")
+    source_text = "\n".join(source_lines)
+    return [
+        Message.system(
+            "\n".join(
+                [
+                    "你是上下文压缩器。请把较早对话压缩成短摘要，用于后续 Agent 继续任务。",
+                    "要求：",
+                    "- 只输出中文摘要，不要输出解释。",
+                    "- 必须保留用户目标、明确约束、已做决策、文件/产物引用、工具观察中的关键事实。",
+                    "- 不要保留密钥、token、password、secret 等敏感信息。",
+                    "- 输出格式以“历史上下文摘要：”开头，后续使用短 bullet。",
+                    "",
+                    "规则压缩候选摘要：",
+                    fallback,
+                    "",
+                    "待压缩原始片段：",
+                    source_text,
+                ]
+            )
+        )
+    ]
+
+
+def _normalize_summary_text(content: str) -> str:
+    if content.startswith("历史上下文摘要："):
+        return content
+    return "历史上下文摘要：\n" + content
+
+
+def _summarize_segments(segments: Sequence[ContextSegment], token_budget: int | None = None) -> str:
+    parts = ["历史上下文摘要："]
+    max_chars = max(160, token_budget * 2) if token_budget is not None and token_budget > 0 else None
+    omitted_count = 0
+    for index, segment in enumerate(segments):
         if segment.kind == "tool_exchange":
             tool_ids = ", ".join(segment.messages[0].tool_call_ids)
             tool_summaries = [
@@ -355,13 +424,27 @@ def _summarize_segments(segments: Sequence[ContextSegment]) -> str:
                 for message in segment.messages[1:]
                 if message.role == "tool"
             ]
-            parts.append(f"- 工具交换 {tool_ids}: {'; '.join(tool_summaries)}")
+            line = f"- 工具交换 {tool_ids}: {'; '.join(tool_summaries)}"
+            if max_chars is not None and _joined_length(parts, line) > max_chars:
+                omitted_count = len(segments) - index
+                break
+            parts.append(line)
             continue
 
         message = segment.messages[0]
         speaker = "用户" if message.role == "user" else "Agent" if message.role == "agent" else message.role
-        parts.append(f"- {speaker}: {_preview(message.content)}")
+        line = f"- {speaker}: {_preview(message.content)}"
+        if max_chars is not None and _joined_length(parts, line) > max_chars:
+            omitted_count = len(segments) - index
+            break
+        parts.append(line)
+    if omitted_count:
+        parts.append(f"- 另有 {omitted_count} 段较早上下文已省略。")
     return "\n".join(parts)
+
+
+def _joined_length(parts: Sequence[str], next_line: str) -> int:
+    return len("\n".join([*parts, next_line]))
 
 
 def _preview(content: str, limit: int = 160) -> str:

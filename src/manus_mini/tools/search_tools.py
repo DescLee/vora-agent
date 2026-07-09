@@ -9,7 +9,7 @@ from typing import Any
 import requests
 from duckduckgo_search import DDGS
 
-from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult
+from manus_mini.tools.base import BaseTool, ToolResult
 
 
 class WebSearchTool(BaseTool):

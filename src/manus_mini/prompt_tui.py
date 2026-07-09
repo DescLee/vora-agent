@@ -28,7 +28,6 @@ from manus_mini.prompt_tui_formatting import (  # noqa: F401
     build_line_starts,
     format_artifact,
     format_context_usage,
-    format_latest_request_context_usage,
     format_current_action,
     format_display_value,
     format_event_details,
@@ -38,7 +37,6 @@ from manus_mini.prompt_tui_formatting import (  # noqa: F401
     format_messages,
     format_message_block,
     format_section,
-    format_messages,
     format_phase_label,
     format_process,
     format_status,
@@ -464,8 +462,19 @@ class PromptTui:
             return
 
         self.input.text = ""
+        previous_task = self.manager.current.active_task
+        if previous_task is not None and previous_task.result:
+            self.manager.current.messages.append(Message.system("已有产物:\n" f"{previous_task.result}"))
         self.manager.current.messages.append(Message.user(content))
-        self.manager.current.active_task = TaskState.create(goal=content, cwd=self.manager.current.cwd)
+        task = TaskState.create(
+            goal=content,
+            cwd=self.manager.current.cwd,
+            limits=self.manager.runtime.default_limits,
+        )
+        task.metadata["compression_snapshot_start_index"] = len(self.manager.current.compression_snapshots)
+        self.manager._ensure_session_model_context_limit()
+        task.model_context_limit = self.manager.current.model_context_limit
+        self.manager.current.active_task = task
         self.visible_trace_count = 0
         self.set_output_text(self.format_transcript_with_history(self.manager.current, show_process=True), force_follow=True)
         self.is_running = True

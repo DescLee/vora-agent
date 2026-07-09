@@ -14,6 +14,29 @@ def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
     assert manager.current.cwd == tmp_path
     assert manager.current.messages == []
     assert manager.current.active_task is None
+    assert manager.current.model_context_limit == 128_000
+
+
+def test_session_manager_resolves_model_context_limit_once(tmp_path: Path) -> None:
+    class ChangingLimitLLM(ScriptedLLM):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def context_limit(self) -> int:
+            self.calls += 1
+            return 1_000_000 if self.calls == 1 else 128_000
+
+    llm = ChangingLimitLLM()
+    manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=llm))
+
+    assert manager.current.model_context_limit == 1_000_000
+    assert llm.calls == 1
+
+    manager.current.model_context_limit = 777_000
+    manager._ensure_session_model_context_limit()
+
+    assert manager.current.model_context_limit == 777_000
+    assert llm.calls == 1
 
 
 def test_session_manager_handles_user_message(monkeypatch, tmp_path: Path) -> None:

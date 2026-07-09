@@ -129,6 +129,37 @@
   - `最新请求 xx.x%`：只在 LLM 返回 `usage.prompt_tokens` 后展示，用于观察最近一次真实请求的 prompt 占比。
 - 验证：`tests/test_prompt_tui.py` 覆盖 `当前上下文` 不再被 `last_prompt_tokens` 覆盖，以及 `最新请求` 单独展示。
 
+### 2.12.2 上下文压缩缺少显式状态提示
+
+- 现象：自动或手动触发上下文压缩后，用户只能从系统消息或上下文占比间接判断，状态栏没有明确提示“正在压缩”或“已压缩”。
+- 修复：
+  - 状态栏新增上下文压缩状态片段。
+  - 压缩开始时展示触发逻辑，例如 `上下文达到 70.0%，将对较早的上下文消息和工具观察进行压缩，压缩进行中`。
+  - 即使压缩很快完成，状态栏也会让“压缩进行中”至少保留 2 秒，避免用户完全看不到过程提示。
+  - 压缩完成后展示 `上下文已压缩 N 条`，其中 `N` 来自最近一次 compression snapshot 覆盖的消息数。
+  - 新一轮用户输入开始时记录当前已有压缩快照数量，状态栏只展示本轮新增压缩状态；上一轮的 `上下文已压缩` 提示会在下一个对话开始后消失。
+  - 自动压缩链路在 ReAct 构造上下文时写入 `context_compression_started` 和 `context_compression_completed` trace event。
+- 验证：
+  - `tests/test_prompt_tui.py` 覆盖触发逻辑文案、压缩中至少 2 秒、压缩完成、下一轮输入后隐藏上一轮压缩提示。
+  - 全量测试通过。
+
+### 2.12.3 上下文压缩摘要只有规则化裁剪
+
+- 现象：自动压缩之前只使用本地规则摘要，能稳定保留 tool exchange 和截断片段，但摘要质量有限，不能像智能体一样提炼用户目标、决策和隐含约束。
+- 修复：
+  - `compact_messages_with_snapshot()` 增加可选 `llm` 参数。
+  - 自动压缩时，ReAct 会把当前 LLM 传给压缩器，优先请求 LLM 生成语义摘要。
+  - LLM 压缩提示要求保留用户目标、明确约束、已做决策、文件/产物引用和工具观察关键事实。
+  - LLM 压缩失败、返回空内容或没有可用 LLM 时，自动回退到原有规则摘要。
+  - `CompressionSnapshot.metadata["summary_source"]` 记录摘要来源：`llm`、`rule` 或 `rule_fallback`。
+  - 自动压缩完成 trace event 记录 `summary_source`，方便后续排查压缩质量。
+- 当前取舍：
+  - LLM 只负责“被移除片段”的摘要生成；分段、保留最近上下文、tool exchange 完整性校验仍由本地规则控制。
+  - 这样能提升摘要质量，同时避免 LLM 输出破坏 tool call / tool result 配对。
+- 验证：
+  - `tests/test_context.py` 覆盖 LLM 摘要成功和 LLM 失败回退规则摘要。
+  - `tests/test_runtime.py` 覆盖 ReAct 自动压缩会调用 LLM 摘要，并在 trace 中记录 `summary_source=llm`。
+
 ### 2.13 Planner 计划与执行过程解释不足
 
 - 现象：Planner 已生成计划，但 TUI 执行过程里看不到完整计划，也不知道当前执行到了哪一步。
@@ -1353,3 +1384,173 @@ Agent：
   - 捕获内容写入 `ToolResult.data["warnings"]` / `ToolResult.data["stderr"]`。
   - 因为 `node.jsonl` 会记录工具结果，排查时仍能看到这些环境信息。
 - 验证：`tests/test_tools.py` 覆盖 warning/stderr 捕获与记录。
+
+## 14. 面向 8 年经验面试项目的系统补强
+
+更新日期：2026-07-09
+
+本轮更新针对“作为 8 年经验岗位面试项目，技术深度和工程可信度还不够完整”的问题进行补强。重点不是继续堆功能，而是补齐 Agent 质量门禁、评测体系、架构取舍文档、生产化说明和文档一致性。
+
+### 14.1 Reflection 曾经是 forced accept
+
+- 现象：`ReflectionLoop.run()` 之前直接返回 `reflection forced accept`，导致技术设计中宣称的 Reflection 质量反馈循环在主链路上不成立。
+- 风险：
+  - 代码任务可能在没有测试、测试失败或结果不完整时被接受。
+  - 面试官看代码时会认为“三层 Loop”只是文档设计，不是实际实现。
+- 修复：
+  - 非代码任务当前版本先直接放过，并明确记录 `non-code task accepted without pytest reflection gate`。
+  - 代码类任务进入真实 pytest 反思门禁。
+  - Reflection 会生成临时 `test_reflection_acceptance.py` 并执行 `python -m pytest`。
+  - gate 失败时返回 `local_update`，reason 中包含原始输入、pytest case 路径、case 内容和 pytest 输出。
+  - Runtime 会把失败 reason 作为 system message 回流给下一轮 ReAct/Executor 继续执行。
+- 当前取舍：
+  - 这版 pytest gate 先验证“代码任务必须有最新测试通过证据”和“草稿非空”。
+  - 业务级 pytest case 生成留到下一版。
+  - 非代码任务的结构化验收 case 也留到下一版。
+- 验证：
+  - `tests/test_planner_reflector.py` 覆盖代码任务无验证不接受、pytest case 被执行、非代码任务不跑 pytest gate。
+  - `tests/test_runtime.py` 同步新 Reflection 行为。
+  - `python evals/run_evals.py` 覆盖 `reflection_rejects_unvalidated_code` 和 `reflection_accepts_validated_code`。
+
+### 14.2 缺少 Agent 行为级 eval
+
+- 现象：项目已有大量单元测试，但缺少面向 Agent 产品约束的 eval。单测能证明模块行为，不足以说明 Agent 是否遵守质量门禁和安全边界。
+- 修复：
+  - 新增 `evals/run_evals.py`。
+  - 新增 `evals/README.zh.md` 说明 eval 与单测的分工。
+- 当前 eval 覆盖：
+  - 代码任务没有测试证据时不能通过 Reflection。
+  - 代码任务有测试证据时会执行 pytest gate 并通过。
+  - 非代码任务当前版本不运行 pytest gate。
+  - 敏感信息不会写入长期记忆。
+  - assistant tool call 与 tool result 必须成组完整。
+  - 无依赖只读工具可以进入同一并行批次。
+  - 文件工具拒绝 workspace 外路径。
+- 验证：
+  - `python evals/run_evals.py` 输出 `total=7, passed=7, failed=0`。
+
+### 14.3 LLM adapter 缺少瞬时错误重试
+
+- 现象：OpenAI-compatible client 之前遇到 HTTP 429、5xx、网络错误或超时会直接失败。
+- 风险：真实使用中，短暂限流或网络抖动会直接打断任务，影响长任务稳定性。
+- 修复：
+  - 增加 `DEFAULT_LLM_MAX_ATTEMPTS = 3`。
+  - 对 HTTP 429、500、502、503、504、`URLError` 和 `TimeoutError` 做基础重试。
+  - HTTP 400 等确定性错误仍直接包装为 `LLMRequestError`，不做无意义重试。
+  - JSON 解析失败仍直接失败，避免重复请求掩盖 provider 返回格式问题。
+- 验证：
+  - `tests/test_llm.py::test_openai_compatible_client_retries_transient_http_error` 覆盖第一次 429、第二次成功。
+  - 全量 `tests/test_llm.py` 通过。
+
+### 14.4 文档曾经和实现不一致
+
+- 现象：
+  - README 对能力描述偏简略，不能支撑 8 年经验岗位面试讲解。
+  - 技术设计文档仍提到早期 `textual` 方案和旧目录结构。
+  - 完成度清单中的测试数量、Reflection 状态和命令工具描述已经落后于代码。
+- 修复：
+  - 重写 README，明确项目定位、已实现能力、当前边界、运行方式、验证命令和面试展示建议。
+  - 更新 `docs/v1-technical-design.md`，以当前 prompt_toolkit TUI、SQLite memory、JSON session、Reflection pytest gate 为准。
+  - 更新 `docs/v1-product-design.md`，补充代码任务 pytest gate 和命令工具确认边界。
+  - 更新 `docs/v1-completion-test-checklist.md`，同步当前验证结果、Reflection 状态和 eval 数量。
+- 验证：
+  - 文档均为中文或已有中文版本，符合项目文档语言规范。
+  - 验证命令已同步为 `ruff check src tests evals`、`pytest -q`、`python evals/run_evals.py`。
+
+### 14.5 缺少架构决策记录
+
+- 现象：项目中有不少重要设计取舍，但没有 ADR，面试时容易变成口头解释。
+- 修复：新增 `docs/adr/` 中文 ADR：
+  - `0001-self-managed-agent-runtime.zh.md`：为什么自研 Agent Runtime，而不是直接套 Agent 框架。
+  - `0002-sqlite-memory-and-json-session-store.zh.md`：为什么长期记忆用 SQLite、会话用 JSON。
+  - `0003-preserve-tool-exchange-integrity.zh.md`：为什么上下文压缩必须保持 tool exchange 成组完整。
+  - `0004-reflection-pytest-gate-for-code-tasks.zh.md`：为什么代码任务在 Reflection 阶段执行 pytest gate。
+- 价值：
+  - 面试时能展示架构判断，而不只是实现细节。
+  - 后续维护者能理解当前设计边界和演进方向。
+
+### 14.6 缺少生产化、安全和测试策略说明
+
+- 现象：当前项目是本地单用户 Agent Runtime MVP，但缺少清晰文档说明“如果生产化还差什么”。这会影响高级岗位面试中的系统设计追问。
+- 修复：新增中文治理文档：
+  - `docs/production-readiness.zh.md`：任务队列、执行隔离、幂等恢复、观测性、配置治理和故障处理策略。
+  - `docs/security-model.zh.md`：文件权限、写入确认、命令执行边界、敏感信息处理和生产化权限模型。
+  - `docs/testing-strategy.zh.md`：单元测试、集成测试、eval、CI 建议和后续评测方向。
+  - `docs/demo-scenarios.zh.md`：面试固定 demo 场景和常见追问回答。
+- 价值：
+  - 明确当前不是生产级平台，但具备生产化演进路径。
+  - 能支撑 8 年经验岗位对稳定性、安全性、可观测性和质量体系的追问。
+
+### 14.7 静态检查问题清理
+
+- 现象：新增 eval 后跑 `ruff check src tests evals` 暴露了几个静态检查问题：
+  - `prompt_tui.py` 重复 import `format_messages`。
+  - `search_tools.py` import 了未使用的 `ToolPreview`。
+  - `tests/test_logging.py` import 了未使用的 `re`。
+  - `evals/run_evals.py` 为了脚本独立运行，需要先把 `src` 加入 `sys.path`，触发 ruff 的 `E402`。
+- 修复：
+  - 删除重复 import 和未使用 import。
+  - 对 eval 脚本增加 `# ruff: noqa: E402`，明确这是脚本入口的合理例外。
+- 验证：
+  - `ruff check src tests evals` 通过。
+
+### 14.8 当前验证结果
+
+本轮更新后的验证结果：
+
+```text
+ruff check src tests evals
+All checks passed!
+
+pytest -q
+327 passed in 10.50s
+
+python evals/run_evals.py
+total=7, passed=7, failed=0
+```
+
+### 14.9 剩余优化方向
+
+- 非代码任务 Reflection：下一版增加结构化 acceptance case，例如必须回应用户约束、必须包含来源、不得空泛总结。
+- 代码任务业务级 pytest：让模型基于原始输入生成更贴近业务语义的 pytest，而不只检查测试证据。
+- LLM 重试策略：当前是固定 3 次基础重试，后续可增加指数退避、jitter、多 provider fallback 和熔断。
+- 命令执行沙箱：当前仍是本机 subprocess，生产化应迁移到容器或强沙箱。
+- Eval 任务集：当前是代码级 harness，后续可增加声明式 `evals/cases.zh.json` 和真实 demo 任务评分。
+
+## 15. 上下文占比与自动压缩稳定性修复
+
+更新日期：2026-07-09
+
+### 15.1 上下文窗口分母在不同 run 间跳变
+
+- 现象：同一会话中，状态栏“当前上下文”会从 60%+ 突然降到 8% 左右。
+- 根因：
+  - 部分 run 使用默认 `128_000` 作为上下文窗口。
+  - 后续 run 又从 LLM client 读取到真实 `1_000_000` 上下文窗口。
+  - 分子并没有下降，是分母从 128K 变成 1M，导致占比突然变小。
+- 修复：
+  - `SessionState` 新增 `model_context_limit`。
+  - `SessionManager` 创建或进入会话时只解析一次当前模型上下文窗口。
+  - 后续所有 `TaskState.model_context_limit` 都继承会话级固定值，不再每轮重新读取。
+  - TUI 状态栏右侧展示固定窗口大小，例如 `窗口 1,000,000`。
+- 验证：
+  - `tests/test_session.py` 覆盖会话创建时解析一次模型窗口，后续不会被覆盖。
+  - `tests/test_runtime.py` 覆盖 runtime 始终使用 session 固定窗口。
+  - `tests/test_prompt_tui.py` 覆盖状态栏窗口展示。
+
+### 15.2 自动压缩后状态栏仍按未压缩历史累计
+
+- 现象：状态栏显示“上下文已压缩 N 条”，但“当前上下文”占比仍继续增长，接近 90% 后也没有明显下降。
+- 根因：
+  - ReAct 构造上下文时生成了 `compacted`，但只把它用于当次 LLM 请求。
+  - 原始 `session.messages` 没有被替换，只追加了一条压缩说明消息。
+  - 状态栏和下一轮预算仍按未压缩的完整历史计算。
+- 修复：
+  - 自动压缩成功后，将 `session.messages` 替换为 `compacted`。
+  - 压缩说明只保留预算信息，不再重复写入完整摘要，避免“越压越大”。
+  - 规则摘要按预算裁剪，超出部分记录为省略段数。
+  - 压缩快照记录 `summary_source`，支持 LLM 摘要和规则摘要兜底的可观测性。
+- 验证：
+  - `tests/test_runtime.py::test_runtime_persists_auto_compacted_context` 覆盖自动压缩后 session token 下降。
+  - `tests/test_context.py` 覆盖摘要裁剪、敏感信息脱敏、LLM 摘要与失败兜底。
+  - 全量 `pytest -q` 通过。

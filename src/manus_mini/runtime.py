@@ -73,6 +73,7 @@ class AgentRuntime:
 
         task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits)
         task.session_id = session.session_id
+        task.metadata["compression_snapshot_start_index"] = len(session.compression_snapshots)
         self.logger.record(
             session.session_id,
             task.run_id,
@@ -82,9 +83,11 @@ class AgentRuntime:
                 "message_id": user_message_id,
             },
         )
-        context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
-        model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
-        task.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
+        if session.model_context_limit is None or session.model_context_limit <= 0:
+            context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
+            model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
+            session.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
+        task.model_context_limit = session.model_context_limit
         self._build_context_bundle(session, content, relevant_memories)
         plan_steps, plan_reasoning = self._build_plan(content, session, task.run_id)
         task.plan = plan_steps

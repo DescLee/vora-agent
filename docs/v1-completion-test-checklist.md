@@ -21,15 +21,18 @@
 当前验证结果：
 
 ```text
-pytest: 170 passed in 2.89s
-ruff check src tests: passed
+pytest: 327 passed in 10.50s
+ruff check src tests evals: passed
+python evals/run_evals.py: 7 passed
 ```
 
 注意：测试通过只说明当前已有行为稳定，不代表 V1 文档承诺全部完成。
 
 ## 总体结论
 
-当前项目已经补齐了 TUI Agent 的主链路：TUI 入口、会话状态、Runtime/ReAct/Reflection、Planner/Executor/Observer/Reflector、文件工具、工具调度、上下文压缩、长期记忆、确认写入、dry-run、日志与 Markdown 产物输出。
+当前项目已经补齐了 TUI Agent 的主链路：TUI 入口、会话状态、Runtime/ReAct/Reflection、Planner/Executor/Observer/Reflector、文件工具、命令工具、工具调度、上下文压缩、长期记忆、确认写入、dry-run、日志与 Markdown 产物输出。
+
+代码类任务的 Reflection 已经从 forced accept 升级为 pytest 验收门禁：没有测试证据时不允许通过，会把原始输入、pytest case 和失败原因回流到下一轮执行。非代码任务当前版本仍直接放过，下一版本再接结构化验收 case。
 
 当前清单中列出的功能问题已经全部修正，剩余内容仅是可继续演进的优化建议，不再属于 V1 完成度阻断项。
 
@@ -48,7 +51,7 @@ ruff check src tests: passed
 | LLM API harness | `OpenAICompatibleLLMClient` 测试中 monkeypatch `urllib.request.urlopen` | 不发真实网络请求，也能验证 HTTP 错误、畸形响应、tool schema 和消息转换 | 已完成 |
 | Reporter/Logger harness | `Reporter(tmp_path / "outputs")`、`EventLogger(tmp_path / "runs")` | 将产物与事件日志输出到临时目录，验证报告分块、脱敏和 trace 记录 | 已完成 |
 
-从质量检测角度看，这套 harness 的价值是：当前 277 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
+从质量检测角度看，这套 harness 的价值是：当前 327 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
 
 但 harness 设计仍有少量可继续增强的点：
 
@@ -65,7 +68,7 @@ ruff check src tests: passed
 | CLI 参数：`--cwd`、`--max-steps`、`--max-react`、`--max-reflect`、`--dry-run` 等 | P1 | 已完成 | `argparse` 已接入，CLI 和 TUI 入口都支持参数化运行。 |
 | 三层 Loop 基础结构 | P0 | 已完成 | Runtime -> Reflection -> ReAct 已接入，且 Planner / Reflector / Executor / Observer 已拆分。 |
 | ReAct 工具循环 | P3 | 已完成 | 能处理 LLM tool_calls、执行工具、回填工具结果、达到上限报错。 |
-| Reflection 质量反馈循环 | P0 | 已完成 | 已支持 `accept/local_update/regenerate/replan` 决策，并接入主链路。 |
+| Reflection 质量反馈循环 | P0 | 已完成 | 已支持 `accept/local_update/regenerate/replan` 决策，并接入主链路；代码任务会执行 pytest gate，非代码任务下一版补结构化验收。 |
 | 工程兜底循环 | P0 | 已完成 | 已支持多工程步推进、超时、异常处理和反思回路。 |
 | Planner | P0 | 已完成 | 已有独立 Planner 模块并接入 Runtime，可区分 chat / research / code / automation / report 意图。 |
 | Executor | P1 | 已完成 | 工具执行逻辑已内聚为独立 Executor 模块。 |
@@ -81,7 +84,7 @@ ruff check src tests: passed
 | 用户拒绝写入后的替代流程 | P0 | 已完成 | 已接入拒绝确认后的状态回写和替代回复。 |
 | `dry-run` 模式 | P0 | 已完成 | 已接入 dry-run 参数和写入拒绝策略。 |
 | 路径逃逸限制 | P3 | 已完成 | `resolve_workspace_path()` 限制 workspace 内路径，测试覆盖。 |
-| 默认不执行 shell 命令 | P3 | 已完成 | 当前没有 command 工具。 |
+| 命令工具风险控制 | P3 | 已完成 | 已有 `run_bash` 和 `run_temp_script`，包含危险模式拒绝、风险确认、超时和输出截断。 |
 | 写入前保存原内容摘要 | P2 | 已完成 | 写入/追加工具都会记录 `previous_content_preview`。 |
 | 长期记忆存储 | P1 | 已完成 | `MemoryManager` 支持 add/search/filter/delete，并接入 Runtime/TUI。 |
 | 记忆注入到模型上下文 | P1 | 已完成 | Runtime 会检索相关记忆并注入对话上下文。 |
@@ -140,7 +143,7 @@ ruff check src tests: passed
 ### P3：低风险验证与已完成项
 
 1. 保持现有 ReAct、文件工具、路径限制、Reporter、敏感信息过滤等测试覆盖。
-2. 后续改动应避免破坏当前 277 个通过测试。
+2. 后续改动应避免破坏当前 327 个通过测试和 7 个 eval 用例。
 
 ## 建议验收顺序
 

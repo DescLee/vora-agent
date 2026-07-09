@@ -271,7 +271,7 @@ def test_reflection_follow_up_context_includes_project_structure(tmp_path: Path)
     assert "不要要求用户再提供项目描述、链接或代码" in context
 
 
-def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> None:
+def test_reflection_loop_passes_non_code_task_without_pytest_gate(tmp_path: Path) -> None:
     class FakeReactLoop:
         def run(self, task, session):  # noqa: ANN001, ANN201, ARG002
             return "您还没有告诉我具体是哪个项目呢？请先提供项目的描述、链接或代码。"
@@ -303,7 +303,71 @@ def test_reflection_loop_uses_llm_to_decide_draft_quality(tmp_path: Path) -> Non
     assert llm.tool_names == []
     assert result.accepted is True
     assert result.decision == "accept"
-    assert result.reason == "reflection forced accept"
+    assert result.reason == "non-code task accepted without pytest reflection gate"
+
+
+def test_reflection_run_rejects_code_task_without_validation(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def run(self, task, session):  # noqa: ANN001, ANN201, ARG002
+            return "已修改代码"
+
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"looks good"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    session = SessionState.create(cwd=tmp_path)
+    loop = ReflectionLoop(react_loop=FakeReactLoop(), llm=AcceptingLLM())
+
+    result = loop.run(task, session)
+
+    assert result.accepted is False
+    assert result.decision == "local_update"
+    assert "修改代码修复 bug" in result.reason
+    assert "pytest" in result.reason
+
+
+def test_reflection_run_executes_pytest_case_for_code_task(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def run(self, task, session):  # noqa: ANN001, ANN201, ARG002
+            return "已修改代码，并通过测试"
+
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"tests passed"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_temp_script finished: ok",
+            data={
+                "tool_name": "run_temp_script",
+                "ok": True,
+                "summary": "command exited 0",
+                "exit_code": 0,
+                "stdout": "1 passed",
+            },
+        )
+    )
+    session = SessionState.create(cwd=tmp_path)
+    loop = ReflectionLoop(react_loop=FakeReactLoop(), llm=AcceptingLLM())
+
+    result = loop.run(task, session)
+
+    assert result.accepted is True
+    pytest_events = [
+        event.data
+        for event in task.trace_events
+        if event.phase == "reflection" and "case_content" in event.data
+    ]
+    assert pytest_events
+    assert pytest_events[-1]["ok"] is True
+    assert pytest_events[-1]["exit_code"] == 0
+    assert "def test_code_task_has_passing_validation_after_latest_change" in pytest_events[-1]["case_content"]
+    assert "修改代码修复 bug" in pytest_events[-1]["case_content"]
 
 
 def test_reflection_rejects_code_change_without_test_run(tmp_path: Path) -> None:
