@@ -688,6 +688,51 @@ def test_react_loop_rejects_shell_python_code_write_before_test_case_runs(tmp_pa
     assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
 
 
+def test_react_loop_rejects_compound_shell_code_write_after_test_file_write(tmp_path: Path) -> None:
+    class CompoundShellEditBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-compound-write",
+                            name="run_bash",
+                            args={
+                                "command": (
+                                    "cat <<'EOF' > tests/test_app.py\n"
+                                    "def test_app():\n"
+                                    "    assert True\n"
+                                    "EOF\n"
+                                    "cat <<'EOF' > app.py\n"
+                                    "new\n"
+                                    "EOF"
+                                ),
+                                "confirmed": True,
+                            },
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    (tmp_path / "app.py").write_text("old\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
+
+    result = ReActLoop(CompoundShellEditBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old\n"
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
 def test_react_loop_allows_five_read_files_in_one_iteration(tmp_path: Path) -> None:
     class FiveReadFilesLLM:
         def __init__(self) -> None:

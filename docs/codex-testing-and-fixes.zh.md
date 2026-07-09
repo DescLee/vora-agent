@@ -379,6 +379,26 @@
 - `run_bash` 通过 Python 写入 `app.py` 这类生产代码文件时，也必须先有测试执行证据。
 - Python 写文件表达式不应成为绕过代码测试门禁的旁路。
 
+### 20. 复合 shell 命令只检查第一个写入目标，后续生产代码写入会绕过门禁
+
+#### 现象
+
+- `_shell_write_path()` 之前只返回第一个识别到的写入路径。
+- 如果模型在同一条 `run_bash` 里先写测试文件，再写生产代码，例如先 `> tests/test_app.py` 再 `> app.py`，门禁只看到测试路径。
+- 因为测试路径不属于生产代码，后续 `app.py` 写入会绕过“先测试再改代码”的门禁。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中把 shell 写入路径解析从单路径改成多路径。
+- `_shell_write_paths()` 会收集命令中所有可识别写入目标。
+- 只要任一目标是生产代码文件，且没有测试执行证据，就返回：
+  - `CODE_CHANGE_REQUIRES_TEST_FIRST`
+
+#### 回归点
+
+- 同一条 `run_bash` 同时写测试文件和生产代码文件时，也必须先有测试执行证据。
+- 测试文件写入不应掩盖后续生产代码写入。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -404,6 +424,7 @@
   - `run_bash` 的 `tee` 写生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的原地编辑生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的 Python 写生产代码命令也必须先通过测试前置门禁
+  - 复合 shell 命令中后续生产代码写入也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
@@ -417,7 +438,7 @@ pytest -q
 
 结果：
 
-- `357 passed`
+- `358 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -434,6 +455,7 @@ pytest -q
 - `run_bash` 通过 `tee` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 原地编辑生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 Python 写生产代码时也不能绕过“先测试再改代码”的门禁
+- 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议

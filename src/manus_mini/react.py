@@ -798,11 +798,12 @@ class ReActLoop:
 
     def _code_change_precondition_error(self, call, task: TaskState, session: SessionState) -> ToolResult | None:
         if call.name in CODE_WRITE_TOOLS:
-            path = _tool_write_path(call)
+            paths = [_tool_write_path(call)]
         elif call.name in SHELL_CODE_WRITE_TOOLS:
-            path = _shell_write_path(call)
+            paths = _shell_write_paths(call)
         else:
             return None
+        path = next((item for item in paths if item is not None and _is_production_code_path(item)), None)
         if path is None or not _is_production_code_path(path):
             return None
         if _has_prior_test_execution(task, session):
@@ -1191,27 +1192,25 @@ def _tool_write_path(call) -> str | None:
     return _normalize_relative_path(str(raw_path))
 
 
-def _shell_write_path(call) -> str | None:
+def _shell_write_paths(call) -> list[str]:
     if call.name == "run_bash":
         text = str(call.args.get("command") or "")
     elif call.name == "run_temp_script":
         text = str(call.args.get("content") or "")
     else:
-        return None
-    match = re.search(r"\bsed\s+-i(?:\s+['\"][^'\"]*['\"])?\s+['\"][^'\"]*['\"]\s+([A-Za-z0-9_.\-/]+)", text)
-    if match is None:
-        match = re.search(r"\bperl\s+-pi(?:\s+['\"][^'\"]*['\"])?\s+['\"][^'\"]*['\"]\s+([A-Za-z0-9_.\-/]+)", text)
-    if match is None:
-        match = re.search(r"\btee(?:\s+-a)?\s+(?!/)([A-Za-z0-9_.\-/]+)", text)
-    if match is None:
-        match = re.search(r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)", text)
-    if match is None:
-        match = re.search(r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.write_text\s*\(", text)
-    if match is None:
-        match = re.search(r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]", text)
-    if match is None:
-        return None
-    return _normalize_relative_path(match.group(1))
+        return []
+    patterns = [
+        r"\bsed\s+-i(?:\s+['\"][^'\"]*['\"])?\s+['\"][^'\"]*['\"]\s+([A-Za-z0-9_.\-/]+)",
+        r"\bperl\s+-pi(?:\s+['\"][^'\"]*['\"])?\s+['\"][^'\"]*['\"]\s+([A-Za-z0-9_.\-/]+)",
+        r"\btee(?:\s+-a)?\s+(?!/)([A-Za-z0-9_.\-/]+)",
+        r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)",
+        r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.write_text\s*\(",
+        r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]",
+    ]
+    paths: list[str] = []
+    for pattern in patterns:
+        paths.extend(_normalize_relative_path(match.group(1)) for match in re.finditer(pattern, text))
+    return paths
 
 
 def _is_production_code_path(path: str) -> bool:
