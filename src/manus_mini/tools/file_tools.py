@@ -506,7 +506,7 @@ class ReplaceInFileTool(BaseTool):
     name = "replace_in_file"
     description = "Replace exact text inside an existing workspace file."
     risk_level = "write"
-    requires_confirmation = False
+    requires_confirmation = True
     is_read_only = False
 
     def describe_preview(self, **kwargs: Any) -> str:

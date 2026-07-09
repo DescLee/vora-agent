@@ -529,14 +529,14 @@ def test_react_loop_rejects_code_write_before_test_case_runs(tmp_path: Path) -> 
             self.calls += 1
             if self.calls == 1:
                 return LLMResult(
-                    tool_calls=[
-                        ToolCall(
-                            id="call-replace",
-                            name="replace_in_file",
-                            args={"path": "app.py", "old_text": "old", "new_text": "new"},
-                        )
-                    ]
-                )
+                        tool_calls=[
+                            ToolCall(
+                                id="call-replace",
+                                name="replace_in_file",
+                                args={"path": "app.py", "old_text": "old", "new_text": "new", "confirmed": True},
+                            )
+                        ]
+                    )
             tool_messages = [message for message in messages if message.role == "tool"]
             assert tool_messages
             assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
@@ -771,9 +771,9 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             self.calls += 1
             if self.calls == 1:
-                return LLMResult(tool_calls=[ToolCall(id="call-bash-1", name="run_bash", args={"command": "printf x >> marker.txt"})])
+                return LLMResult(tool_calls=[ToolCall(id="call-bash-1", name="run_bash", args={"command": "printf x"})])
             if self.calls == 2:
-                return LLMResult(tool_calls=[ToolCall(id="call-bash-2", name="run_bash", args={"command": "printf x >> marker.txt"})])
+                return LLMResult(tool_calls=[ToolCall(id="call-bash-2", name="run_bash", args={"command": "printf x"})])
             return LLMResult(content="ok")
 
     session = SessionState.create(cwd=tmp_path)
@@ -782,7 +782,6 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
     result = ReActLoop(RepeatingCommandLLM(), ToolRegistry()).run(task, session)
 
     assert result == "ok"
-    assert (tmp_path / "marker.txt").read_text(encoding="utf-8") == "x"
     command_events = [
         event for event in task.trace_events
         if event.phase == "tool" and event.data.get("tool_name") == "run_bash"
@@ -820,6 +819,32 @@ def test_react_loop_requires_confirmation_when_llm_marks_command_high_risk(tmp_p
     assert session.pending_confirmation.tool_name == "run_bash"
     assert "LLM marked command as high risk" in session.pending_confirmation.summary
     assert not external_path.exists()
+
+
+def test_run_bash_in_place_file_edit_requires_confirmation(tmp_path: Path) -> None:
+    class SedEditLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-sed-edit",
+                        name="run_bash",
+                        args={"command": "sed -i '' 's/^old line$/new line/' note.md"},
+                    )
+                ]
+            )
+
+    (tmp_path / "note.md").write_text("# Note\n\nold line\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请把 note.md 里的 old line 改成 new line。", cwd=tmp_path)
+
+    result = ReActLoop(SedEditLLM(), ToolRegistry()).run(task, session)
+
+    assert "确认" in result or "即将执行" in result
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "run_bash"
+    assert "modifies workspace files" in session.pending_confirmation.summary
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "# Note\n\nold line\n"
 
 
 def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_path: Path) -> None:
@@ -915,7 +940,7 @@ def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_p
                         ToolCall(
                             id="call-replace",
                             name="replace_in_file",
-                            args={"path": "app.py", "old_text": "old", "new_text": "new"},
+                            args={"path": "app.py", "old_text": "old", "new_text": "new", "confirmed": True},
                         )
                     ]
                 )
@@ -984,7 +1009,7 @@ def test_react_loop_does_not_validate_code_change_when_test_output_contains_fail
             if self.calls == 1:
                 return LLMResult(tool_calls=[ToolCall(id="call-test-before", name="run_bash", args={"command": "python -m pytest tests/test_app.py -q | tail -40"})])
             if self.calls == 2:
-                return LLMResult(tool_calls=[ToolCall(id="call-replace", name="replace_in_file", args={"path": "app.py", "old_text": "old", "new_text": "new"})])
+                return LLMResult(tool_calls=[ToolCall(id="call-replace", name="replace_in_file", args={"path": "app.py", "old_text": "old", "new_text": "new", "confirmed": True})])
             if self.calls == 3:
                 return LLMResult(tool_calls=[ToolCall(id="call-test", name="run_bash", args={"command": "python -m pytest tests/test_app.py -q | tail -40"})])
             return LLMResult(content="测试失败，继续修复。")
@@ -1429,6 +1454,33 @@ def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) ->
     assert any(observation.ok and observation.summary == "command exited 0" for observation in second_turn.active_task.observations)
 
 
+def test_react_loop_requires_confirmation_before_replacing_file(tmp_path: Path) -> None:
+    class ReplaceLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-replace-note",
+                        name="replace_in_file",
+                        args={"path": "note.md", "old_text": "old line", "new_text": "new line"},
+                    )
+                ]
+            )
+
+    (tmp_path / "note.md").write_text("# Note\n\nold line\n", encoding="utf-8")
+    manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=ReplaceLLM()))
+
+    first_turn = manager.handle_user_message("请把 note.md 里的 old line 改成 new line")
+
+    assert first_turn.pending_confirmation is not None
+    assert first_turn.pending_confirmation.tool_name == "replace_in_file"
+    assert first_turn.active_task is not None
+    assert first_turn.active_task.status == "waiting_confirmation"
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "# Note\n\nold line\n"
+    assert "-old line" in first_turn.pending_confirmation.diff_preview
+    assert "+new line" in first_turn.pending_confirmation.diff_preview
+
+
 def test_confirm_pending_confirmation_executes_stored_tool_call_before_follow_up(tmp_path: Path) -> None:
     class WriteOnceThenAnswerLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
@@ -1525,22 +1577,13 @@ def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) 
 
     result = ReActLoop(ReplaceThenAnswerLLM(), ToolRegistry()).run(task, session)
 
-    assert result == "ok"
-    diff_events = [
-        event for event in task.trace_events
-        if event.phase == "tool" and event.data.get("message_type") == "diff_preview"
-    ]
-    assert len(diff_events) == 1
-    assert diff_events[0].data["tool_name"] == "replace_in_file"
-    assert diff_events[0].data["tool_call_id"] == "call-replace"
-    assert "--- a/app.py" in diff_events[0].data["diff_preview"]
-    assert "-    return 'old'" in diff_events[0].data["diff_preview"]
-    assert "+    return 'new'" in diff_events[0].data["diff_preview"]
-    replace_events = [
-        event for event in task.trace_events
-        if event.phase == "tool" and event.data.get("tool_call_id") == "call-replace" and "ok" in event.data
-    ]
-    assert task.trace_events.index(diff_events[0]) < task.trace_events.index(replace_events[0])
+    assert result == "即将修改: Replace text in app.py"
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "replace_in_file"
+    assert session.pending_confirmation.tool_call_id == "call-replace"
+    assert "--- a/app.py" in session.pending_confirmation.diff_preview
+    assert "-    return 'old'" in session.pending_confirmation.diff_preview
+    assert "+    return 'new'" in session.pending_confirmation.diff_preview
 
 
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:

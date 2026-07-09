@@ -141,6 +141,46 @@
 
 - 搜索 0 结果时，最终回答必须显式提示来源不足，而不是直接伪装成已联网核实结论。
 
+### 8. `replace_in_file` 会绕过写入确认流
+
+#### 现象
+
+- 在真实测试中，用户要求“把 `note.md` 里的 `old line` 改成 `new line`”时，Agent 可能直接调用 `replace_in_file` 完成修改。
+- 修改发生前没有进入 `pending_confirmation`，文件内容被直接改写。
+- 这与项目声明的“写入前需人工确认”不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中将 `replace_in_file` 纳入确认流。
+- 现在 `replace_in_file` 会像 `write_file` / `append_file` 一样先生成 diff 预览，再等待用户确认。
+
+#### 回归点
+
+- `replace_in_file` 修改已有文件时，必须进入 `waiting_confirmation`。
+- 未确认前，目标文件内容不得发生变化。
+
+### 9. `run_bash` 中明显会改文件的命令未被识别为高风险写入
+
+#### 现象
+
+- 在真实测试中，模型可能绕过文件工具，改用 `run_bash` 执行诸如 `sed -i`、重定向写文件等命令直接修改工作区文件。
+- 旧实现只依赖 LLM 风险裁判或通用黑名单，无法稳定识别这类“本地文件原地修改”命令。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加本地启发式风险识别。
+- 目前会优先拦截这类明显的工作区文件修改命令并进入确认流，例如：
+  - `sed -i`
+  - `perl -pi`
+  - `printf/echo > file` 或 `>> file`
+  - 常见 Python 文件写入调用
+- 本地启发式先于 LLM 风险判断生效，避免“命令已执行但才发现是写入”的问题。
+
+#### 回归点
+
+- `run_bash` 执行明显会修改工作区文件的命令时，必须要求确认。
+- 未确认前，目标文件内容不得被改写。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -155,6 +195,8 @@
   - 空结果保护
   - 行研问答默认不落文件
   - 搜索 0 结果时增加证据不足提示
+  - `replace_in_file` 必须进入确认流
+  - `run_bash` 的原地文件修改命令必须进入确认流
 
 ## 验证结果
 
@@ -175,6 +217,8 @@ pytest -q
 - LLM 返回空字符串时，最终仍有可展示结果
 - 普通行研问答不会误入写文件确认流程
 - `web_search` 无结果时，最终答案会主动提示“未获取到有效搜索结果”
+- `replace_in_file` 不会再直接修改文件，而是先等待确认
+- `run_bash` 中明显会改文件的命令会被拦到确认流
 
 ## 后续建议
 

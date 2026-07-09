@@ -468,7 +468,7 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
     assert isinstance(registry.get("replace_in_file"), ReplaceInFileTool)
-    assert registry.get("replace_in_file").requires_confirmation is False
+    assert registry.get("replace_in_file").requires_confirmation is True
     assert isinstance(registry.get("append_file"), AppendFileTool)
     assert isinstance(registry.get("make_directory"), MakeDirectoryTool)
     assert isinstance(registry.get("web_search"), WebSearchTool)

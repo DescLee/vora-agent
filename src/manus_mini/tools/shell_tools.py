@@ -22,6 +22,14 @@ FORBIDDEN_COMMAND_PATTERNS = (
     r"\bshutdown\b",
     r"\breboot\b",
 )
+WORKSPACE_MUTATION_COMMAND_PATTERNS = (
+    r"\bsed\s+-i(?:\s|$)",
+    r"\bperl\s+-pi(?:\s|$)",
+    r"\bpython(?:3)?\b.*\bwrite_text\s*\(",
+    r"\bpython(?:3)?\b.*\bopen\s*\([^)]*,\s*['\"][wa]",
+    r"(^|[;&|]\s*)printf\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
+    r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
+)
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:
 - risk_level: "high" or "low"
@@ -325,9 +333,23 @@ def analyze_command_risk(
     normalized = command_text.strip()
     if not normalized:
         return CommandRisk(False)
+    heuristic_risk = _analyze_local_command_mutation_risk(normalized)
+    if heuristic_risk.requires_confirmation:
+        return heuristic_risk
     if risk_judge is None:
         return CommandRisk(False)
     return risk_judge.analyze(normalized, workspace=workspace)
+
+
+def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
+    for pattern in WORKSPACE_MUTATION_COMMAND_PATTERNS:
+        if re.search(pattern, command_text):
+            return CommandRisk(
+                True,
+                summary=f"command modifies workspace files: {pattern}",
+                source="local_heuristic",
+            )
+    return CommandRisk(False, source="local_heuristic")
 
 
 def _parse_llm_risk_content(content: str) -> tuple[str, str] | None:
