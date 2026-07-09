@@ -258,6 +258,26 @@
 - `run_bash` 执行 `cat <<EOF > note.md` 这类重定向写入时，必须先进入确认流。
 - 未确认前，目标文件内容不得被改写。
 
+### 14. `run_bash` 修改生产代码时会绕过“先测试再改代码”的门禁
+
+#### 现象
+
+- 之前代码修改前置门禁只覆盖 `write_file`、`replace_in_file`、`append_file`。
+- 如果模型改用 `run_bash` 通过重定向直接改写 `app.py`、`index.ts` 这类生产代码文件，即使已经进入确认流，确认后仍可能直接执行。
+- 这意味着 shell 写代码路径没有复用“先准备并执行测试，再修改生产代码”的工程门禁。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展代码修改前置校验。
+- 对 `run_bash` / `run_temp_script` 中明显的相对路径重定向写入，先解析目标路径。
+- 如果目标是生产代码文件，且当前任务还没有测试执行证据，则直接返回：
+  - `CODE_CHANGE_REQUIRES_TEST_FIRST`
+
+#### 回归点
+
+- `run_bash` 通过 `> app.py` 这类方式改生产代码时，也必须先有测试执行证据。
+- 未跑测试前，shell 路径不能成为绕过代码门禁的旁路。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -277,6 +297,7 @@
   - `replace_in_file` 必须进入确认流
   - `run_bash` 的原地文件修改命令必须进入确认流
   - `run_bash` 的重定向写文件命令必须进入确认流
+  - `run_bash` 写生产代码时也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
@@ -290,7 +311,7 @@ pytest -q
 
 结果：
 
-- `351 passed`
+- `352 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -303,6 +324,7 @@ pytest -q
 - `replace_in_file` 不会再直接修改文件，而是先等待确认
 - `run_bash` 中明显会改文件的命令会被拦到确认流
 - `run_bash` 中重定向写入工作区文件的命令也会被拦到确认流
+- `run_bash` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议

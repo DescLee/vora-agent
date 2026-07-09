@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import PurePosixPath
 from time import monotonic
 
@@ -30,6 +31,7 @@ RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
+SHELL_CODE_WRITE_TOOLS = {"run_bash", "run_temp_script"}
 CODE_FILE_SUFFIXES = {
     ".c",
     ".cc",
@@ -795,9 +797,12 @@ class ReActLoop:
         return None
 
     def _code_change_precondition_error(self, call, task: TaskState, session: SessionState) -> ToolResult | None:
-        if call.name not in CODE_WRITE_TOOLS:
+        if call.name in CODE_WRITE_TOOLS:
+            path = _tool_write_path(call)
+        elif call.name in SHELL_CODE_WRITE_TOOLS:
+            path = _shell_write_path(call)
+        else:
             return None
-        path = _tool_write_path(call)
         if path is None or not _is_production_code_path(path):
             return None
         if _has_prior_test_execution(task, session):
@@ -1184,6 +1189,19 @@ def _tool_write_path(call) -> str | None:
     if raw_path is None:
         return None
     return _normalize_relative_path(str(raw_path))
+
+
+def _shell_write_path(call) -> str | None:
+    if call.name == "run_bash":
+        text = str(call.args.get("command") or "")
+    elif call.name == "run_temp_script":
+        text = str(call.args.get("content") or "")
+    else:
+        return None
+    match = re.search(r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)", text)
+    if match is None:
+        return None
+    return _normalize_relative_path(match.group(1))
 
 
 def _is_production_code_path(path: str) -> bool:
