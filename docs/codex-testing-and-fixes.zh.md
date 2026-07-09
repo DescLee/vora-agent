@@ -297,6 +297,26 @@
 - `run_bash` 执行 `printf 'x' | tee note.md` 时，必须先进入确认流。
 - 未确认前，目标文件内容不得被改写。
 
+### 16. `run_bash` 通过 `tee` 写生产代码时会绕过测试前置门禁
+
+#### 现象
+
+- 上一轮已经把 `tee note.md` 这类命令拦进确认流，但 `react.py` 里用于识别 shell 写代码目标路径的逻辑仍只覆盖 `> file` / `>> file`。
+- 如果模型改用 `printf ... | tee app.py` 写生产代码，即使命令本身进入确认流，确认后仍可能直接执行。
+- 这意味着 `tee` 路径没有复用“先测试再改生产代码”的工程门禁。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展 `_shell_write_path()`。
+- 除了重定向写入外，也会识别 `tee` / `tee -a` 的相对路径目标。
+- 命中生产代码文件且没有测试执行证据时，继续返回：
+  - `CODE_CHANGE_REQUIRES_TEST_FIRST`
+
+#### 回归点
+
+- `run_bash` 执行 `printf 'x' | tee app.py` 这类命令时，也必须先有测试执行证据。
+- `tee` 不应成为绕过代码测试门禁的旁路。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -318,6 +338,7 @@
   - `run_bash` 的重定向写文件命令必须进入确认流
   - `run_bash` 写生产代码时也必须先通过测试前置门禁
   - `run_bash` 的 `tee` 写文件命令必须进入确认流
+  - `run_bash` 的 `tee` 写生产代码命令也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
@@ -331,7 +352,7 @@ pytest -q
 
 结果：
 
-- `352 passed`
+- `354 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -345,6 +366,7 @@ pytest -q
 - `run_bash` 中明显会改文件的命令会被拦到确认流
 - `run_bash` 中重定向写入工作区文件的命令也会被拦到确认流
 - `run_bash` 写生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` 通过 `tee` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议

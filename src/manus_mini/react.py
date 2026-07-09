@@ -1198,7 +1198,9 @@ def _shell_write_path(call) -> str | None:
         text = str(call.args.get("content") or "")
     else:
         return None
-    match = re.search(r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)", text)
+    match = re.search(r"\btee(?:\s+-a)?\s+(?!/)([A-Za-z0-9_.\-/]+)", text)
+    if match is None:
+        match = re.search(r"(?:>>|>)\s*(?!&|\d|/)([A-Za-z0-9_.\-/]+)", text)
     if match is None:
         return None
     return _normalize_relative_path(match.group(1))
