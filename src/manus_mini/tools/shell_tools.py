@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -344,6 +345,12 @@ def analyze_command_risk(
 
 
 def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
+    if _touches_workspace_file(command_text):
+        return CommandRisk(
+            True,
+            summary="command modifies workspace files: touch",
+            source="local_heuristic",
+        )
     for pattern in WORKSPACE_MUTATION_COMMAND_PATTERNS:
         if re.search(pattern, command_text):
             return CommandRisk(
@@ -352,6 +359,38 @@ def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
                 source="local_heuristic",
             )
     return CommandRisk(False, source="local_heuristic")
+
+
+def _touches_workspace_file(command_text: str) -> bool:
+    if re.search(r"\bPath\s*\(\s*['\"](?!/)[^'\"]+['\"]\s*\)\.touch\s*\(", command_text):
+        return True
+    for match in re.finditer(r"(?:^|[;&|]\s*)touch\s+([^;&|\n]+)", command_text):
+        try:
+            tokens = shlex.split(match.group(1))
+        except ValueError:
+            continue
+        if _touch_command_has_relative_path(tokens):
+            return True
+    return False
+
+
+def _touch_command_has_relative_path(tokens: list[str]) -> bool:
+    options_done = False
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if not options_done and token == "--":
+            options_done = True
+            continue
+        if not options_done and token.startswith("-") and token != "-":
+            if token in {"-A", "-d", "-r", "-t"}:
+                skip_next = True
+            continue
+        if not token.startswith("/"):
+            return True
+    return False
 
 
 def _parse_llm_risk_content(content: str) -> tuple[str, str] | None:

@@ -788,6 +788,187 @@ def test_react_loop_rejects_shell_python_write_bytes_code_write_before_test_case
     assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
 
 
+def test_react_loop_rejects_shell_touch_code_file_before_test_case_runs(tmp_path: Path) -> None:
+    class ShellTouchCodeFileBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-touch-code-file",
+                            name="run_bash",
+                            args={"command": "touch app.py", "confirmed": True},
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 app.py 并写实现", cwd=tmp_path)
+
+    result = ReActLoop(ShellTouchCodeFileBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert not (tmp_path / "app.py").exists()
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
+def test_react_loop_rejects_shell_touch_code_file_with_options_before_test_case_runs(tmp_path: Path) -> None:
+    class ShellTouchCodeFileWithOptionsBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-touch-code-file-with-options",
+                            name="run_bash",
+                            args={"command": "touch -c app.py", "confirmed": True},
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 app.py 并写实现", cwd=tmp_path)
+
+    result = ReActLoop(ShellTouchCodeFileWithOptionsBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert not (tmp_path / "app.py").exists()
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
+def test_react_loop_rejects_shell_touch_code_file_after_test_path_before_test_case_runs(tmp_path: Path) -> None:
+    class ShellTouchCodeFileAfterTestPathBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-touch-code-file-after-test-path",
+                            name="run_bash",
+                            args={"command": "touch tests/test_app.py app.py", "confirmed": True},
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 app.py 并写实现", cwd=tmp_path)
+
+    result = ReActLoop(ShellTouchCodeFileAfterTestPathBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert not (tmp_path / "app.py").exists()
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
+def test_react_loop_rejects_shell_python_touch_code_file_before_test_case_runs(tmp_path: Path) -> None:
+    class ShellPythonTouchCodeFileBeforeTestLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-shell-python-touch-code-file",
+                            name="run_bash",
+                            args={
+                                "command": "python -c \"from pathlib import Path; Path('app.py').touch()\"",
+                                "confirmed": True,
+                            },
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "CODE_CHANGE_REQUIRES_TEST_FIRST" in tool_messages[-1].content
+            return LLMResult(content="先补测试再改代码")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 app.py 并写实现", cwd=tmp_path)
+
+    result = ReActLoop(ShellPythonTouchCodeFileBeforeTestLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "先补测试再改代码"
+    assert not (tmp_path / "app.py").exists()
+    assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
+def test_run_bash_touch_file_requires_confirmation(tmp_path: Path) -> None:
+    class ShellTouchLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-touch-write",
+                        name="run_bash",
+                        args={"command": "touch note.md"},
+                    )
+                ]
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 note.md", cwd=tmp_path)
+
+    result = ReActLoop(ShellTouchLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "即将执行: command modifies workspace files: touch"
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "run_bash"
+    assert "command modifies workspace files: touch" in session.pending_confirmation.summary
+    assert not (tmp_path / "note.md").exists()
+
+
+def test_run_bash_pathlib_touch_file_requires_confirmation(tmp_path: Path) -> None:
+    class ShellPathlibTouchLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-pathlib-touch-write",
+                        name="run_bash",
+                        args={"command": "python -c \"from pathlib import Path; Path('note.md').touch()\""},
+                    )
+                ]
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="创建 note.md", cwd=tmp_path)
+
+    result = ReActLoop(ShellPathlibTouchLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "即将执行: command modifies workspace files: touch"
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "run_bash"
+    assert "command modifies workspace files: touch" in session.pending_confirmation.summary
+    assert not (tmp_path / "note.md").exists()
+
+
 def test_react_loop_rejects_compound_shell_code_write_after_test_file_write(tmp_path: Path) -> None:
     class CompoundShellEditBeforeTestLLM:
         def __init__(self) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import PurePosixPath
 from time import monotonic
 
@@ -1252,10 +1253,44 @@ def _shell_write_paths(call) -> list[str]:
         r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.write_bytes\s*\(",
         r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.open\s*\(\s*['\"][wa]",
         r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]",
+        r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.touch\s*\(",
     ]
     paths: list[str] = []
     for pattern in patterns:
         paths.extend(_normalize_relative_path(match.group(1)) for match in re.finditer(pattern, text))
+    paths.extend(_shell_touch_paths(text))
+    return paths
+
+
+def _shell_touch_paths(text: str) -> list[str]:
+    paths: list[str] = []
+    for match in re.finditer(r"(?:^|[;&|]\s*)touch\s+([^;&|\n]+)", text):
+        try:
+            tokens = shlex.split(match.group(1))
+        except ValueError:
+            continue
+        paths.extend(_touch_command_paths(tokens))
+    return paths
+
+
+def _touch_command_paths(tokens: list[str]) -> list[str]:
+    paths: list[str] = []
+    options_done = False
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if not options_done and token == "--":
+            options_done = True
+            continue
+        if not options_done and token.startswith("-") and token != "-":
+            if token in {"-A", "-d", "-r", "-t"}:
+                skip_next = True
+            continue
+        if token.startswith("/"):
+            continue
+        paths.append(_normalize_relative_path(token))
     return paths
 
 

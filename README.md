@@ -1,5 +1,7 @@
 # manus-mini
 
+面试演示版 Agent Runtime
+
 `manus-mini` 是一个面向面试展示的本地 TUI Agent Runtime。项目重点不是复刻完整 Manus 产品，而是展示一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架。
 
 ## 项目定位

@@ -181,25 +181,22 @@
 - `run_bash` 执行明显会修改工作区文件的命令时，必须要求确认。
 - 未确认前，目标文件内容不得被改写。
 
-### 10. 中文 TUI 中的“推理”内容可能夹杂整段英文
+### 10. 中文 TUI 的英文 reasoning 被固定提示替代
 
 #### 现象
 
-- 在真实测试中，TUI 的 `执行过程 -> 推理` 区域前半段是中文，后半段会突然出现整段英文 reasoning。
-- 例如界面里会直接展示 `Now I have a good overview of the project...` 这类英文思考内容。
-- 这会破坏中文界面的连贯性，也容易把模型中间态思考直接暴露给用户。
+- 旧实现检测到较长英文 reasoning 后，只展示固定中文占位提示。
+- 这会丢失模型实际返回的推理摘要，不利于调试和观察 Agent 的执行过程。
 
 #### 修复
 
-- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中收口 `reasoning_content` 的展示逻辑。
-- 对 `- 推理:` 和 `规划理由:` 共用同一套摘要格式化。
-- 当 reasoning 明显以英文为主且不含中文时，不再原样展示英文内容，而是改为中文提示：
-  - `模型已生成推理内容，因包含较多英文，界面中不直接展示原文。`
+- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中移除按语言隐藏 reasoning 的逻辑。
+- 中文和英文 reasoning 均按同一规则展示；超过 240 字符时仍会截断，避免撑满界面。
 
 #### 回归点
 
-- 中文 TUI 中不应再直接显示大段英文 reasoning 原文。
-- `推理` 和 `规划理由` 两处展示应保持一致的中文收口行为。
+- 英文 reasoning 应直接显示实际内容，不再替换为固定占位提示。
+- 长 reasoning 仍应保持 240 字符截断保护。
 
 ### 11. `manus-mini clear` 会先删除会话，再询问用户是否确认
 
@@ -540,6 +537,26 @@
 - `Path(...).write_bytes(...)` 写生产代码时，必须被 `CODE_CHANGE_REQUIRES_TEST_FIRST` 拦住。
 - 其他已覆盖的 `pathlib` 写代码门禁行为保持不变。
 
+### 28. `touch` 创建文件可绕过确认流和测试前置门禁
+
+#### 现象
+
+- `touch app.py` 和 `Path('app.py').touch()` 都会创建文件或更新时间戳，属于工作区写入。
+- 旧实现既没有把它们纳入 shell 写入确认流，也没有识别为生产代码修改目标。
+- 模型可借此在未确认、未执行测试时创建生产代码文件。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加 `touch` 和 `Path(...).touch()` 的本地风险识别。
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中解析 `touch` 的全部相对路径目标，并复用 `CODE_CHANGE_REQUIRES_TEST_FIRST` 门禁。
+- 支持跳过 `touch -A/-d/-r/-t` 的选项参数，避免把参考时间参数误判成写入目标。
+
+#### 回归点
+
+- `touch` 或 `Path(...).touch()` 修改工作区文件前必须进入确认流。
+- 目标包含生产代码且尚未执行测试时，必须被测试前置门禁拒绝。
+- 同一命令同时创建测试文件和生产代码文件时，生产代码目标不能被遗漏。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -573,9 +590,11 @@
   - `run_bash` 的 Python 写生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的 `Path(...).open('w')` 写生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的 `Path(...).write_bytes(...)` 写生产代码命令也必须先通过测试前置门禁
+  - `run_bash` 的 `touch` / `Path(...).touch()` 写入必须进入确认流
+  - `run_bash` 的 `touch` / `Path(...).touch()` 写生产代码也必须先通过测试前置门禁
   - 复合 shell 命令中后续生产代码写入也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
-  - 英文 reasoning 在中文 TUI 中的展示收口
+  - 英文 reasoning 在 TUI 中直接展示并保留长度截断
 
 ## 验证结果
 
@@ -587,7 +606,7 @@ pytest -q
 
 结果：
 
-- `365 passed`
+- `371 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -608,8 +627,10 @@ pytest -q
 - `run_bash` 通过 Python 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `Path(...).open('w')` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `Path(...).write_bytes(...)` 写生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` 通过 `touch` / `Path(...).touch()` 写工作区文件时会先等待确认
+- `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
-- 中文 TUI 不会再直接展示大段英文 reasoning
+- TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
 
 ## 后续建议
