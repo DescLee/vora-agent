@@ -138,7 +138,7 @@ def format_plan(task: TaskState) -> str:
     }
     lines = ["执行计划"]
     if task.plan_reasoning_content:
-        lines.append(f"  规划理由: {task.plan_reasoning_content}")
+        lines.append(f"  规划理由: {format_llm_reasoning_summary(task.plan_reasoning_content)}")
     running_seen = False
     for index, step in enumerate(task.plan, start=1):
         status = step.status
@@ -238,9 +238,20 @@ def format_llm_reasoning_summary(value) -> str:
     if not text:
         return ""
     compact = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    if _looks_mostly_english(compact) and not _contains_cjk(compact):
+        return "模型已生成推理内容，因包含较多英文，界面中不直接展示原文。"
     if len(compact) <= 240:
         return compact
     return compact[:240] + "... [已截断]"
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in text)
+
+
+def _looks_mostly_english(text: str) -> bool:
+    ascii_letters = sum(1 for character in text if character.isascii() and character.isalpha())
+    return ascii_letters >= 24
 
 
 def group_tool_calls_by_batch(tool_calls: list[dict], events: list[TraceEvent]) -> list[tuple[int, list[dict]]]:

@@ -181,6 +181,26 @@
 - `run_bash` 执行明显会修改工作区文件的命令时，必须要求确认。
 - 未确认前，目标文件内容不得被改写。
 
+### 10. 中文 TUI 中的“推理”内容可能夹杂整段英文
+
+#### 现象
+
+- 在真实测试中，TUI 的 `执行过程 -> 推理` 区域前半段是中文，后半段会突然出现整段英文 reasoning。
+- 例如界面里会直接展示 `Now I have a good overview of the project...` 这类英文思考内容。
+- 这会破坏中文界面的连贯性，也容易把模型中间态思考直接暴露给用户。
+
+#### 修复
+
+- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中收口 `reasoning_content` 的展示逻辑。
+- 对 `- 推理:` 和 `规划理由:` 共用同一套摘要格式化。
+- 当 reasoning 明显以英文为主且不含中文时，不再原样展示英文内容，而是改为中文提示：
+  - `模型已生成推理内容，因包含较多英文，界面中不直接展示原文。`
+
+#### 回归点
+
+- 中文 TUI 中不应再直接显示大段英文 reasoning 原文。
+- `推理` 和 `规划理由` 两处展示应保持一致的中文收口行为。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -197,6 +217,8 @@
   - 搜索 0 结果时增加证据不足提示
   - `replace_in_file` 必须进入确认流
   - `run_bash` 的原地文件修改命令必须进入确认流
+- [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
+  - 英文 reasoning 在中文 TUI 中的展示收口
 
 ## 验证结果
 
@@ -208,7 +230,7 @@ pytest -q
 
 结果：
 
-- `343 passed`
+- `348 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -219,6 +241,7 @@ pytest -q
 - `web_search` 无结果时，最终答案会主动提示“未获取到有效搜索结果”
 - `replace_in_file` 不会再直接修改文件，而是先等待确认
 - `run_bash` 中明显会改文件的命令会被拦到确认流
+- 中文 TUI 不会再直接展示大段英文 reasoning
 
 ## 后续建议
 

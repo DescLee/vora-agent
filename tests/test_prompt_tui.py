@@ -499,6 +499,28 @@ def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
     assert "1.1 调用 read_file(call-read) path: README.md" in process
 
 
+def test_format_process_hides_english_reasoning_content_in_chinese_tui(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 1,
+                "reasoning_content": "Now I have a good overview of the project. Let me also check context.py and executor.py for more understanding.",
+                "tool_calls": [{"id": "call-read", "name": "read_file", "args": {"path": "README.md"}}],
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "- 推理: 模型已生成推理内容，因包含较多英文，界面中不直接展示原文。" in process
+    assert "Now I have a good overview of the project" not in process
+
+
 def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 
