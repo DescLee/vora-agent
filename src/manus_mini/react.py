@@ -4,7 +4,7 @@ import json
 from pathlib import PurePosixPath
 from time import monotonic
 
-from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, validate_tool_call_pairs
+from manus_mini.context import compact_messages_with_snapshot, estimate_message_tokens, run_context_compression_pipeline, validate_tool_call_pairs
 from manus_mini.llm import (
     LLMClient,
     LLMRequestError,
@@ -193,8 +193,10 @@ class ReActLoop:
                 return llm_result.content
 
             self._record_llm_usage(task, llm_result)
-            messages.append(assistant_message_from_llm_result(llm_result))
-            session.messages.append(assistant_message_from_llm_result(llm_result))
+            assistant_message = assistant_message_from_llm_result(llm_result)
+            messages.append(assistant_message)
+            session.messages.append(assistant_message)
+            self._compress_session_context_if_needed(task, session, trigger_stage="after_llm_message")
             known_tool_calls, tool_results = self._prepare_tool_calls(llm_result.tool_calls, task, session)
             executable_call_by_id = {call.id: call for call in known_tool_calls}
             known_ids = {call.id for call in known_tool_calls}
@@ -294,23 +296,6 @@ class ReActLoop:
         elif original_usage >= 0.70:
             effective_budget = max(1, int(context_limit * 0.69))
 
-        if effective_budget < context_limit:
-            task.trace_events.append(
-                TraceEvent(
-                    phase="runtime",
-                    message="Context compression started",
-                    data={
-                        "message_type": "context_compression_started",
-                        "estimated_tokens": original_estimated,
-                        "context_limit": context_limit,
-                        "trigger_usage_percent": original_usage * 100,
-                        "compression_target": "较早的上下文消息和工具观察",
-                        "covered_message_count": len(history),
-                        "target_budget": effective_budget,
-                    },
-                )
-            )
-
         compacted, snapshot = compact_messages_with_snapshot(history, token_budget=effective_budget, llm=self.llm)
         if (
             original_estimated > context_limit * 2
@@ -324,38 +309,94 @@ class ReActLoop:
                 )
             )
             raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
-        if snapshot is not None:
-            session.compression_snapshots.append(snapshot)
-            compacted_tokens = self._estimated_context_tokens(compacted)
-            task.trace_events.append(
-                TraceEvent(
-                    phase="runtime",
-                    message="Context compression completed",
-                    data={
-                        "message_type": "context_compression_completed",
-                        "estimated_tokens": original_estimated,
-                        "context_limit": context_limit,
-                        "target_budget": effective_budget,
-                        "compacted_tokens": compacted_tokens,
-                        "covered_message_count": len(snapshot.covered_message_ids),
-                        "retained_fact_count": len(snapshot.retained_facts),
-                        "snapshot_id": snapshot.id,
-                        "summary_source": snapshot.metadata.get("summary_source", "rule"),
-                    },
-                )
-            )
-            session.messages = list(compacted)
-            session.messages.append(
-                Message.system(
-                    "[System] 已压缩较早的上下文："
-                    f"压缩前估算 {original_estimated} tokens，目标预算 {effective_budget} tokens，"
-                    f"压缩后估算 {compacted_tokens} tokens，保留消息 {len(compacted)} 条，摘要 ID {snapshot.id}。"
-                )
-            )
         return compacted
 
     def _context_limit(self, task: TaskState) -> int:
         return max(1, task.model_context_limit or task.limits.max_estimated_tokens)
+
+    def _compress_session_context_if_needed(self, task: TaskState, session: SessionState, trigger_stage: str) -> None:
+        context_limit = self._context_limit(task)
+        result = run_context_compression_pipeline(
+            session.messages,
+            token_limit=context_limit,
+            trigger_stage=trigger_stage,
+            llm=self.llm,
+        )
+        if not result.applied_strategies:
+            return
+        self._record_context_compression(task, session, result, context_limit)
+        session.messages = list(result.messages)
+        session.compression_snapshots.extend(result.snapshots)
+        if not (session.messages and session.messages[-1].role == "agent" and session.messages[-1].tool_call_ids):
+            session.messages.append(
+                Message.system(
+                    "[System] 已压缩较早的上下文："
+                    f"压缩前估算 {result.before_tokens} tokens，目标预算 {max(1, int(context_limit * 0.50))} tokens，阈值 50%，"
+                    f"压缩后估算 {result.after_tokens} tokens，保留消息 {len(result.messages)} 条，"
+                    f"策略 {', '.join(result.applied_strategies)}。"
+                )
+            )
+
+    def _record_context_compression(self, task: TaskState, session: SessionState, result, context_limit: int) -> None:  # noqa: ANN001
+        started_data = {
+            "message_type": "context_compression_started",
+            "trigger_stage": result.trigger_stage,
+            "estimated_tokens": result.before_tokens,
+            "context_limit": context_limit,
+            "trigger_usage_percent": (result.before_usage or 0) * 100,
+            "compression_target": _compression_target_label(result.applied_strategies),
+            "covered_message_count": sum(len(snapshot.covered_message_ids) for snapshot in result.snapshots),
+            "strategies": list(result.applied_strategies),
+            "threshold": 0.50,
+        }
+        completed_data = {
+            "message_type": "context_compression_completed",
+            "trigger_stage": result.trigger_stage,
+            "estimated_tokens": result.before_tokens,
+            "context_limit": context_limit,
+            "compacted_tokens": result.after_tokens,
+            "covered_message_count": sum(len(snapshot.covered_message_ids) for snapshot in result.snapshots),
+            "retained_fact_count": sum(len(snapshot.retained_facts) for snapshot in result.snapshots),
+            "strategies": list(result.applied_strategies),
+            "snapshot_id": result.snapshots[-1].id if result.snapshots else None,
+            "summary_source": result.snapshots[-1].metadata.get("summary_source", "rule") if result.snapshots else "rule",
+            "threshold": 0.50,
+        }
+        task.trace_events.append(TraceEvent(phase="runtime", message="Context compression started", data=started_data))
+        task.trace_events.append(TraceEvent(phase="runtime", message="Context compression completed", data=completed_data))
+        if self.logger is not None:
+            self.logger.record(
+                session.session_id,
+                task.run_id,
+                {
+                    "type": "context_compression_started",
+                    "trigger_stage": result.trigger_stage,
+                    "before_tokens": result.before_tokens,
+                    "before_usage": result.before_usage,
+                    "context_limit": context_limit,
+                    "strategies": list(result.applied_strategies),
+                    "threshold": 0.50,
+                },
+            )
+            self.logger.record(
+                session.session_id,
+                task.run_id,
+                {
+                    "type": "context_compression_completed",
+                    "trigger_stage": result.trigger_stage,
+                    "before_tokens": result.before_tokens,
+                    "after_tokens": result.after_tokens,
+                    "before_usage": result.before_usage,
+                    "after_usage": result.after_usage,
+                    "context_limit": context_limit,
+                    "strategies": list(result.applied_strategies),
+                    "covered_message_count": completed_data["covered_message_count"],
+                    "compressed_chars": sum(int(snapshot.metadata.get("compressed_chars", 0)) for snapshot in result.snapshots),
+                    "summary_source": completed_data["summary_source"],
+                    "snapshot_id": completed_data["snapshot_id"],
+                    "threshold": 0.50,
+                },
+            )
 
     def _tool_event_data(self, iteration_index: int, call, tool_result: ToolResult) -> dict:
         data = {
@@ -898,6 +939,14 @@ def _normalize_relative_path(path: str) -> str:
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized
+
+
+def _compression_target_label(strategies: list[str]) -> str:
+    if "force_truncate" in strategies:
+        return "较早的上下文消息、工具观察和低相关历史"
+    if "history_summary" in strategies:
+        return "较早的上下文消息和工具观察"
+    return "过长工具输出"
 
 
 def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:

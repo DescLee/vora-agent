@@ -88,6 +88,10 @@ class AgentRuntime:
             model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
             session.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
         task.model_context_limit = session.model_context_limit
+        pre_compression_tokens, pre_compression_usage = estimate_session_context_usage(session, task.model_context_limit)
+        task.metadata["pre_compression_context_tokens"] = pre_compression_tokens
+        task.metadata["pre_compression_context_usage"] = pre_compression_usage
+        self.react_loop._compress_session_context_if_needed(task, session, trigger_stage="after_user_message")
         self._build_context_bundle(session, content, relevant_memories)
         plan_steps, plan_reasoning = self._build_plan(content, session, task.run_id)
         task.plan = plan_steps
@@ -113,15 +117,19 @@ class AgentRuntime:
         try:
             last_result = ""
             estimated_tokens, context_usage = estimate_session_context_usage(session, task.model_context_limit)
+            logged_tokens = task.metadata.get("pre_compression_context_tokens", estimated_tokens)
+            logged_usage = task.metadata.get("pre_compression_context_usage", context_usage)
             self.logger.record(
                 session.session_id,
                 task.run_id,
                 {
                     "type": "context_budget",
-                    "estimated_tokens": estimated_tokens,
+                    "estimated_tokens": logged_tokens,
                     "model_context_limit": task.model_context_limit,
-                    "context_usage": context_usage,
-                    "compression_triggered": context_usage is not None and context_usage >= 0.70,
+                    "context_usage": logged_usage,
+                    "post_compression_estimated_tokens": estimated_tokens,
+                    "post_compression_context_usage": context_usage,
+                    "compression_triggered": logged_usage is not None and logged_usage > 0.50,
                     "message_count": len(session.messages),
                     "memory_refs": list(session.memory_refs),
                 },

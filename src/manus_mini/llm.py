@@ -87,12 +87,67 @@ def extract_usage(payload: dict[str, Any]) -> dict[str, int] | None:
     return extracted or None
 
 
+# 已知模型的上下文窗口映射（前缀匹配，更具体的排前面）
+_KNOWN_MODEL_CONTEXT_LIMITS: list[tuple[str, int]] = [
+    # DeepSeek 系列
+    ("deepseek-r1", 1_000_000),
+    ("deepseek-v4", 1_000_000),
+    ("deepseek-v3", 1_000_000),
+    ("deepseek-chat", 1_000_000),
+    # GPT-4o 系列（128K 上下文），必须在 gpt-4 之前匹配
+    ("gpt-4o-mini", 128_000),
+    ("gpt-4o-", 128_000),
+    ("gpt-4o", 128_000),
+    # GPT-4 系列
+    ("gpt-4-turbo", 128_000),
+    ("gpt-4-1106", 128_000),
+    ("gpt-4-0125", 128_000),
+    ("gpt-4-32k", 32_768),
+    ("gpt-4", 8_192),
+    # GPT-3.5 系列
+    ("gpt-3.5-turbo-1106", 16_384),
+    ("gpt-3.5-turbo-0125", 16_384),
+    ("gpt-3.5-turbo", 16_384),
+    # Claude 系列
+    ("claude-3-5-sonnet", 200_000),
+    ("claude-3-5-haiku", 200_000),
+    ("claude-3-opus", 200_000),
+    ("claude-3-sonnet", 200_000),
+    ("claude-3-haiku", 200_000),
+    ("claude", 100_000),
+    # Gemini 系列
+    ("gemini-1.5-pro", 2_000_000),
+    ("gemini-1.5-flash", 1_000_000),
+    ("gemini-2.0-flash", 1_000_000),
+    ("gemini", 32_768),
+    # Llama 系列
+    ("llama3.1-405b", 131_072),
+    ("llama3.1-70b", 131_072),
+    ("llama3.1-8b", 131_072),
+    ("llama3-70b", 8_192),
+    ("llama3-8b", 8_192),
+    ("llama-2-70b", 4_096),
+    ("codellama", 16_384),
+    # 其他常见开源模型
+    ("mixtral", 32_768),
+    ("mistral-7b", 32_768),
+    ("qwen2", 131_072),
+    ("qwen1.5", 32_768),
+    ("phi-3-mini", 128_000),
+    ("phi-3-small", 128_000),
+    ("phi-3-medium", 128_000),
+    ("phi-3", 128_000),
+]
+
+
 def infer_model_context_limit(model_name: str) -> int | None:
+    """通过模型名推断上下文窗口大小（静态兜底方案）"""
     normalized = model_name.strip().lower()
     if not normalized:
         return None
-    if normalized.startswith("deepseek"):
-        return 1_000_000
+    for prefix, limit in _KNOWN_MODEL_CONTEXT_LIMITS:
+        if normalized.startswith(prefix):
+            return limit
     return None
 
 
@@ -105,9 +160,77 @@ def tool_schema(name: str) -> dict[str, Any]:
         return {"type": "object", "properties": {}, "additionalProperties": True}
 
 
+# API 响应中可能包含上下文窗口信息的常见字段名
+_MODEL_CONTEXT_LIMIT_FIELDS = (
+    "max_context_tokens",
+    "context_length",
+    "max_context_length",
+    "max_model_len",
+    "context_window",
+    "num_ctx",
+    "max_tokens",
+)
+
+
 class OpenAICompatibleLLMClient(LLMClient):
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self._cached_context_limit: int | None = None
+
+    def _fetch_model_context_limit_from_api(self) -> int | None:
+        """尝试从 /v1/models/{model} 端点获取模型的上下文窗口大小"""
+        base_url = self.config.llm_base_url.rstrip("/")
+        model = self.config.llm_model
+        models_url = f"{base_url}/models/{model}"
+
+        try:
+            request = urllib.request.Request(
+                url=models_url,
+                method="GET",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.config.llm_api_key}",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return None
+
+        # 尝试从响应中提取上下文窗口大小
+        # 响应格式可能是 {"id": "...", "data": {...}} 或 {"id": "...", ...}
+        data = body if isinstance(body, dict) else {}
+
+        # 某些 API 把模型信息放在 "data" 字段中
+        if "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+        elif "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+            # 有些 API 返回模型列表，此时跳过（不是查询单个模型）
+            pass
+
+        # 查找常见字段名
+        for field in _MODEL_CONTEXT_LIMIT_FIELDS:
+            value = data.get(field) or data.get(f"model_{field}")
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+
+        return None
+
+    def context_limit(self) -> int | None:
+        """返回模型的上下文窗口大小（动态获取 + 模型名推断兜底）"""
+        if self._cached_context_limit is not None:
+            return self._cached_context_limit
+
+        # 第一优先级：从 API 动态获取
+        result = self._fetch_model_context_limit_from_api()
+
+        # 第二优先级：通过模型名推断
+        if result is None:
+            result = infer_model_context_limit(self.config.llm_model)
+
+        # 缓存结果（即使是 None 也缓存，避免重复 API 请求）
+        self._cached_context_limit = result
+        return result
 
     def complete_with_tools(self, messages: list[Any], tool_names: list[str]) -> LLMResult:
         if not self.config.llm_base_url:
@@ -147,9 +270,6 @@ class OpenAICompatibleLLMClient(LLMClient):
             return self._parse_message(message, payload=payload, body=body, tool_names=tool_names)
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise LLMRequestError("LLM returned malformed response") from error
-
-    def context_limit(self) -> int | None:
-        return infer_model_context_limit(self.config.llm_model)
 
     def _send_request_with_retries(self, request: urllib.request.Request) -> dict[str, Any]:
         last_error: Exception | None = None

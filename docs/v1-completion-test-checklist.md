@@ -91,7 +91,7 @@ python evals/run_evals.py: 7 passed
 | 记忆删除：“忘记偏好” | P2 | 已完成 | 已支持删除单条或全部长期记忆。 |
 | 上下文压缩基础 | P1 | 已完成 | `compact_messages()` / `compact_messages_with_snapshot()` 已接入压缩与快照。 |
 | ContextBundle 构建 | P1 | 已完成 | Runtime 已构建并记录 ContextBundle。 |
-| token 预算触发策略 | P1 | 已完成 | 已实现 70% 触发压缩和 90% 硬裁剪策略，并记录预算日志。 |
+| token 预算触发策略 | P1 | 已完成 | 已实现 50/70/90 分层压缩：工具输出压缩、历史摘要、强制截断，并记录预算与压缩日志。 |
 | token 预算日志 | P2 | 已完成 | 已记录 `context_budget` 和 `context_bundle` 日志。 |
 | 压缩摘要进入 TUI | P2 | 已完成 | 压缩摘要会以系统消息回写到对话区。 |
 | 手动保存上下文快照 | P2 | 已完成 | `/save-context` 会在项目根目录写入带时间戳的 `context-*` 快照目录。 |

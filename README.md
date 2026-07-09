@@ -9,7 +9,7 @@
 - Agent 运行编排：`Runtime -> Planner -> ReAct -> ToolScheduler -> Executor -> Observer -> Reflection -> Reporter`
 - 工具调用治理：工具 schema、批次调度、依赖处理、写入确认、命令风险判断。
 - 状态化会话：会话历史、任务状态、工具观察、产物、待确认动作统一建模。
-- 上下文工程：工具调用成组完整性校验、LLM 语义压缩 + 规则回退、token 预算日志。
+- 上下文工程：工具调用成组完整性校验、50/70/90 分层压缩、LLM 语义压缩 + 规则回退、token 预算与压缩日志。
 - 质量门禁：代码类任务在 Reflection 阶段生成并执行真实 pytest 验收 case。
 - 可观测性：结构化事件日志、运行摘要、Markdown 产物。
 - 可测试性：核心 Agent 流程、工具协议、安全边界、TUI 展示均有自动化测试。
@@ -27,7 +27,7 @@
 | 命令工具 | 已实现 | bash/temp script，含禁用模式、风险判断、确认和超时。 |
 | 长期记忆 | 已实现 | SQLite 存储，敏感信息过滤，关键词检索。 |
 | 会话持久化 | 已实现 | list/resume/delete/clear，支持中断后修复 tool message。 |
-| 上下文压缩 | 已实现 | 优先使用 LLM 生成语义摘要，失败时回退规则摘要；压缩时保持 assistant/tool exchange 成组完整。 |
+| 上下文压缩 | 已实现 | 用户消息后和 LLM 返回后同步压缩；按 50/70/90 阈值压缩工具输出、摘要历史、强制截断；压缩时保持 assistant/tool exchange 成组完整。 |
 | eval 雏形 | 已实现 | `evals/run_evals.py` 可验证关键 Agent 行为。 |
 
 ## 当前边界

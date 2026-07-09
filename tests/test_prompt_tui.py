@@ -1412,6 +1412,24 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert "running..." not in tui.status.text
 
 
+def test_send_current_input_outputs_command_directly_without_background_turn(monkeypatch, tmp_path: Path) -> None:
+    tui = PromptTui(cwd=tmp_path)
+    started: list[str] = []
+
+    monkeypatch.setattr(tui, "start_agent_turn", started.append)
+    tui.input.text = "/help"
+
+    tui.send_current_input()
+
+    assert started == []
+    assert tui.is_running is False
+    assert tui.input.text == ""
+    assert "可用指令" in tui.output.text
+    assert "/save-context" in tui.output.text
+    assert "/compact" in tui.output.text
+    assert tui.status.text.startswith("就绪")
+
+
 def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_path: Path) -> None:
     tui = PromptTui(cwd=tmp_path)
     previous_session = SessionState.create(cwd=tmp_path)

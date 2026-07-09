@@ -239,4 +239,4 @@ def test_tool_schema_is_loaded_from_registered_tool() -> None:
 def test_infer_model_context_limit_supports_deepseek_family() -> None:
     assert infer_model_context_limit("deepseek-v4-flash") == 1_000_000
     assert infer_model_context_limit("deepseek-v4-pro") == 1_000_000
-    assert infer_model_context_limit("gpt-4o-mini") is None
+    assert infer_model_context_limit("gpt-4o-mini") == 128_000

@@ -52,7 +52,7 @@ from manus_mini.prompt_tui_formatting import (  # noqa: F401
     style_output_fragments,
     wrap_text_for_display,
 )
-from manus_mini.session import SessionManager
+from manus_mini.session import COMPACT_CONTEXT_COMMANDS, HELP_COMMANDS, SAVE_CONTEXT_COMMANDS, SessionManager
 
 
 @dataclass(slots=True)
@@ -462,6 +462,10 @@ class PromptTui:
             return
 
         self.input.text = ""
+        if self.is_direct_command(content):
+            self.run_direct_command(content)
+            return
+
         previous_task = self.manager.current.active_task
         if previous_task is not None and previous_task.result:
             self.manager.current.messages.append(Message.system("已有产物:\n" f"{previous_task.result}"))
@@ -482,6 +486,26 @@ class PromptTui:
         self.app.layout.focus(self.input)
         self.app.invalidate()
         self.start_agent_turn(content)
+
+    def is_direct_command(self, content: str) -> bool:
+        normalized = content.strip().lower()
+        if normalized in HELP_COMMANDS or normalized in SAVE_CONTEXT_COMMANDS or normalized in COMPACT_CONTEXT_COMMANDS:
+            return True
+        return normalized.startswith("忘记")
+
+    def run_direct_command(self, content: str) -> None:
+        self.manager.current = self.manager.handle_user_message(content)
+        self.visible_trace_count = 0
+        self.set_output_text(self.format_command_output(self.manager.current), force_follow=True)
+        self.is_running = False
+        self.status.text = format_status(self.manager.current)
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
+
+    def format_command_output(self, session: SessionState) -> str:
+        current = format_section("当前会话", format_messages(session))
+        blocks = [*self.completed_transcript_blocks, current]
+        return "\n\n".join(block for block in blocks if block)
 
     def confirm_pending_confirmation(self) -> None:
         if self.manager.current.pending_confirmation is None:

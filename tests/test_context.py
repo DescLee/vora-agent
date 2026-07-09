@@ -7,6 +7,7 @@ from manus_mini.context import (
     compact_messages,
     compact_messages_with_snapshot,
     complete_interrupted_tool_messages,
+    run_context_compression_pipeline,
     estimate_tokens,
     should_include_project_code_overview,
     validate_tool_call_pairs,
@@ -168,6 +169,99 @@ def test_compact_messages_falls_back_when_llm_summary_fails() -> None:
     assert snapshot is not None
     assert compacted[0].content.startswith("历史上下文摘要：")
     assert "旧需求" in compacted[0].content
+
+
+def test_context_compression_strategy_one_compacts_long_tool_messages() -> None:
+    messages = [
+        Message.user("读取大文件"),
+        Message.agent("need file", tool_call_ids=["call-1"]),
+        Message.tool("HEAD-" + ("x" * 1200) + "-TAIL", tool_call_id="call-1"),
+        Message.user("继续"),
+    ]
+
+    result = run_context_compression_pipeline(messages, token_limit=1_000, trigger_stage="after_user_message")
+
+    assert "tool_message" in result.applied_strategies
+    assert result.snapshots
+    validate_tool_call_pairs(result.messages)
+    tool_message = next(message for message in result.messages if message.role == "tool")
+    assert tool_message.content.startswith("HEAD-")
+    assert tool_message.content.endswith("-TAIL")
+    assert "中间已压缩" in tool_message.content
+    assert result.snapshots[-1].metadata["compressed_chars"] > 0
+
+
+def test_context_compression_strategy_two_uses_llm_summary_for_middle_history() -> None:
+    class SummaryLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="历史上下文摘要：\n- LLM 总结了中间阶段的关键决策。")
+
+    messages = [
+        Message.system("system 不变"),
+        Message.user("头部用户消息"),
+        *[Message.agent(f"中间历史 {index} " + ("x" * 160)) for index in range(8)],
+        Message.user("最近用户消息"),
+        Message.agent("最近回复"),
+    ]
+
+    result = run_context_compression_pipeline(
+        messages,
+        token_limit=1_000,
+        trigger_stage="after_llm_message",
+        llm=SummaryLLM(),
+    )
+
+    assert "history_summary" in result.applied_strategies
+    assert result.messages[0].content == "system 不变"
+    assert any(message.content == "头部用户消息" for message in result.messages)
+    assert result.messages[-2].content == "最近用户消息"
+    assert result.messages[-1].content == "最近回复"
+    assert any("LLM 总结了中间阶段的关键决策" in message.content for message in result.messages)
+    assert result.snapshots[-1].metadata["summary_source"] == "llm"
+
+
+def test_context_compression_strategy_three_force_truncates_when_summary_still_exceeds_target() -> None:
+    messages = [
+        Message.system("system 不变"),
+        Message.user("头部用户消息"),
+        *[Message.agent(f"无关旧上下文 {index} " + ("x" * 300)) for index in range(12)],
+        Message.user("最近用户消息"),
+    ]
+
+    result = run_context_compression_pipeline(messages, token_limit=900, trigger_stage="after_user_message")
+
+    assert "force_truncate" in result.applied_strategies
+    assert result.messages[0].content == "system 不变"
+    assert any(message.content == "头部用户消息" for message in result.messages)
+    assert result.messages[-1].content == "最近用户消息"
+    assert estimate_tokens("\n".join(message.content for message in result.messages), "mixed") < estimate_tokens(
+        "\n".join(message.content for message in messages),
+        "mixed",
+    )
+    assert result.snapshots[-1].metadata["strategy"] == "force_truncate"
+
+
+def test_context_compression_upgrades_to_force_truncate_when_history_summary_stays_above_seventy_percent() -> None:
+    class VerboseSummaryLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="历史上下文摘要：\n- " + ("摘要仍然很长" * 90))
+
+    messages = [
+        Message.system("system 不变"),
+        Message.user("头部用户消息"),
+        *[Message.agent(f"中间历史 {index} " + ("x" * 220)) for index in range(8)],
+        Message.user("最近用户消息"),
+    ]
+
+    result = run_context_compression_pipeline(
+        messages,
+        token_limit=1_000,
+        trigger_stage="after_user_message",
+        llm=VerboseSummaryLLM(),
+    )
+
+    assert "history_summary" in result.applied_strategies
+    assert "force_truncate" in result.applied_strategies
 
 
 def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path) -> None:

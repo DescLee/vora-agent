@@ -160,6 +160,23 @@
   - `tests/test_context.py` 覆盖 LLM 摘要成功和 LLM 失败回退规则摘要。
   - `tests/test_runtime.py` 覆盖 ReAct 自动压缩会调用 LLM 摘要，并在 trace 中记录 `summary_source=llm`。
 
+### 2.12.4 上下文压缩触发点和分层策略不完整
+
+- 现象：旧链路主要在 ReAct 构造请求上下文时做一次压缩，触发点不够明确；工具输出、历史摘要、强制截断没有形成清晰的升级管线，日志也难以区分压缩发生在用户消息之后还是 LLM 返回之后。
+- 修复：
+  - 新增 `run_context_compression_pipeline()`，统一执行三层压缩策略。
+  - 压缩触发点固定为两处，并同步执行完成后主流程才继续：
+    - `after_user_message`：用户消息写入会话后、Planner/ReAct 前。
+    - `after_llm_message`：LLM assistant 消息写入会话后、工具执行前。
+  - 触发条件只看当前上下文占比：超过 50% 先压缩长工具消息，超过 70% 使用 LLM/规则摘要压缩中间历史，超过 90% 继续强制截断低相关历史。
+  - 如果工具消息压缩后仍高于 50%，会升级到历史摘要；如果历史摘要后仍高于 70%，会升级到强制截断。
+  - 历史摘要保留 system 消息、头部用户消息和最近消息；中间消息由 LLM 生成中文摘要，失败时回退规则摘要。
+  - 强制截断保留 system、首尾用户消息和最近相关上下文；必要时会尝试改写过长的最近用户消息。
+  - 压缩事件落 JSONL：`context_compression_started` / `context_compression_completed`，包含触发阶段、策略、压缩前后 tokens/占比、摘要来源、覆盖消息数、压缩字符数和 snapshot id。
+- 验证：
+  - `tests/test_context.py` 覆盖工具消息首尾保留、LLM 历史摘要、强制截断和 tool exchange 完整性。
+  - `tests/test_runtime.py` 覆盖用户消息后同步压缩、LLM 返回后工具执行前同步压缩，以及压缩日志落盘。
+
 ### 2.13 Planner 计划与执行过程解释不足
 
 - 现象：Planner 已生成计划，但 TUI 执行过程里看不到完整计划，也不知道当前执行到了哪一步。

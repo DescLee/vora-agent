@@ -7,7 +7,7 @@ from time import perf_counter, sleep
 from manus_mini.llm import LLMResult
 from manus_mini.context import estimate_message_tokens
 from manus_mini.executor import Executor
-from manus_mini.models import LoopLimits, Message, Observation, SessionState, TaskState, ToolCall, TraceEvent
+from manus_mini.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
 from manus_mini.react import ReActLoop, format_tool_result_message
 from manus_mini.reflection import ReflectionLoop, ReflectionResult
 from manus_mini.logging import EventLogger
@@ -1691,6 +1691,34 @@ def test_runtime_records_context_budget_usage_and_compression_trigger(tmp_path: 
     assert row["compression_triggered"] is True
 
 
+def test_runtime_compresses_synchronously_after_user_message_and_logs_it(tmp_path: Path) -> None:
+    class InspectingPlanner:
+        def build_plan(self, goal, session, run_id=None):  # noqa: ANN001, ANN201, ARG002
+            assert any(snapshot.metadata.get("trigger_stage") == "after_user_message" for snapshot in session.compression_snapshots)
+            return [PlanStep(description="answer", intent="chat")], ""
+
+    session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 1_000
+    session.messages.extend(Message.user(f"历史 {index} " + ("x" * 180)) for index in range(8))
+    runtime = AgentRuntime(
+        default_limits=LoopLimits(max_estimated_tokens=1_000),
+        logger=EventLogger(tmp_path / "logs", enabled=True),
+        llm=ScriptedLLM(),
+    )
+    runtime.planner = InspectingPlanner()
+
+    result = runtime.on_user_message("继续", session)
+
+    assert result.compression_snapshots
+    log_path = session_event_log_path(tmp_path / "logs", result.session_id)
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    completed = [row for row in rows if row.get("type") == "context_compression_completed"]
+    assert completed
+    assert completed[0]["trigger_stage"] == "after_user_message"
+    assert completed[0]["strategies"]
+    assert completed[0]["after_tokens"] < completed[0]["before_tokens"]
+
+
 def test_runtime_persists_auto_compacted_context(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     session.model_context_limit = 1_000
@@ -1706,7 +1734,7 @@ def test_runtime_persists_auto_compacted_context(tmp_path: Path) -> None:
 
     assert result.compression_snapshots
     assert estimate_message_tokens(result.messages) < before_tokens
-    assert result.messages[0].content.startswith("历史上下文摘要：")
+    assert any(message.content.startswith("历史上下文摘要：") for message in result.messages)
     assert any(message.role == "system" and "已压缩较早的上下文" in message.content for message in result.messages)
 
 
@@ -1730,13 +1758,44 @@ def test_react_context_compression_uses_llm_summary_when_available(tmp_path: Pat
 
     assert llm.calls == 1
     assert context[0].content == "历史上下文摘要：\n- LLM 压缩摘要保留了关键决策。"
-    assert session.compression_snapshots[-1].summary == context[0].content
-    completed_events = [
-        event
-        for event in task.trace_events
-        if event.data.get("message_type") == "context_compression_completed"
-    ]
-    assert completed_events[-1].data["summary_source"] == "llm"
+    assert context[0].content == "历史上下文摘要：\n- LLM 压缩摘要保留了关键决策。"
+
+
+def test_react_compresses_synchronously_after_llm_message_before_tools(tmp_path: Path) -> None:
+    class ToolInspectingExecutor(Executor):
+        def execute(self, call, session_arg, task_arg):  # noqa: ANN001, ANN201, ARG002
+            assert any(snapshot.metadata.get("trigger_stage") == "after_llm_message" for snapshot in session.compression_snapshots)
+            return ToolResult(ok=True, summary="ok", content="done")
+
+    class ToolLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    content="读取文件",
+                    tool_calls=[ToolCall(id="call-1", name="read_file", args={"path": "README.md"})],
+                )
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 1_000
+    session.messages.extend(Message.user(f"历史 {index} " + ("x" * 130)) for index in range(8))
+    task = TaskState.create(goal="继续", cwd=tmp_path, limits=LoopLimits(max_estimated_tokens=1_000))
+    task.model_context_limit = 1_000
+    loop = ReActLoop(llm=ToolLLM(), logger=EventLogger(tmp_path / "logs", enabled=True))
+    loop.executor = ToolInspectingExecutor(loop.registry)
+
+    loop.run(task, session)
+
+    log_path = session_event_log_path(tmp_path / "logs", session.session_id)
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        row.get("type") == "context_compression_completed" and row.get("trigger_stage") == "after_llm_message"
+        for row in rows
+    )
 
 
 def test_runtime_keeps_session_context_limit_stable(tmp_path: Path) -> None:

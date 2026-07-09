@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from pydantic import BaseModel, Field
 from typing import Any, Literal, Protocol, Sequence
 
 from manus_mini.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation, SessionState
@@ -14,6 +15,24 @@ class ContextIntegrityError(ValueError):
 class ContextSummaryLLM(Protocol):
     def complete_with_tools(self, messages: list[Any], tool_names: list[str]) -> Any:
         ...
+
+
+COMPRESSION_TOOL_THRESHOLD = 0.50
+COMPRESSION_HISTORY_THRESHOLD = 0.70
+COMPRESSION_FORCE_THRESHOLD = 0.90
+MAX_TOOL_MESSAGE_CHARS = 800
+RECENT_HISTORY_MESSAGE_COUNT = 4
+
+
+class CompressionPipelineResult(BaseModel):
+    messages: list[Message]
+    snapshots: list[CompressionSnapshot] = Field(default_factory=list)
+    applied_strategies: list[str] = Field(default_factory=list)
+    before_tokens: int
+    after_tokens: int
+    before_usage: float | None = None
+    after_usage: float | None = None
+    trigger_stage: str = ""
 
 
 PROJECT_OVERVIEW_HINT = "project_code_overview"
@@ -232,6 +251,216 @@ def estimate_session_context_usage(session: SessionState, token_limit: int | Non
     return estimate_context_usage(session.messages, token_limit)
 
 
+def run_context_compression_pipeline(
+    messages: Sequence[Message],
+    token_limit: int | None,
+    trigger_stage: str,
+    llm: ContextSummaryLLM | None = None,
+) -> CompressionPipelineResult:
+    before_tokens, before_usage = estimate_context_usage(messages, token_limit)
+    current = list(messages)
+    pending_tail: list[Message] = []
+    if current and current[-1].role == "agent" and current[-1].tool_call_ids:
+        pending_tail = [current[-1]]
+        current = current[:-1]
+    snapshots: list[CompressionSnapshot] = []
+    applied: list[str] = []
+    if token_limit is None or token_limit <= 0 or before_usage is None or before_usage <= COMPRESSION_TOOL_THRESHOLD:
+        return CompressionPipelineResult(
+            messages=[*current, *pending_tail],
+            snapshots=snapshots,
+            applied_strategies=applied,
+            before_tokens=before_tokens,
+            after_tokens=before_tokens,
+            before_usage=before_usage,
+            after_usage=before_usage,
+            trigger_stage=trigger_stage,
+        )
+
+    current, tool_snapshot = compact_tool_messages(current, trigger_stage=trigger_stage)
+    if tool_snapshot is not None:
+        snapshots.append(tool_snapshot)
+        applied.append("tool_message")
+
+    _, current_usage = estimate_context_usage([*current, *pending_tail], token_limit)
+    if current_usage is not None and current_usage > COMPRESSION_TOOL_THRESHOLD:
+        history_budget = max(1, int(token_limit * COMPRESSION_TOOL_THRESHOLD))
+        compacted, snapshot = compact_middle_history_with_snapshot(current, token_budget=history_budget, llm=llm)
+        if snapshot is not None:
+            snapshot.metadata["strategy"] = "history_summary"
+            snapshot.metadata["trigger_stage"] = trigger_stage
+            snapshots.append(snapshot)
+            applied.append("history_summary")
+            current = compacted
+
+    _, current_usage = estimate_context_usage([*current, *pending_tail], token_limit)
+    if before_usage > COMPRESSION_FORCE_THRESHOLD or (current_usage is not None and current_usage > COMPRESSION_HISTORY_THRESHOLD):
+        force_budget = max(1, int(token_limit * COMPRESSION_TOOL_THRESHOLD))
+        current, snapshot = force_truncate_history(current, token_budget=force_budget, llm=llm, trigger_stage=trigger_stage)
+        if snapshot is not None:
+            snapshots.append(snapshot)
+            applied.append("force_truncate")
+
+    current = [*current, *pending_tail]
+    after_tokens, after_usage = estimate_context_usage(current, token_limit)
+    return CompressionPipelineResult(
+        messages=current,
+        snapshots=snapshots,
+        applied_strategies=applied,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+        before_usage=before_usage,
+        after_usage=after_usage,
+        trigger_stage=trigger_stage,
+    )
+
+
+def compact_tool_messages(
+    messages: Sequence[Message],
+    trigger_stage: str = "",
+    max_chars: int = MAX_TOOL_MESSAGE_CHARS,
+) -> tuple[list[Message], CompressionSnapshot | None]:
+    compacted: list[Message] = []
+    covered_ids: list[str] = []
+    compressed_chars = 0
+    retained_facts: list[str] = []
+    for message in messages:
+        if message.role != "tool" or len(message.content) <= max_chars:
+            compacted.append(message)
+            continue
+        head_chars = max(1, max_chars // 2)
+        tail_chars = max(1, max_chars - head_chars)
+        omitted = len(message.content) - head_chars - tail_chars
+        content = (
+            message.content[:head_chars]
+            + f"\n... [中间已压缩 {omitted} 个字符] ...\n"
+            + message.content[-tail_chars:]
+        )
+        compacted_message = message.model_copy(update={"content": content})
+        compacted.append(compacted_message)
+        covered_ids.append(message.id)
+        compressed_chars += omitted
+        retained_facts.append(f"- 工具消息 {message.tool_call_id or message.id} 保留首尾，压缩 {omitted} 个字符。")
+
+    if not covered_ids:
+        return compacted, None
+    snapshot = CompressionSnapshot(
+        covered_message_ids=covered_ids,
+        covered_observation_ids=[],
+        summary=f"工具消息压缩：共压缩 {compressed_chars} 个字符。",
+        retained_facts=retained_facts,
+    )
+    snapshot.metadata.update(
+        {
+            "strategy": "tool_message",
+            "trigger_stage": trigger_stage,
+            "compressed_chars": compressed_chars,
+            "summary_source": "rule",
+        }
+    )
+    validate_tool_call_pairs(compacted)
+    return compacted, snapshot
+
+
+def force_truncate_history(
+    messages: Sequence[Message],
+    token_budget: int,
+    llm: ContextSummaryLLM | None = None,
+    trigger_stage: str = "",
+) -> tuple[list[Message], CompressionSnapshot | None]:
+    segments = build_segments(messages)
+    if not segments:
+        return list(messages), None
+
+    kept_indexes = _force_keep_segment_indexes(segments)
+    compacted = [message for index, segment in enumerate(segments) if index in kept_indexes for message in segment.messages]
+    covered = [segment for index, segment in enumerate(segments) if index not in kept_indexes]
+    while estimate_message_tokens(compacted) > token_budget and len(kept_indexes) > 1:
+        removable = [index for index in sorted(kept_indexes) if not _is_system_segment(segments[index]) and index != max(kept_indexes)]
+        if not removable:
+            break
+        index = removable[-1]
+        kept_indexes.remove(index)
+        covered.append(segments[index])
+        compacted = [message for idx, segment in enumerate(segments) if idx in kept_indexes for message in segment.messages]
+
+    compacted = _rewrite_latest_user_if_needed(compacted, token_budget=token_budget, llm=llm)
+    validate_tool_call_pairs(compacted)
+    summary = f"历史上下文强制截断：移除 {sum(len(segment.messages) for segment in covered)} 条低相关历史消息。"
+    snapshot = CompressionSnapshot(
+        covered_message_ids=[message.id for segment in covered for message in segment.messages],
+        covered_observation_ids=[],
+        summary=summary,
+        retained_facts=[summary],
+    )
+    snapshot.metadata.update(
+        {
+            "strategy": "force_truncate",
+            "trigger_stage": trigger_stage,
+            "summary_source": "rule",
+        }
+    )
+    return compacted, snapshot
+
+
+def _force_keep_segment_indexes(segments: Sequence[ContextSegment]) -> set[int]:
+    keep: set[int] = set()
+    for index, segment in enumerate(segments):
+        if _is_system_segment(segment):
+            keep.add(index)
+    for index, segment in enumerate(segments):
+        if any(message.role == "user" for message in segment.messages):
+            keep.add(index)
+            break
+    for index in range(len(segments) - 1, -1, -1):
+        if any(message.role == "user" for message in segments[index].messages):
+            keep.add(index)
+            break
+    return keep
+
+
+def _is_system_segment(segment: ContextSegment) -> bool:
+    return bool(segment.messages) and segment.messages[0].role == "system"
+
+
+def _rewrite_latest_user_if_needed(
+    messages: list[Message],
+    token_budget: int,
+    llm: ContextSummaryLLM | None = None,
+) -> list[Message]:
+    if estimate_message_tokens(messages) <= token_budget:
+        return messages
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "user" or len(message.content) <= MAX_TOOL_MESSAGE_CHARS:
+            continue
+        rewritten = _rewrite_user_message_with_llm(message.content, llm=llm)
+        updated = list(messages)
+        updated[index] = message.model_copy(update={"content": rewritten})
+        return updated
+    return messages
+
+
+def _rewrite_user_message_with_llm(content: str, llm: ContextSummaryLLM | None) -> str:
+    fallback = _preview(content, limit=MAX_TOOL_MESSAGE_CHARS)
+    if llm is None:
+        return fallback
+    try:
+        result = llm.complete_with_tools(
+            [
+                Message.system(
+                    "请把这条过长的用户消息改写得更短，保留原始目标、约束和必须执行的要求，只输出改写后的用户消息。"
+                ),
+                Message.user(content),
+            ],
+            [],
+        )
+    except Exception:  # noqa: BLE001
+        return fallback
+    rewritten = str(getattr(result, "content", "") or "").strip()
+    return redact_sensitive_text(rewritten) if rewritten else fallback
+
+
 def should_include_project_code_overview(text: str) -> bool:
     normalized = text.strip().lower()
     if not normalized:
@@ -355,6 +584,62 @@ def compact_messages_with_snapshot(
         compacted.extend(segment.messages)
     validate_tool_call_pairs(compacted)
     return compacted, snapshot
+
+
+def compact_middle_history_with_snapshot(
+    messages: Sequence[Message],
+    token_budget: int,
+    llm: ContextSummaryLLM | None = None,
+) -> tuple[list[Message], CompressionSnapshot | None]:
+    segments = build_segments(messages)
+    if len(segments) <= 3:
+        return compact_messages_with_snapshot(messages, token_budget=token_budget, llm=llm)
+
+    keep_indexes = _middle_summary_keep_indexes(segments)
+    covered_segments = [segment for index, segment in enumerate(segments) if index not in keep_indexes]
+    if not covered_segments:
+        return list(messages), None
+
+    summary_text, summary_source = _summarize_segments_with_llm(
+        covered_segments,
+        llm=llm,
+        token_budget=max(16, min(256, token_budget // 5)),
+    )
+    summary = Message.system(summary_text)
+    compacted: list[Message] = []
+    inserted_summary = False
+    for index, segment in enumerate(segments):
+        if index in keep_indexes:
+            compacted.extend(segment.messages)
+            continue
+        if not inserted_summary:
+            compacted.append(summary)
+            inserted_summary = True
+    if not inserted_summary:
+        compacted.append(summary)
+    snapshot = CompressionSnapshot(
+        covered_message_ids=[message.id for segment in covered_segments for message in segment.messages],
+        covered_observation_ids=[],
+        summary=summary_text,
+        retained_facts=[line for line in summary_text.splitlines() if line.startswith("- ")],
+    )
+    snapshot.metadata["summary_source"] = summary_source
+    validate_tool_call_pairs(compacted)
+    return compacted, snapshot
+
+
+def _middle_summary_keep_indexes(segments: Sequence[ContextSegment]) -> set[int]:
+    keep: set[int] = set()
+    for index, segment in enumerate(segments):
+        if _is_system_segment(segment):
+            keep.add(index)
+    for index, segment in enumerate(segments):
+        if any(message.role == "user" for message in segment.messages):
+            keep.add(index)
+            break
+    recent_start = max(0, len(segments) - RECENT_HISTORY_MESSAGE_COUNT)
+    keep.update(range(recent_start, len(segments)))
+    return keep
 
 
 def _summarize_segments_with_llm(

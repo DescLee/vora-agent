@@ -808,9 +808,19 @@ reserved output:     5%
 触发规则：
 
 ```text
-context_usage >= 0.70: 压缩旧消息和旧工具观察
-context_usage >= 0.90: 硬裁剪低优先级上下文
+context_usage > 0.50: 策略一，压缩过长工具消息，保留首尾并提示中间压缩字符数
+context_usage > 0.70: 策略二，压缩中间历史消息，system/头部用户消息/最近消息保持原文
+context_usage > 0.90: 策略三，强制截断低相关历史，必要时改写过长的最近用户消息
 ```
+
+压缩触发点固定为两处：
+
+```text
+after_user_message: 用户消息写入会话后，同步压缩完成再进入 Planner/ReAct
+after_llm_message: LLM assistant 消息写入会话后，同步压缩完成再执行工具
+```
+
+策略升级规则：如果策略一执行后上下文仍超过 50%，继续执行策略二；策略二后仍超过 70%，继续执行策略三。策略三也会在初始上下文超过 90% 时直接参与。策略二优先请求当前 LLM 生成中文语义摘要，失败、空输出或没有 LLM 时回退规则摘要。压缩快照通过 `CompressionSnapshot.metadata` 记录 `strategy`、`trigger_stage`、`summary_source`、`compressed_chars` 等字段。
 
 硬裁剪时的保留优先级：
 
@@ -823,6 +833,24 @@ context_usage >= 0.90: 硬裁剪低优先级上下文
 7. 低相关工具观察。
 
 注意：上述优先级作用在 `ContextSegment` 上，而不是单条消息上。工具调用交换组必须保持完整，避免产生孤儿 `tool_call_id` 导致模型接口报错。
+
+压缩日志写入 `events.jsonl` 对应的会话节点日志：
+
+```json
+{
+  "type": "context_compression_completed",
+  "trigger_stage": "after_llm_message",
+  "strategies": ["tool_message", "history_summary"],
+  "before_tokens": 64000,
+  "after_tokens": 31000,
+  "before_usage": 0.50,
+  "after_usage": 0.24,
+  "summary_source": "llm",
+  "covered_message_count": 18,
+  "compressed_chars": 12000,
+  "snapshot_id": "compression_xxx"
+}
+```
 
 日志中需要记录每轮估算结果：
 
