@@ -521,6 +521,25 @@
 - `Path(...).open('w')` 写生产代码时，必须被 `CODE_CHANGE_REQUIRES_TEST_FIRST` 拦住。
 - 其他已覆盖的 shell 写代码门禁行为保持不变。
 
+### 27. `run_bash` 中 `Path(...).write_bytes(...)` 写代码可绕过测试前置门禁
+
+#### 现象
+
+- 代码修改任务里，runtime 会在真正改生产代码前要求先执行测试。
+- 旧实现虽然已识别 `Path(...).write_text(...)` 和 `Path(...).open('w')`，但没有覆盖 `Path(...).write_bytes(...)`。
+- 因此 `python -c "from pathlib import Path; Path('app.py').write_bytes(...)"` 这种写法仍可直接改动生产代码，绕过 `CODE_CHANGE_REQUIRES_TEST_FIRST`。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中补充 shell 写路径检测规则。
+- 新增识别 `Path('...').write_bytes(...)` 这种 `pathlib` 二进制写文件写法。
+- 这样该类命令也会先触发“先测试再改代码”的门禁，而不是直接执行。
+
+#### 回归点
+
+- `Path(...).write_bytes(...)` 写生产代码时，必须被 `CODE_CHANGE_REQUIRES_TEST_FIRST` 拦住。
+- 其他已覆盖的 `pathlib` 写代码门禁行为保持不变。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -553,6 +572,7 @@
   - `run_bash` 的原地编辑生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的 Python 写生产代码命令也必须先通过测试前置门禁
   - `run_bash` 的 `Path(...).open('w')` 写生产代码命令也必须先通过测试前置门禁
+  - `run_bash` 的 `Path(...).write_bytes(...)` 写生产代码命令也必须先通过测试前置门禁
   - 复合 shell 命令中后续生产代码写入也必须先通过测试前置门禁
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
@@ -567,7 +587,7 @@ pytest -q
 
 结果：
 
-- `364 passed`
+- `365 passed`
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -587,6 +607,7 @@ pytest -q
 - `run_bash` 原地编辑生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 Python 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `Path(...).open('w')` 写生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` 通过 `Path(...).write_bytes(...)` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - 中文 TUI 不会再直接展示大段英文 reasoning
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
