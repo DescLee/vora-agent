@@ -61,13 +61,14 @@ LLM_TIMEOUT_SECONDS=120
 ## 运行
 
 ```bash
-manus-mini
+manus-mini tui --cwd .
 ```
 
 常用参数：
 
 ```bash
 manus-mini --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
+manus-mini tui --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 manus-mini list
 manus-mini resume <session_id>
 ```

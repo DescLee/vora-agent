@@ -35,6 +35,13 @@ class LLMRequestError(RuntimeError):
     pass
 
 
+_RAW_TOOL_CALL_MARKUP_SNIPPETS = (
+    "<｜｜DSML｜｜tool_calls>",
+    "</｜｜DSML｜｜tool_calls>",
+    "<｜｜DSML｜｜invoke name=",
+)
+
+
 def openai_role(role: str) -> str:
     if role == "agent":
         return "assistant"
@@ -311,6 +318,10 @@ class OpenAICompatibleLLMClient(LLMClient):
         body: dict[str, Any],
         tool_names: list[str],
     ) -> LLMResult:
+        content = message.get("content") or ""
+        if _looks_like_raw_tool_call_markup(content):
+            raise LLMRequestError("LLM emitted raw tool call markup in content")
+
         tool_calls: list[ToolCall] = []
         tool_call_arguments: dict[str, str] = {}
         raw_tool_calls = message.get("tool_calls") or []
@@ -346,13 +357,20 @@ class OpenAICompatibleLLMClient(LLMClient):
             )
 
         return LLMResult(
-            content=message.get("content") or "",
+            content=content,
             reasoning_content=message.get("reasoning_content") or "",
             tool_calls=tool_calls,
             tool_call_arguments=tool_call_arguments,
             source_request={"messages": payload["messages"], "tool_names": list(tool_names), "payload": payload},
             source_response=body,
         )
+
+
+def _looks_like_raw_tool_call_markup(content: str) -> bool:
+    stripped = content.strip()
+    if not stripped:
+        return False
+    return any(snippet in stripped for snippet in _RAW_TOOL_CALL_MARKUP_SNIPPETS)
 
 
 def get_default_llm_client(config: AppConfig | None = None) -> LLMClient:

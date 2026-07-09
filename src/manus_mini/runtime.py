@@ -184,7 +184,7 @@ class AgentRuntime:
                     break
                 else:
                     last_result = reflection.content
-                    task.result = reflection.content
+                    task.result = self._ensure_non_empty_result(task, session, reflection.content)
                     task.trace_events.append(
                         TraceEvent(
                             phase="runtime",
@@ -249,7 +249,11 @@ class AgentRuntime:
                         )
                     task.status = "planning"
             else:
-                task.result = last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。"
+                task.result = self._ensure_non_empty_result(
+                    task,
+                    session,
+                    last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。",
+                )
                 task.status = "failed"
         except KeyboardInterrupt:
             interrupted = True
@@ -261,6 +265,7 @@ class AgentRuntime:
             task,
             content,
         )
+        task.result = self._ensure_non_empty_result(task, session, task.result)
         artifact = Artifact(path=artifact_path, kind="markdown", summary="runtime result")
         task.artifacts.append(artifact)
         self._persist_memory_from_turn(session, task, content)
@@ -347,7 +352,7 @@ class AgentRuntime:
                     break
                 else:
                     last_result = reflection.content
-                    task.result = reflection.content
+                    task.result = self._ensure_non_empty_result(task, session, reflection.content)
                     task.trace_events.append(
                         TraceEvent(
                             phase="runtime",
@@ -412,7 +417,11 @@ class AgentRuntime:
                         )
                     task.status = "planning"
             else:
-                task.result = last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。"
+                task.result = self._ensure_non_empty_result(
+                    task,
+                    session,
+                    last_result or "已达到外层执行上限，保留当前最佳结果。下一步建议继续缩小目标或让 Agent 继续反思。",
+                )
                 task.status = "failed"
         except KeyboardInterrupt:
             interrupted = True
@@ -424,6 +433,7 @@ class AgentRuntime:
             task,
             content,
         )
+        task.result = self._ensure_non_empty_result(task, session, task.result)
         artifact = Artifact(path=artifact_path, kind="markdown", summary="runtime result")
         task.artifacts.append(artifact)
         self._persist_memory_from_turn(session, task, content)
@@ -450,6 +460,16 @@ class AgentRuntime:
             session.pending_confirmation = None
         session.active_task = task
         return session
+
+    def _ensure_non_empty_result(self, task: TaskState, session: SessionState, result: str) -> str:
+        if result.strip():
+            return result
+        fallback = self.react_loop._rule_fallback_content(
+            task,
+            session.messages,
+            reason="LLM returned empty content",
+        )
+        return fallback or "执行完成，但模型没有返回可展示内容。"
 
     def _mark_plan_running(self, task: TaskState) -> None:
         if not task.plan:

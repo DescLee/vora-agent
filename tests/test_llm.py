@@ -122,6 +122,32 @@ def test_openai_compatible_client_rejects_non_object_tool_arguments(monkeypatch)
         client.complete_with_tools([Message.user("hi")], ["read_file"])
 
 
+def test_openai_compatible_client_rejects_raw_tool_call_markup_in_content(monkeypatch) -> None:
+    def fake_urlopen(*args, **kwargs):  # noqa: ARG001
+        return io.BytesIO(
+            (
+                '{"choices":[{"message":{"content":"<｜｜DSML｜｜tool_calls>\\n'
+                '<｜｜DSML｜｜invoke name=\\"read_file\\">\\n'
+                '<｜｜DSML｜｜parameter name=\\"path\\" string=\\"true\\">README.md</｜｜DSML｜｜parameter>\\n'
+                '</｜｜DSML｜｜invoke>\\n'
+                '</｜｜DSML｜｜tool_calls>"}}]}'
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost/v1",
+            llm_api_key="test-key",
+            llm_model="test-model",
+        )
+    )
+
+    with pytest.raises(LLMRequestError, match="tool call markup"):
+        client.complete_with_tools([Message.user("hi")], ["read_file"])
+
+
 def test_openai_compatible_client_exposes_source_request_and_response(monkeypatch) -> None:
     def fake_urlopen(*args, **kwargs):  # noqa: ARG001
         return io.BytesIO(

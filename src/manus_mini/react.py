@@ -60,6 +60,12 @@ OVERVIEW_GOAL_KEYWORDS = (
     "说明",
     "总结",
 )
+
+IDENTITY_GOAL_KEYWORDS = ("你是谁", "你的名字", "你叫什么")
+STARTUP_GOAL_KEYWORDS = ("怎么启动", "如何启动", "怎么运行", "如何运行", "怎么使用", "如何使用")
+UNAVAILABLE_GOAL_KEYWORDS = ("模型不可用", "llm 不可用", "llm不可用", "模型挂了", "模型异常")
+
+
 def format_tool_result_message(tool_result) -> str:
     parts = [tool_result.summary]
     if tool_result.paths:
@@ -632,6 +638,9 @@ class ReActLoop:
     def _rule_fallback_content(self, task: TaskState, messages: list[Message], reason: str = "") -> str:
         user_messages = [message.content for message in messages if message.role == "user"]
         focus = user_messages[-1] if user_messages else task.goal
+        direct_answer = self._direct_fallback_answer(focus)
+        if direct_answer:
+            return direct_answer
         successful_observations = [observation for observation in task.observations if observation.ok]
         if successful_observations:
             lines = [
@@ -651,6 +660,33 @@ class ReActLoop:
                 f"- 当前目标：{focus}",
             ]
         )
+
+    def _direct_fallback_answer(self, focus: str) -> str:
+        normalized = focus.strip().lower()
+        if any(keyword in normalized for keyword in IDENTITY_GOAL_KEYWORDS):
+            return "我是 manus-mini，本地 TUI Agent Runtime，主要用来分析项目、调用工具和协助完成代码与文档任务。"
+        if any(keyword in normalized for keyword in STARTUP_GOAL_KEYWORDS):
+            return "\n".join(
+                [
+                    "可以先按这个顺序启动：",
+                    "1. 安装依赖：`pip install -e \".[dev]\"`",
+                    "2. 配置 `.env` 里的 `LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`",
+                    "3. 启动：`manus-mini tui --cwd .`",
+                    "4. 查看历史会话：`manus-mini list`",
+                    "5. 恢复会话：`manus-mini resume <session_id>`",
+                ]
+            )
+        if any(keyword in normalized for keyword in UNAVAILABLE_GOAL_KEYWORDS):
+            return (
+                "如果模型不可用，我会退回规则兜底模式。"
+                "理想情况下会直接给出最小可用答案；如果上下文不足，也会明确说明失败原因，而不是输出原始工具调用。"
+            )
+        if _goal_mentions_current_project(focus) and any(keyword in focus for keyword in OVERVIEW_GOAL_KEYWORDS):
+            return (
+                "这个项目是 manus-mini，一个本地终端里的 Agent 运行框架。"
+                "它的重点是任务规划、工具调用、结果验证和会话持久化，适合做 Agent 工程能力展示。"
+            )
+        return ""
 
     def _normalize_tool_call_ids(self, llm_result, iteration_index: int):
         seen: set[str] = set()

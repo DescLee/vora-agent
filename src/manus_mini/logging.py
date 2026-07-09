@@ -32,7 +32,14 @@ def project_storage_dir(cwd: Path) -> Path:
     resolved = cwd.expanduser().resolve(strict=False)
     digest = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
     safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in resolved.name)
-    return default_manus_home() / "projects" / f"{safe_name}-{digest}"
+    preferred = default_manus_home() / "projects" / f"{safe_name}-{digest}"
+    try:
+        preferred.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        fallback = resolved / ".manus-mini"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+    return preferred
 
 
 def project_logs_dir(cwd: Path) -> Path:

@@ -1947,6 +1947,74 @@ def test_runtime_falls_back_on_invalid_llm_output(tmp_path: Path) -> None:
     )
 
 
+def test_runtime_falls_back_when_model_returns_raw_tool_call_markup(tmp_path: Path) -> None:
+    class MarkupLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("LLM emitted raw tool call markup in content")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = MarkupLLM()
+
+    result = runtime.on_user_message("怎么启动和使用？", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "manus-mini tui --cwd ." in result.messages[-1].content
+    assert "<｜｜DSML｜｜tool_calls>" not in result.messages[-1].content
+
+
+def test_runtime_fallback_for_identity_question_is_useful(tmp_path: Path) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message("你好，你是谁？", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "我是 manus-mini" in result.messages[-1].content
+    assert "兜底原因" not in result.messages[-1].content
+
+
+def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message("怎么启动和使用？", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "pip install -e" in result.messages[-1].content
+    assert "manus-mini tui --cwd ." in result.messages[-1].content
+
+
+def test_runtime_replaces_empty_final_answer_with_fallback(tmp_path: Path) -> None:
+    class EmptyLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = EmptyLLM()
+
+    result = runtime.on_user_message("如果模型不可用，你会怎么表现？", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert result.messages[-1].content.strip()
+    assert "模型不可用" in result.messages[-1].content
+
+
 def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tmp_path: Path) -> None:
     class FakeReactLoop:
         def __init__(self) -> None:

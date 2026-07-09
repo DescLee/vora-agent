@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from manus_mini.cli import main
 from manus_mini.models import Message, SessionState
 from manus_mini.session_store import SessionStore
@@ -58,3 +60,23 @@ def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkey
     main(["tui", "--cwd", str(tmp_path)])
 
     assert seen["max_react_iterations"] == 99
+
+
+def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(self):  # noqa: ANN001
+        seen["cwd"] = self.manager.current.cwd
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
+
+    main(["--cwd", str(tmp_path)])
+
+    assert seen["cwd"] == tmp_path
+    assert seen["max_react_iterations"] == 99
+
+
+def test_cli_rejects_unknown_subcommand_even_with_global_options(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(["--cwd", str(tmp_path), "unknown"])
