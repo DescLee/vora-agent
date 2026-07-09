@@ -278,6 +278,25 @@
 - `run_bash` 通过 `> app.py` 这类方式改生产代码时，也必须先有测试执行证据。
 - 未跑测试前，shell 路径不能成为绕过代码门禁的旁路。
 
+### 15. `run_bash` 通过 `tee` 写文件时会绕过确认流
+
+#### 现象
+
+- 之前已经拦截了重定向写入和部分原地编辑命令，但 `tee note.md` / `tee -a note.md` 这类命令仍能直接写工作区文件。
+- 这也是模型常见的 shell 写文件方式，尤其在拼接 `printf ... | tee file` 时很常见。
+- 旧实现不会把这类命令识别成工作区文件修改，可能直接执行。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地风险启发式。
+- 新增对 `tee` / `tee -a` 写相对路径文件的识别。
+- 仍然只拦截相对路径，避免误伤 `/tmp/...` 这类非工作区输出。
+
+#### 回归点
+
+- `run_bash` 执行 `printf 'x' | tee note.md` 时，必须先进入确认流。
+- 未确认前，目标文件内容不得被改写。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -298,6 +317,7 @@
   - `run_bash` 的原地文件修改命令必须进入确认流
   - `run_bash` 的重定向写文件命令必须进入确认流
   - `run_bash` 写生产代码时也必须先通过测试前置门禁
+  - `run_bash` 的 `tee` 写文件命令必须进入确认流
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在中文 TUI 中的展示收口
 
