@@ -2015,6 +2015,85 @@ def test_runtime_replaces_empty_final_answer_with_fallback(tmp_path: Path) -> No
     assert "模型不可用" in result.messages[-1].content
 
 
+def test_report_query_rejects_unsolicited_write_file_and_stays_in_chat(tmp_path: Path) -> None:
+    class ReportToFileLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-write-report",
+                            name="write_file",
+                            args={"path": "docs/report.md", "content": "# report\n"},
+                        )
+                    ]
+                )
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" in tool_messages[-1].content
+            return LLMResult(content="下面直接在对话里给你摘要，不落文件。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请给我一份 AI Agent 框架行研摘要", cwd=tmp_path)
+
+    result = ReActLoop(ReportToFileLLM()).run(task, session)
+
+    assert result == "下面直接在对话里给你摘要，不落文件。"
+    assert session.pending_confirmation is None
+
+
+def test_react_loop_adds_disclaimer_when_web_search_has_no_results(tmp_path: Path) -> None:
+    class NoResultsSearchTool:
+        name = "web_search"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201, ARG002
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary="No results found for: AI Agent framework landscape",
+                content="No results found.",
+                data={"result_count": 0, "query": "AI Agent framework landscape"},
+            )
+
+    class SearchThenAnswerLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-search",
+                            name="web_search",
+                            args={"query": "AI Agent framework landscape"},
+                        )
+                    ]
+                )
+            return LLMResult(content="三类方向：编排型、多 Agent 协作型、运行时治理型。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请做一份 AI Agent 框架简短行研摘要", cwd=tmp_path)
+
+    result = ReActLoop(SearchThenAnswerLLM(), ToolRegistry(tools=[NoResultsSearchTool()])).run(task, session)
+
+    assert "未获取到有效搜索结果" in result
+    assert "三类方向" in result
+
+
 def test_runtime_accepts_complete_report_with_risk_discussion_without_looping(tmp_path: Path) -> None:
     class FakeReactLoop:
         def __init__(self) -> None:

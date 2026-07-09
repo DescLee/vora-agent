@@ -105,6 +105,42 @@
 
 - 用户最终收到的结果不得为空字符串。
 
+### 6. 普通行研问答会误触发 `write_file` 流程
+
+#### 现象
+
+- 在真实测试中，用户只是要求“给一个简短行研摘要”，Agent 却直接尝试 `write_file` 生成 `docs/ai-agent-framework-landscape.md`。
+- 由于写文件工具要求确认，普通问答被错误地带入“等待确认写入”流程，偏离用户预期。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加报告类写入前置条件。
+- 对“行研/调研/摘要/报告”这类普通问答请求，默认要求 **直接在对话中回答**。
+- 只有当用户明确提出“保存到文件 / 写入文件 / 生成文件”等意图时，才允许 `write_file` 落文档。
+
+#### 回归点
+
+- “请给我一份 AI Agent 框架行研摘要” 这类请求不应触发 `pending_confirmation`。
+- 普通报告问答应优先返回聊天答案，而不是进入写文件确认流。
+
+### 7. 联网搜索没有结果时，最终行研回答未提示证据不足
+
+#### 现象
+
+- 在真实测试中，`web_search` 连续返回 `No results found` 后，Agent 仍然直接生成完整行研摘要。
+- 虽然答案在语言上可读，但没有明确告诉用户“本次没有拿到有效来源”，容易让人误以为内容已经过联网核实。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加搜索失败收口逻辑。
+- 如果本轮 `web_search` 全部成功执行但结果都为 0，则在最终答案前自动加提示：
+  - `本次联网搜索未获取到有效搜索结果`
+  - `下面内容基于已有知识整理`
+
+#### 回归点
+
+- 搜索 0 结果时，最终回答必须显式提示来源不足，而不是直接伪装成已联网核实结论。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -117,6 +153,8 @@
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - fallback 高价值回答
   - 空结果保护
+  - 行研问答默认不落文件
+  - 搜索 0 结果时增加证据不足提示
 
 ## 验证结果
 
@@ -135,6 +173,8 @@ pytest -q
 - LLM 不可用时回答身份问题
 - LLM 不可用时回答启动问题
 - LLM 返回空字符串时，最终仍有可展示结果
+- 普通行研问答不会误入写文件确认流程
+- `web_search` 无结果时，最终答案会主动提示“未获取到有效搜索结果”
 
 ## 后续建议
 

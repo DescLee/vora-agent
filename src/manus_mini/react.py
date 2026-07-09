@@ -64,6 +64,8 @@ OVERVIEW_GOAL_KEYWORDS = (
 IDENTITY_GOAL_KEYWORDS = ("你是谁", "你的名字", "你叫什么")
 STARTUP_GOAL_KEYWORDS = ("怎么启动", "如何启动", "怎么运行", "如何运行", "怎么使用", "如何使用")
 UNAVAILABLE_GOAL_KEYWORDS = ("模型不可用", "llm 不可用", "llm不可用", "模型挂了", "模型异常")
+REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
+EXPLICIT_WRITE_INTENT_KEYWORDS = ("保存到", "写入文件", "生成文件", "落到文件", "保存成", "写入 ", "创建文件", "新建文件")
 
 
 def format_tool_result_message(tool_result) -> str:
@@ -196,7 +198,7 @@ class ReActLoop:
 
             if not llm_result.tool_calls:
                 self._record_llm_usage(task, llm_result)
-                return llm_result.content
+                return self._finalize_answer_content(task, llm_result.content)
 
             self._record_llm_usage(task, llm_result)
             assistant_message = assistant_message_from_llm_result(llm_result)
@@ -510,7 +512,8 @@ class ReActLoop:
                     data={"tool_call_count": len(llm_result.tool_calls)},
                 )
             )
-        return llm_result.content or fallback or "已达到工具循环上限，保留当前最佳结果。"
+        content = llm_result.content or fallback or "已达到工具循环上限，保留当前最佳结果。"
+        return self._finalize_answer_content(task, content)
 
     def _complete_with_rule_fallback(
         self,
@@ -736,6 +739,11 @@ class ReActLoop:
                 tool_results[call.id] = code_change_error
                 self._record_tool_rejection(task, call, code_change_error)
                 continue
+            report_write_error = self._report_write_precondition_error(call, task)
+            if report_write_error is not None:
+                tool_results[call.id] = report_write_error
+                self._record_tool_rejection(task, call, report_write_error)
+                continue
             duplicate_read = self._duplicate_successful_read_file_result(call, task)
             if duplicate_read is not None:
                 tool_results[call.id] = duplicate_read
@@ -802,6 +810,25 @@ class ReActLoop:
             data={
                 "path": path,
                 "reason": "write or update a test case, execute it, then modify production code",
+            },
+        )
+
+    def _report_write_precondition_error(self, call, task: TaskState) -> ToolResult | None:
+        if call.name not in CODE_WRITE_TOOLS:
+            return None
+        if not _looks_like_report_goal(task.goal):
+            return None
+        if _goal_explicitly_requests_file_output(task.goal):
+            return None
+        path = _tool_write_path(call) or ""
+        return ToolResult(
+            tool_name=call.name,
+            ok=False,
+            summary=f"report write rejected: answer inline instead of writing {path or 'file'}",
+            error_code="REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST",
+            data={
+                "path": path,
+                "reason": "report-style requests should default to answering in chat unless the user explicitly asks for a file",
             },
         )
 
@@ -969,12 +996,47 @@ class ReActLoop:
             )
         )
 
+    def _finalize_answer_content(self, task: TaskState, content: str) -> str:
+        if not _has_only_empty_web_search_results(task):
+            return content
+        if "未获取到有效搜索结果" in content:
+            return content
+        disclaimer = "注意：本次联网搜索未获取到有效搜索结果，下面内容基于已有知识整理，不能视为带来源核实的结论。\n\n"
+        return disclaimer + content
+
 
 def _normalize_relative_path(path: str) -> str:
     normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized
+
+
+def _looks_like_report_goal(goal: str) -> bool:
+    normalized = goal.lower()
+    return any(keyword in normalized for keyword in REPORT_GOAL_KEYWORDS)
+
+
+def _goal_explicitly_requests_file_output(goal: str) -> bool:
+    normalized = goal.lower()
+    return any(keyword in normalized for keyword in EXPLICIT_WRITE_INTENT_KEYWORDS)
+
+
+def _has_only_empty_web_search_results(task: TaskState) -> bool:
+    saw_search = False
+    for event in task.trace_events:
+        if event.phase != "tool":
+            continue
+        data = event.data
+        if data.get("tool_name") != "web_search":
+            continue
+        saw_search = True
+        if data.get("ok") is not True:
+            return False
+        summary = str(data.get("summary") or "")
+        if not summary.startswith("No results found for:"):
+            return False
+    return saw_search
 
 
 def _compression_target_label(strategies: list[str]) -> str:
