@@ -375,5 +375,5 @@ def _looks_like_cli_issue(goal: str, normalized: str) -> bool:
     if any(keyword in combined for keyword in cli_keywords):
         return True
     return any(token in combined for token in ["`", "➜", "$ ", "git:(main)"]) and any(
-        keyword in combined for keyword in ["remove", "list", "resume", "tui"]
+        keyword in combined for keyword in ["run", "remove", "list", "resume"]
     )

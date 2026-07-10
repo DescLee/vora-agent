@@ -58,7 +58,7 @@ def _looks_like_cli_issue(text: str) -> bool:
 
 
 def _cli_usage_explained(text: str) -> bool:
-    return any(keyword in text for keyword in ["正确用法", "remove", "list", "resume", "tui", "子命令"])
+    return any(keyword in text for keyword in ["正确用法", "run", "remove", "list", "resume", "子命令"])
 
 
 def _asks_user_for_current_project_details(text: str) -> bool:

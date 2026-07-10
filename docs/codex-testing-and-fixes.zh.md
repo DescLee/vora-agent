@@ -1705,11 +1705,11 @@
 - 非终端执行 `resume` 不得输出框架 traceback。
 - 提示信息必须明确说明交互 terminal UI 需要 terminal。
 
-### 89. `manus-mini tui` 子命令不再使用但仍暴露在 CLI 和文档中
+### 89. 旧交互子命令不再使用但仍暴露在 CLI 和文档中
 
 #### 现象
 
-- 用户明确说明 `manus-mini tui` 不会再使用。
+- 用户明确说明旧交互子命令不会再使用。
 - 旧 CLI 仍注册该子命令，无参运行也会尝试进入交互界面。
 - README 和规则兜底回答仍会推荐旧启动命令，容易让面试演示路径和实际使用方式不一致。
 
@@ -1725,6 +1725,26 @@
 - 旧子命令必须被 argparse 拒绝。
 - 无参执行必须只展示帮助，不得启动 `PromptTui`。
 - 启动说明和 README 不得继续推荐旧子命令。
+
+### 92. 清理旧交互子命令的残留指令与代码
+
+#### 现象
+
+- 直接入口删除后，规划器、反思器、包导入测试和部分文档仍把旧交互子命令当成有效概念。
+- `prompt_tui.py` 还保留了只用于直连入口的 `main()` 包装函数。
+- `summary.md` 仍记录早期 Textual 启动方式，和当前 `run/list/resume` 使用路径不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/planner.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/planner.py) 和 [src/manus_mini/reflector.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/reflector.py) 中删除旧交互子命令关键词。
+- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 中删除直连 `main()` 包装函数。
+- 将交互帮助、技术设计、生产化说明和项目摘要改为 `run/list/resume` 语义，不再推荐旧启动方式。
+
+#### 回归点
+
+- CLI help 不得出现旧交互子命令或 terminal UI 入口说明。
+- 规划器不能因为用户提到旧交互词就误判成 CLI 用法问题。
+- 反思器不能把旧交互词本身当成完整 CLI 用法说明。
 
 ### 90. 删除直接交互入口后，新用户没有创建第一条会话的命令
 

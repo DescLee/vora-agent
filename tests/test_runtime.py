@@ -2613,7 +2613,7 @@ def test_runtime_falls_back_when_model_returns_raw_tool_call_markup(tmp_path: Pa
     assert 'manus-mini run "总结一下当前项目" --cwd .' in result.messages[-1].content
     assert "manus-mini list --cwd ." in result.messages[-1].content
     assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
-    assert "manus-mini tui" not in result.messages[-1].content
+    assert "tui" not in result.messages[-1].content.lower()
     assert "<｜｜DSML｜｜tool_calls>" not in result.messages[-1].content
 
 
@@ -2651,7 +2651,7 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     assert 'manus-mini run "总结一下当前项目" --cwd .' in result.messages[-1].content
     assert "manus-mini list --cwd ." in result.messages[-1].content
     assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
-    assert "manus-mini tui" not in result.messages[-1].content
+    assert "tui" not in result.messages[-1].content.lower()
 
 
 def test_runtime_replaces_empty_final_answer_with_fallback(tmp_path: Path) -> None:

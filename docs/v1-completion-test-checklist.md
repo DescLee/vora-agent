@@ -38,7 +38,7 @@ python evals/run_evals.py: 7 passed
 
 ## Harness 设计体现
 
-当前项目没有单独命名为 `Harness` 的模块。这里的 harness 设计主要体现为一组可替换、可注入、可测试的运行承载层，用于隔离真实 TUI、真实 LLM、真实文件副作用，让 Agent 核心流程能在无网络、无真实终端交互、无外部服务依赖的情况下稳定验证。
+当前项目没有单独命名为 `Harness` 的模块。这里的 harness 设计主要体现为一组可替换、可注入、可测试的运行承载层，用于隔离真实交互界面、真实 LLM、真实文件副作用，让 Agent 核心流程能在无网络、无真实终端交互、无外部服务依赖的情况下稳定验证。
 
 | Harness 点位 | 当前体现 | 作用 | 完成度 |
 |---|---|---|---:|
@@ -47,11 +47,11 @@ python evals/run_evals.py: 7 passed
 | Loop 注入 harness | `ReflectionLoop(react_loop=...)`、`ReActLoop(llm, registry)`、`runtime.reflection_loop = Fake...` | 用 Fake/Stub 替换 LLM、ReAct、Reflection，测试异常、超时、边界和失败路径 | 已完成 |
 | Tool harness | `ToolRegistry(tools=[...])` 和 `ToolScheduler` | 测试可注册临时工具，验证并行、依赖、未知工具、失败重试和资源冲突，不依赖真实业务工具 | 已完成 |
 | 文件系统 harness | pytest `tmp_path` + workspace 路径限制 | 每个测试在临时目录内读写文件，隔离真实项目文件，并验证路径逃逸拒绝 | 已完成 |
-| TUI harness | `PromptTui(cwd=tmp_path)` 及独立格式化/滚动/状态渲染函数 | 不启动完整终端 UI，也能测试输入提交、输出格式、过程展示和滚动行为 | 已完成 |
+| 交互界面 harness | `PromptTui(cwd=tmp_path)` 及独立格式化/滚动/状态渲染函数 | 不启动完整终端 UI，也能测试输入提交、输出格式、过程展示和滚动行为 | 已完成 |
 | LLM API harness | `OpenAICompatibleLLMClient` 测试中 monkeypatch `urllib.request.urlopen` | 不发真实网络请求，也能验证 HTTP 错误、畸形响应、tool schema 和消息转换 | 已完成 |
 | Reporter/Logger harness | `Reporter(tmp_path / "outputs")`、`EventLogger(tmp_path / "runs")` | 将产物与事件日志输出到临时目录，验证报告分块、脱敏和 trace 记录 | 已完成 |
 
-从质量检测角度看，这套 harness 的价值是：当前 327 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、TUI 格式化等能力。
+从质量检测角度看，这套 harness 的价值是：当前 327 个测试大多不是端到端黑盒测试，而是通过可注入边界精确压测 Agent 核心模块。它已经支撑了 ReAct、Runtime、工具协议、上下文配对、LLM 错误包装、交互界面格式化等能力。
 
 但 harness 设计仍有少量可继续增强的点：
 

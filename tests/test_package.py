@@ -6,4 +6,4 @@ def test_package_version_and_import():
     assert package.__version__ == "v20260702.1644"
 
     prompt_tui = import_module("manus_mini.prompt_tui")
-    assert hasattr(prompt_tui, "main")
+    assert not hasattr(prompt_tui, "main")

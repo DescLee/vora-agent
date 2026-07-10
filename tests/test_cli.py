@@ -279,7 +279,7 @@ def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert error.value.code == 2
     assert "invalid choice" in err
-    assert "tui" in err
+    assert "{list,run,resume,remove,clear}" in err
 
 
 def test_cli_without_command_prints_help_instead_of_opening_tui(capsys, monkeypatch) -> None:
@@ -335,6 +335,16 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert "(default: 3)" in out
     assert "(default: 99)" in out
     assert "tui" not in out
+
+
+def test_cli_help_does_not_expose_tui_as_command_or_concept(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--help"])
+
+    out = capsys.readouterr().out.lower()
+    assert error.value.code == 0
+    assert "tui" not in out
+    assert "terminal ui" not in out
 
 
 def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:

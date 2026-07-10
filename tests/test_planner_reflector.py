@@ -5,6 +5,7 @@ from manus_mini.models import AgentError, LoopLimits, PlanStep, SessionState, Ta
 from manus_mini.planner import Planner, build_planner_system_prompt
 from manus_mini.reflection import ReflectionLoop
 from manus_mini.reflector import Reflector
+from manus_mini.reflector import _cli_usage_explained
 
 
 def test_planner_produces_steps_for_project_analysis(tmp_path: Path) -> None:
@@ -59,6 +60,19 @@ def test_planner_treats_cli_usage_errors_as_report_tasks(tmp_path: Path) -> None
     assert steps
     assert all(step.intent != "chat" for step in steps)
     assert any("正确用法" in step.description for step in steps)
+
+
+def test_planner_does_not_treat_removed_tui_word_as_cli_usage(tmp_path: Path) -> None:
+    planner = Planner()
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("优化 tui 展示细节", session=session)
+
+    assert all("正确用法" not in step.description for step in steps)
+
+
+def test_reflector_cli_usage_explanation_no_longer_accepts_tui_only() -> None:
+    assert not _cli_usage_explained("tui")
 
 
 def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:

@@ -803,9 +803,3 @@ class PromptTui:
         self.status.text = format_status(self.manager.current, is_running=False)
         self.manager.runtime.react_loop.executor.shutdown(detach=True)
         self.app.invalidate()
-
-
-def main() -> None:
-    from manus_mini.cli import main as cli_main
-
-    cli_main()

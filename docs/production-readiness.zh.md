@@ -2,7 +2,7 @@
 
 ## 定位
 
-当前项目是本地单用户 TUI Agent Runtime MVP。它已经具备 Agent 核心链路、工具治理、确认写入、上下文压缩、结构化日志和测试体系，但还不是多租户生产平台。
+当前项目是本地单用户 Agent Runtime MVP。它已经具备 Agent 核心链路、工具治理、确认写入、上下文压缩、结构化日志和测试体系，但还不是多租户生产平台。
 
 本文说明如果要把它演进为可上线系统，需要补齐哪些工程能力。
 
@@ -25,7 +25,7 @@
 当前 runtime 在本地进程内执行。生产环境应将任务提交到队列：
 
 ```text
-API / TUI
+API / CLI
   -> Task Queue
   -> Agent Worker
   -> Tool Sandbox
