@@ -1726,6 +1726,49 @@
 - 无参执行必须只展示帮助，不得启动 `PromptTui`。
 - 启动说明和 README 不得继续推荐旧子命令。
 
+### 90. 删除直接交互入口后，新用户没有创建第一条会话的命令
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini --help` 和空项目 `list` 后发现，只剩 `list/resume/remove/clear`。
+- 对一个没有历史会话的新项目来说，用户无法从 CLI 创建第一条会话。
+- 这会让面试演示的首条路径断掉：工具看起来只能恢复历史，不能开始任务。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中新增 `run` 子命令。
+- `run` 会创建新 session，执行一次用户问题，保存 session，并输出：
+  - 最终回答
+  - `Session ID`
+  - 任务状态
+  - 后续 `resume` 命令
+- 空会话 `list` 会提示 `manus-mini run "你的问题" --cwd ...`，帮助新用户闭合首条使用路径。
+- README 和规则兜底启动说明同步改为先用 `run`。
+
+#### 回归点
+
+- `manus-mini run "问题" --cwd ...` 必须创建并保存 session。
+- `list` 空会话时必须提示如何创建第一条会话。
+- 启动说明必须包含 `run` 入口。
+
+### 91. 项目级用户存储父目录可写但项目目录不可写时不会回退
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "怎么启动和使用？" --cwd /private/tmp/manus-mini-run-check` 时，日志目录创建阶段抛出 `PermissionError`。
+- 根因是 `project_storage_dir()` 只验证了 `~/.manus-mini/projects` 父目录可创建，没有验证具体项目目录可创建。
+- 当父目录存在但当前项目目录创建失败时，运行时仍继续使用不可写路径。
+
+#### 修复
+
+- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中让 `project_storage_dir()` 同时创建并验证具体项目存储目录。
+- 只要用户级项目目录创建失败，就回退到工作区 `.manus-mini`。
+
+#### 回归点
+
+- 用户级项目目录不可写时，必须回退到工作区 `.manus-mini`。
+- `manus-mini run` 在该场景下不得抛原始 `PermissionError`。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
@@ -1748,6 +1791,8 @@
   - `list` 遇到损坏会话文件时仍能列出正常会话
   - 旧交互启动子命令被拒绝
   - 无参运行只打印帮助，不再打开交互界面
+  - `run` 创建新会话、输出结果和恢复命令
+  - 空会话 `list` 提示使用 `run` 创建第一条会话
   - `clear` stdin 缺失时按取消处理，不删除会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
   - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途
@@ -1756,6 +1801,7 @@
   - LLM 指数退避和 `Retry-After`
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
   - 用户目录不可写时路径回退
+  - 用户级项目目录不可写时回退到工作区 `.manus-mini`
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
   - 事件日志和 summary 日志必须拒绝非法 `session_id` 路径穿越
@@ -1868,10 +1914,10 @@ pytest -q
 
 结果：
 
-- `479 passed`
+- `481 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.26%（门禁 80%）
+- 分支覆盖率：84.27%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
@@ -1936,6 +1982,8 @@ pytest -q
 - 旧交互启动子命令已被拒绝，无参执行只打印帮助
 - `python -m manus_mini --help` 不再展示旧交互启动子命令
 - 规则兜底的启动说明不再推荐旧交互启动子命令
+- `manus-mini run "怎么启动和使用？" --cwd /private/tmp/manus-mini-run-check` 可以创建并保存新会话
+- `manus-mini list --cwd /private/tmp/manus-mini-run-check` 能展示刚创建的会话
 
 ## 后续建议
 

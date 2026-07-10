@@ -4,9 +4,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from manus_mini.models import LoopLimits
+from manus_mini.models import LoopLimits, SessionState
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
 from manus_mini.redaction import redact_sensitive_text
+from manus_mini.runtime import AgentRuntime
 from manus_mini.session_store import CorruptSessionError, SessionStore
 
 
@@ -24,6 +25,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser("list", help="list saved sessions")
     _add_cwd_option(list_parser, dest="subcommand_cwd", default=None)
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="run one prompt and save a session",
+        description="run one prompt and save a session",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    run_parser.add_argument("prompt", nargs="+")
+    _add_runtime_options(run_parser, include_defaults=False, cwd_dest="subcommand_cwd")
 
     resume_parser = subparsers.add_parser(
         "resume",
@@ -108,6 +118,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "list":
         _run_list(cwd)
         return
+    if args.command == "run":
+        _run_once(
+            cwd=cwd,
+            prompt=" ".join(args.prompt).strip(),
+            dry_run=dry_run,
+            max_steps=max_steps,
+            max_react=max_react,
+            max_reflect=max_reflect,
+            max_tool_retries=max_tool_retries,
+        )
+        return
     if args.command == "resume":
         _run_resume(
             cwd=cwd,
@@ -144,6 +165,7 @@ def _run_list(cwd: Path) -> None:
     print(f"Session directory: {store.sessions_dir}")
     if not sessions:
         print("No saved sessions.")
+        print(f'Start with: manus-mini run "你的问题" --cwd {cwd}')
         return
 
     print(f"Saved sessions: {len(sessions)}")
@@ -159,6 +181,38 @@ def _run_list(cwd: Path) -> None:
         )
     print()
     print(f"Resume with: manus-mini resume {sessions[0].session_id} --cwd {cwd}")
+
+
+def _run_once(
+    cwd: Path,
+    prompt: str,
+    dry_run: bool,
+    max_steps: int,
+    max_react: int,
+    max_reflect: int,
+    max_tool_retries: int,
+) -> None:
+    if not prompt:
+        print("Error: prompt is required.")
+        raise SystemExit(1)
+    limits = LoopLimits(
+        max_engineering_steps=max_steps,
+        max_react_iterations=max_react,
+        max_reflection_rounds=max_reflect,
+        max_tool_retries=max_tool_retries,
+    )
+    session = SessionState.create(cwd=cwd)
+    runtime = AgentRuntime(default_limits=limits, dry_run=dry_run, cwd=cwd)
+    result = runtime.on_user_message(prompt, session)
+    SessionStore(cwd).save(result)
+    final_message = result.messages[-1].content if result.messages else ""
+    if final_message:
+        print(final_message)
+        print()
+    print(f"Session ID: {result.session_id}")
+    if result.active_task is not None:
+        print(f"Status: {result.active_task.status}")
+    print(f"Resume with: manus-mini resume {result.session_id} --cwd {cwd}")
 
 
 def _run_resume(

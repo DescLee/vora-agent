@@ -199,6 +199,26 @@ def test_project_storage_dir_falls_back_to_workspace_when_user_home_is_unwritabl
     assert storage == project / ".manus-mini"
 
 
+def test_project_storage_dir_falls_back_when_project_store_is_unwritable(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    projects_root = home / "projects"
+    monkeypatch.setattr("manus_mini.logging.default_manus_home", lambda: home)
+    project = tmp_path / "workspace"
+
+    original_mkdir = Path.mkdir
+
+    def fake_mkdir(self, mode=0o777, parents=False, exist_ok=False):  # noqa: ANN001, FBT002
+        if str(self).startswith(str(projects_root)) and self != projects_root:
+            raise PermissionError("blocked project store")
+        return original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+
+    storage = project_storage_dir(project)
+
+    assert storage == project / ".manus-mini"
+
+
 def test_event_logger_compacts_duplicate_llm_payload_fields(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "logs", enabled=True)
     request = {"messages": [{"role": "user", "content": "hi"}], "tool_names": []}

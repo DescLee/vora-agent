@@ -691,8 +691,9 @@ class ReActLoop:
                     "可以先按这个顺序启动：",
                     "1. 安装依赖：`pip install -e \".[dev]\"`",
                     "2. 配置 `.env` 里的 `LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`",
-                    "3. 查看历史会话：`manus-mini list --cwd .`",
-                    "4. 恢复会话：`manus-mini resume <session-id> --cwd .`",
+                    "3. 运行一次任务：`manus-mini run \"总结一下当前项目\" --cwd .`",
+                    "4. 查看历史会话：`manus-mini list --cwd .`",
+                    "5. 恢复会话：`manus-mini resume <session-id> --cwd .`",
                 ]
             )
         if any(keyword in normalized for keyword in UNAVAILABLE_GOAL_KEYWORDS):

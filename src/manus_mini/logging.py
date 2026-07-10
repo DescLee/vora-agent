@@ -39,6 +39,7 @@ def project_storage_dir(cwd: Path) -> Path:
     preferred = default_manus_home() / "projects" / f"{safe_name}-{digest}"
     try:
         preferred.parent.mkdir(parents=True, exist_ok=True)
+        preferred.mkdir(parents=True, exist_ok=True)
     except PermissionError:
         fallback = resolved / ".manus-mini"
         fallback.mkdir(parents=True, exist_ok=True)

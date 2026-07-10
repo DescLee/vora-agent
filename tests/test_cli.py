@@ -45,6 +45,45 @@ def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, mo
     assert "No saved sessions." in out
     assert str(SessionStore(tmp_path).sessions_dir) in out
     assert "Saved sessions:" not in out
+    assert f"Start with: manus-mini run \"你的问题\" --cwd {tmp_path}" in out
+
+
+def test_cli_run_creates_session_prints_result_and_resume_command(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    seen = {}
+
+    class FakeRuntime:
+        def __init__(self, *, default_limits, dry_run, cwd):  # noqa: ANN001
+            seen["max_react_iterations"] = default_limits.max_react_iterations
+            seen["dry_run"] = dry_run
+            seen["cwd"] = cwd
+
+        def on_user_message(self, content: str, session: SessionState) -> SessionState:
+            seen["content"] = content
+            session.messages.append(Message.user(content))
+            task = TaskState.create(goal=content, cwd=session.cwd)
+            task.status = "done"
+            task.result = "一次性回答"
+            session.active_task = task
+            session.messages.append(Message.agent("一次性回答"))
+            return session
+
+    monkeypatch.setattr("manus_mini.cli.AgentRuntime", FakeRuntime)
+
+    main(["run", "总结当前项目", "--cwd", str(tmp_path), "--dry-run", "--max-react", "1"])
+
+    out = capsys.readouterr().out
+    sessions = SessionStore(tmp_path).list_sessions()
+    assert seen == {
+        "max_react_iterations": 1,
+        "dry_run": True,
+        "cwd": tmp_path,
+        "content": "总结当前项目",
+    }
+    assert len(sessions) == 1
+    assert "一次性回答" in out
+    assert f"Session ID: {sessions[0].session_id}" in out
+    assert f"Resume with: manus-mini resume {sessions[0].session_id} --cwd {tmp_path}" in out
 
 
 def test_cli_list_redacts_and_truncates_last_user_message(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -287,6 +326,7 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert error.value.code == 0
     assert "Self-managed coding agent runtime" in out
     assert "working directory" in out
+    assert "run" in out
     assert "preview tool execution without side effects" in out
     assert "engineering loop limit" in out
     assert "ReAct iteration limit" in out
