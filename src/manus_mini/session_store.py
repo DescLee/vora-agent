@@ -71,7 +71,12 @@ class SessionStore:
     def list_sessions(self) -> list[SessionSummary]:
         if not self.sessions_dir.exists():
             return []
-        summaries = [self._summary(path) for path in self.sessions_dir.glob("*.json")]
+        summaries = []
+        for path in self.sessions_dir.glob("*.json"):
+            try:
+                summaries.append(self._summary(path))
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
         return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def delete(self, session_id: str) -> bool:

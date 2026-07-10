@@ -49,6 +49,23 @@ def test_cli_list_redacts_and_truncates_last_user_message(tmp_path: Path, capsys
     assert "..." in out
 
 
+def test_cli_list_skips_corrupt_session_files(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("保留的会话"))
+    store.save(session)
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "broken.json").write_text("{not valid json", encoding="utf-8")
+
+    main(["list", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert session.session_id in out
+    assert "保留的会话" in out
+    assert "broken.json" not in out
+
+
 def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)

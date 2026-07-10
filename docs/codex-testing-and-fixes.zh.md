@@ -1169,6 +1169,25 @@
 - `manus-mini list` 不得输出最近用户消息中的原始 token。
 - 超长最近用户消息不得完整刷屏，应以省略号截断展示。
 
+### 59. 会话列表遇到损坏文件会整体崩溃
+
+#### 现象
+
+- `SessionStore.list_sessions()` 会对 sessions 目录下所有 `*.json` 直接执行 `_summary()`。
+- 只要其中一个会话文件被异常中断、手工编辑或磁盘写入损坏，`manus-mini list` 就会抛 `JSONDecodeError`。
+- 结果是一个坏文件会阻断所有正常会话的查看，用户也无法快速定位还可恢复的会话。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 的列表枚举边界捕获无法读取、解析或迁移的会话文件。
+- 跳过损坏文件，继续返回其它正常会话摘要。
+- 单个 `resume/load` 的错误语义保持不变，避免掩盖用户明确指定会话时的问题。
+
+#### 回归点
+
+- sessions 目录中存在损坏 JSON 文件时，`manus-mini list` 仍应列出正常会话。
+- 损坏文件名不应污染正常列表输出。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1178,6 +1197,7 @@
   - `resume` 缺失会话时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
   - `list` 展示最近用户消息前必须脱敏并截断预览
+  - `list` 遇到损坏会话文件时仍能列出正常会话
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
   - LLM 指数退避和 `Retry-After`
@@ -1264,10 +1284,10 @@ pytest -q
 
 结果：
 
-- `423 passed`
+- `424 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.93%（门禁 80%）
+- 分支覆盖率：83.94%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1321,6 +1341,7 @@ pytest -q
 - 长期记忆安全入口不会通过 tags/source_message_ids 落盘敏感值
 - 结构化 payload 中 `api_key` / `CLIENT_SECRET` 字段值会脱敏，`token_count` 不会被误脱敏
 - `manus-mini list` 展示最近用户消息前会脱敏并截断长文本
+- `manus-mini list` 遇到损坏会话文件时仍能列出其它正常会话
 
 ## 后续建议
 
