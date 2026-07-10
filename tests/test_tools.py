@@ -683,6 +683,15 @@ def test_fetch_webpage_validates_url() -> None:
     assert "http" in result.summary
 
 
+def test_fetch_webpage_preview_redacts_secret_values_in_url() -> None:
+    preview = FetchWebpageTool().preview(url="https://example.com/callback?access_token=plain-secret&ok=1")
+
+    assert "plain-secret" not in preview.summary
+    assert "plain-secret" not in preview.args["url"]
+    assert "access_token=[REDACTED]" in preview.summary
+    assert preview.args["url"] == "https://example.com/callback?access_token=[REDACTED]&ok=1"
+
+
 def test_fetch_webpage_rejects_private_network_literal_urls() -> None:
     for url in (
         "http://127.0.0.1:8000/admin",

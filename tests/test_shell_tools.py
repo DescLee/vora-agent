@@ -149,6 +149,18 @@ def test_run_bash_redacts_sensitive_values_from_output(tmp_path: Path) -> None:
     assert "access_token=[REDACTED]" in result.data["stderr"]
 
 
+def test_run_bash_preview_redacts_sensitive_values(tmp_path: Path) -> None:
+    preview = RunBashTool().preview(
+        workspace=tmp_path,
+        command="echo CLIENT_SECRET=plain-secret",
+    )
+
+    assert "plain-secret" not in preview.summary
+    assert "plain-secret" not in preview.args["command"]
+    assert "CLIENT_SECRET=[REDACTED]" in preview.summary
+    assert preview.args["command"] == "echo CLIENT_SECRET=[REDACTED]"
+
+
 def test_run_bash_pathlib_write_bytes_requires_confirmation(tmp_path: Path) -> None:
     result = RunBashTool().run(
         workspace=tmp_path,

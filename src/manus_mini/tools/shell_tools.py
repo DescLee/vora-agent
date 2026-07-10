@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 from manus_mini.llm import LLMClient
 from manus_mini.models import Message
-from manus_mini.redaction import redact_sensitive_text
+from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
 from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult
 
 
@@ -67,10 +67,10 @@ class RunBashTool(BaseTool):
         risk = analyze_command_risk(command, workspace=workspace, risk_judge=self.risk_judge)
         return ToolPreview(
             tool_name=self.name,
-            summary=risk.summary or self.describe_preview(**kwargs),
+            summary=redact_sensitive_text(risk.summary or self.describe_preview(**kwargs)),
             risk_level=self.risk_level,
             requires_confirmation=risk.requires_confirmation,
-            args=dict(kwargs),
+            args=redact_sensitive_value(dict(kwargs)),
         )
 
     def describe_preview(self, **kwargs: Any) -> str:
@@ -136,10 +136,10 @@ class RunTempScriptTool(BaseTool):
         risk = analyze_command_risk(content, workspace=workspace, risk_judge=self.risk_judge)
         return ToolPreview(
             tool_name=self.name,
-            summary=risk.summary or self.describe_preview(**kwargs),
+            summary=redact_sensitive_text(risk.summary or self.describe_preview(**kwargs)),
             risk_level=self.risk_level,
             requires_confirmation=risk.requires_confirmation,
-            args=dict(kwargs),
+            args=redact_sensitive_value(dict(kwargs)),
         )
 
     def describe_preview(self, **kwargs: Any) -> str:

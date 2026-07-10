@@ -1076,6 +1076,25 @@
 - `write_file` 的待确认 diff 不应展示原始 `CLIENT_SECRET` 值。
 - `replace_in_file` 的 trace diff 不应展示替换前或替换后的原始 secret 值。
 
+### 54. 工具预览 summary 和 args 会暴露敏感值
+
+#### 现象
+
+- `ToolPreview.summary` 和 `ToolPreview.args` 会进入确认流、dry-run 展示和 trace。
+- 通用 `BaseTool.preview()` 会把 URL 等参数原样放入 summary/args。
+- `run_bash` / `run_temp_script` 有自定义 preview，会把命令或脚本内容中的 `CLIENT_SECRET=...` 等值原样放入 preview。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/base.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/base.py) 中对通用 preview summary 和 args 做统一脱敏。
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中对自定义 shell preview 的 summary 和 args 做同样脱敏。
+- 真实工具执行仍使用原始 tool call 参数，避免脱敏影响实际命令或请求。
+
+#### 回归点
+
+- `fetch_webpage` preview 中 URL query secret 不应以原值出现。
+- `run_bash` preview 中命令里的 `CLIENT_SECRET` 不应以原值出现。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1109,6 +1128,7 @@
   - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
   - `fetch_webpage` 必须拒绝本机、内网、link-local 和解析到私网的 URL
   - `web_search` / `fetch_webpage` 返回 URL 或 query 前必须脱敏 query secret
+  - `fetch_webpage` preview 返回前必须脱敏 URL query secret
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - 越界写入/替换不得通过确认 diff 或 trace diff 泄露工作区外文件内容
   - 待确认 diff 和 replace trace diff 不得展示敏感值
@@ -1139,6 +1159,7 @@
   - shell 超时终止整个子进程组
   - shell 响应 Executor 协作式取消信号
   - shell stdout/stderr 中的敏感值必须先脱敏再返回工具结果
+  - shell preview summary/args 中的敏感值必须先脱敏
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
   - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
@@ -1163,10 +1184,10 @@ pytest -q
 
 结果：
 
-- `417 passed`
+- `419 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.84%（门禁 80%）
+- 分支覆盖率：83.88%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1215,6 +1236,7 @@ pytest -q
 - `AWS_SECRET_ACCESS_KEY`、`CLIENT_SECRET`、`GH_TOKEN` 等组合式凭证名会脱敏值
 - `web_search` / `fetch_webpage` 不会在 URL 或 query 输出中泄露 query secret
 - 待确认 diff 和 replace trace diff 不会展示 `CLIENT_SECRET` 等敏感值
+- 工具 preview summary/args 不会展示 URL query secret 或 shell 命令中的敏感值
 
 ## 后续建议
 

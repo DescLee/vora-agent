@@ -6,6 +6,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
+
 
 class ToolPreview(BaseModel):
     tool_name: str = ""
@@ -58,10 +60,10 @@ class BaseTool(ABC):
     def preview(self, **kwargs: Any) -> ToolPreview:
         return ToolPreview(
             tool_name=self.name,
-            summary=self.describe_preview(**kwargs),
+            summary=redact_sensitive_text(self.describe_preview(**kwargs)),
             risk_level=self.risk_level,
             requires_confirmation=self.requires_confirmation,
-            args=dict(kwargs),
+            args=redact_sensitive_value(dict(kwargs)),
         )
 
     @abstractmethod
