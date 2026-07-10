@@ -1227,6 +1227,26 @@
 - `EventLogger.record_summary("../outside", ...)` 必须拒绝写盘。
 - 日志根目录外不得被创建路径穿越目标。
 
+### 62. 日志清理会把符号链接当真实目录处理
+
+#### 现象
+
+- `SessionStore.clear_all_logs()` 使用 `child.is_dir()` 判断日志目录子项。
+- `Path.is_dir()` 会跟随符号链接，指向外部目录的 symlink 会被当作日志目录计数。
+- 旧实现不会删除 symlink 本身，导致日志目录中保留可疑入口；后续清理仍会反复遇到同一问题。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中提取统一日志入口清理函数。
+- 遇到 symlink 时只 `unlink()` 链接本身，不跟随删除外部目标。
+- 真实目录继续使用 `shutil.rmtree()` 清理；单个会话日志清理和批量日志清理复用同一安全路径。
+
+#### 回归点
+
+- `clear_all_logs()` 遇到指向外部目录的 symlink 时不得删除外部目录内容。
+- symlink 本身应从日志目录移除，避免重复污染后续清理。
+- 真实日志目录仍应正常删除。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1260,6 +1280,7 @@
 - [tests/test_session_store.py](/Users/liyong/Desktop/ai-manus/tests/test_session_store.py)
   - `session_id` 不得包含路径穿越片段
   - 日志清理不得通过非法 `session_id` 越过 logs 目录
+  - 批量日志清理不得跟随 symlink 删除外部目录
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - 文件工具越界路径必须返回 `PATH_OUT_OF_WORKSPACE`，不得直接抛异常
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
@@ -1325,10 +1346,10 @@ pytest -q
 
 结果：
 
-- `426 passed`
+- `427 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.96%（门禁 80%）
+- 分支覆盖率：84.11%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1385,6 +1406,7 @@ pytest -q
 - `manus-mini list` 遇到损坏会话文件时仍能列出其它正常会话
 - `manus-mini resume` 指向损坏会话文件时会输出明确的友好错误
 - `EventLogger` 写入事件日志和 summary 日志前会拒绝非法 `session_id` 路径穿越
+- 批量日志清理会删除 symlink 本身但不会跟随删除外部目录
 
 ## 后续建议
 

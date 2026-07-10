@@ -161,6 +161,27 @@ def test_session_store_cleans_logs_from_user_manus_mini(monkeypatch, tmp_path: P
     assert other_log_dir.exists()
 
 
+def test_session_store_clear_logs_does_not_follow_symlinked_log_dirs(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    logs_dir = project_logs_dir(tmp_path)
+    logs_dir.mkdir(parents=True)
+    outside_dir = tmp_path / "outside-logs"
+    outside_dir.mkdir()
+    (outside_dir / "keep.txt").write_text("keep", encoding="utf-8")
+    (logs_dir / "session-link").symlink_to(outside_dir, target_is_directory=True)
+    real_log_dir = logs_dir / "session-real"
+    real_log_dir.mkdir()
+
+    store = SessionStore(tmp_path)
+
+    assert store.clear_all_logs() == 2
+    assert not real_log_dir.exists()
+    assert outside_dir.exists()
+    assert (outside_dir / "keep.txt").exists()
+    assert not (logs_dir / "session-link").exists()
+
+
 def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     legacy_session = SessionState.create(cwd=tmp_path)

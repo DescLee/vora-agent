@@ -131,8 +131,7 @@ class SessionStore:
         log_dir = self._logs_dir() / session_id
         if not log_dir.exists():
             return 0
-        shutil.rmtree(log_dir, ignore_errors=True)
-        return 1
+        return _remove_log_entry(log_dir)
 
     def delete_runs_for_session(self, session_id: str) -> int:
         return self.delete_logs_for_session(session_id)
@@ -148,9 +147,7 @@ class SessionStore:
             return 0
         count = 0
         for child in logs_dir.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-                count += 1
+            count += _remove_log_entry(child)
         return count
 
     def clear_all_runs(self) -> int:
@@ -183,6 +180,16 @@ def validate_session_id(session_id: str) -> None:
         raise ValueError(f"invalid session_id: {session_id}")
     if "/" in session_id or "\\" in session_id:
         raise ValueError(f"invalid session_id: {session_id}")
+
+
+def _remove_log_entry(path: Path) -> int:
+    if path.is_symlink():
+        path.unlink()
+        return 1
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+        return 1
+    return 0
 
 
 def migrate_session_data(data: dict) -> dict:
