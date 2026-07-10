@@ -5,6 +5,11 @@ from typing import Any
 
 
 SECRET_VALUE_PATTERNS = [
+    re.compile(r"(?i)(?P<prefix>\bAuthorization\s*:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(
+        r"(?i)(?P<prefix>[?&](?:access[_-]?token|refresh[_-]?token|api[_-]?key|token|password|secret)=)"
+        r"[^&#\s`'\"]+"
+    ),
     re.compile(r"\bsk-[A-Za-z0-9._-]{8,}\b"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*['\"]?[^'\"\s`]+"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s+(?:is|是|为)\s*['\"]?[^'\"\s`]+"),
@@ -33,6 +38,9 @@ def contains_sensitive_text(content: str) -> bool:
 
 
 def _redact_match(match: re.Match[str]) -> str:
+    prefix = match.groupdict().get("prefix")
+    if prefix is not None:
+        return f"{prefix}[REDACTED]"
     if match.lastindex:
         key = match.group(1)
         return f"{key}=[REDACTED]"

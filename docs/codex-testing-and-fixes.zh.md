@@ -889,6 +889,26 @@
 - 导出的 `context.md` 不得包含原始 token/password。
 - 导出内容应包含 `[REDACTED]`，让用户知道该处已脱敏。
 
+### 45. Bearer Token 和 URL 查询密钥未脱敏
+
+#### 现象
+
+- 统一脱敏规则只覆盖了 `sk-...`、`api_key=...`、`token=...` 等常见赋值格式。
+- 真实测试中，`Authorization: Bearer eyJ...` 会原样保留完整 token。
+- URL 里的 `?access_token=secret-token&ok=1` 也会原样保留查询参数密钥。
+
+#### 修复
+
+- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中新增 Bearer 认证头脱敏规则。
+- 新增 URL query secret 参数脱敏规则，覆盖 `access_token`、`refresh_token`、`api_key`、`token`、`password`、`secret`。
+- 对这类匹配保留原始前缀，只替换敏感值为 `[REDACTED]`，避免破坏日志和 URL 结构。
+
+#### 回归点
+
+- `Authorization: Bearer ...` 不得包含原始 token。
+- URL 查询参数中的 secret 值不得包含原文。
+- 既有 `api_key=[REDACTED]`、`password=[REDACTED]` 格式保持兼容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -903,6 +923,9 @@
   - 用户目录不可写时路径回退
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
+- [tests/test_redaction.py](/Users/liyong/Desktop/ai-manus/tests/test_redaction.py)
+  - `Authorization: Bearer ...` 必须脱敏 token 值
+  - URL query 中的 `access_token` 必须脱敏参数值
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
   - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
@@ -962,10 +985,12 @@ pytest -q
 
 结果：
 
-- `399 passed`
+- `401 passed`
+- `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.74%（门禁 80%）
+- 分支覆盖率：83.75%（门禁 80%）
 - Agent eval：9/9 通过
+- `python -m build`：通过，生成 sdist 和 wheel
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -1003,6 +1028,7 @@ pytest -q
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
 - `EventLogger` 写入事件日志和 summary 日志前会脱敏敏感内容
 - `/save-context` 导出的 `session.json` 和 `context.md` 会脱敏敏感内容
+- `Authorization: Bearer ...` 和 URL query secret 参数会脱敏敏感值
 
 ## 后续建议
 
