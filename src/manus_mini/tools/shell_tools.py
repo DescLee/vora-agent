@@ -369,7 +369,7 @@ class LLMCommandRiskJudge:
             return CommandRisk(False, source="llm")
         request = {
             "workspace": str(workspace) if workspace is not None else "",
-            "command_or_script": normalized,
+            "command_or_script": redact_sensitive_text(normalized),
         }
         result = self.llm.complete_with_tools(
             [

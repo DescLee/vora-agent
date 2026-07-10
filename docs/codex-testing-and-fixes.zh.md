@@ -1095,6 +1095,23 @@
 - `fetch_webpage` preview 中 URL query secret 不应以原值出现。
 - `run_bash` preview 中命令里的 `CLIENT_SECRET` 不应以原值出现。
 
+### 55. Shell LLM 风险判定会把命令原文发给模型
+
+#### 现象
+
+- `LLMCommandRiskJudge` 会把待执行命令或临时脚本内容打包为 `command_or_script` 发送给 LLM 做风险判断。
+- 此路径发生在命令执行前，且不经过工具 result、preview 或日志脱敏。
+- 如果命令中包含 `CLIENT_SECRET=...` 等值，外部模型会收到原始 secret。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中，发送给 LLM 风险判定的 `command_or_script` 先执行统一脱敏。
+- 本地启发式风险分析仍使用原始命令，避免影响敏感文件读取、写入检测等本地安全判断。
+
+#### 回归点
+
+- LLM 风险判定请求中的命令文本不得包含原始 `CLIENT_SECRET` 值。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1160,6 +1177,7 @@
   - shell 响应 Executor 协作式取消信号
   - shell stdout/stderr 中的敏感值必须先脱敏再返回工具结果
   - shell preview summary/args 中的敏感值必须先脱敏
+  - Shell LLM 风险判定请求中的命令文本必须先脱敏
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
   - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
@@ -1184,10 +1202,10 @@ pytest -q
 
 结果：
 
-- `419 passed`
+- `420 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.88%（门禁 80%）
+- 分支覆盖率：83.91%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1237,6 +1255,7 @@ pytest -q
 - `web_search` / `fetch_webpage` 不会在 URL 或 query 输出中泄露 query secret
 - 待确认 diff 和 replace trace diff 不会展示 `CLIENT_SECRET` 等敏感值
 - 工具 preview summary/args 不会展示 URL query secret 或 shell 命令中的敏感值
+- Shell LLM 风险判定请求不会发送命令里的原始敏感值
 
 ## 后续建议
 

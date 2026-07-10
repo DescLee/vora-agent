@@ -1,7 +1,10 @@
 from pathlib import Path
+import json
 import threading
 import time
 
+from manus_mini.llm import LLMResult
+from manus_mini.tools.shell_tools import LLMCommandRiskJudge
 from manus_mini.tools import ToolRegistry
 from manus_mini.tools.shell_tools import CommandRisk
 from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
@@ -18,6 +21,15 @@ class StaticRiskJudge:
             self.requires_confirmation,
             summary="llm says high risk" if self.requires_confirmation else "",
         )
+
+
+class CapturingRiskLLM:
+    def __init__(self) -> None:
+        self.messages = []
+
+    def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+        self.messages = messages
+        return LLMResult(content='{"risk_level":"low","reason":"safe"}')
 
 
 def test_run_bash_executes_in_workspace_and_returns_output(tmp_path: Path) -> None:
@@ -99,6 +111,17 @@ def test_run_bash_uses_llm_risk_judgement_for_confirmation(tmp_path: Path) -> No
     assert result.ok is False
     assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
     assert judge.calls
+
+
+def test_llm_command_risk_judge_redacts_sensitive_command_values(tmp_path: Path) -> None:
+    llm = CapturingRiskLLM()
+
+    result = LLMCommandRiskJudge(llm).analyze("echo CLIENT_SECRET=plain-secret", workspace=tmp_path)
+
+    assert result.requires_confirmation is False
+    user_payload = json.loads(llm.messages[-1].content)
+    assert user_payload["command_or_script"] == "echo CLIENT_SECRET=[REDACTED]"
+    assert "plain-secret" not in llm.messages[-1].content
 
 
 def test_run_bash_does_not_require_confirmation_only_because_path_is_external(tmp_path: Path) -> None:
