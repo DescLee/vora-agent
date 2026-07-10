@@ -8,6 +8,7 @@ from manus_mini.executor import sanitize_tool_args
 from manus_mini.models import LoopLimits, Message, SessionState, ToolCall, TraceEvent
 from manus_mini.memory import MemoryManager
 from manus_mini.react import format_tool_result_message
+from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
 from manus_mini.runtime import AgentRuntime
 from manus_mini.session_store import SessionStore
 
@@ -177,7 +178,7 @@ class SessionManager:
         snapshot_dir = self._next_context_snapshot_dir()
         snapshot_dir.mkdir(parents=True, exist_ok=False)
         (snapshot_dir / "session.json").write_text(
-            self.current.model_dump_json(indent=2),
+            self._exportable_session_json(),
             encoding="utf-8",
         )
         (snapshot_dir / "context.md").write_text(
@@ -186,6 +187,11 @@ class SessionManager:
         )
         self.current.messages.append(Message.system(f"已保存当前上下文：{snapshot_dir.name}"))
         return self.current
+
+    def _exportable_session_json(self) -> str:
+        return SessionState.model_validate(
+            redact_sensitive_value(self.current.model_dump(mode="json"))
+        ).model_dump_json(indent=2)
 
     def _next_context_snapshot_dir(self) -> Path:
         base = datetime.now().strftime("context-%Y%m%d-%H%M%S")
@@ -213,7 +219,7 @@ class SessionManager:
                 [
                     f"- Active task: `{task.run_id}`",
                     f"- Task status: `{task.status}`",
-                    f"- Task goal: {task.goal}",
+                    f"- Task goal: {redact_sensitive_text(task.goal)}",
                 ]
             )
         lines.append("")
@@ -224,14 +230,14 @@ class SessionManager:
                     "",
                     f"### {index}. {message.role}",
                     "",
-                    message.content,
+                    redact_sensitive_text(message.content),
                 ]
             )
         if self.current.compression_snapshots:
             lines.append("")
             lines.append("## Compression Snapshots")
             for snapshot in self.current.compression_snapshots:
-                lines.extend(["", f"- `{snapshot.id}`: {snapshot.summary}"])
+                lines.extend(["", f"- `{snapshot.id}`: {redact_sensitive_text(snapshot.summary)}"])
         return "\n".join(lines).rstrip() + "\n"
 
     def _save_current(self, session: SessionState) -> SessionState:

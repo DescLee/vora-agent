@@ -868,6 +868,27 @@
 - `summary.jsonl` 不得包含用户输入或最终结果里的原始 token/password。
 - 脱敏后的日志仍保留字段结构，便于排查问题。
 
+### 44. `/save-context` 导出快照会包含敏感内容
+
+#### 现象
+
+- `/save-context` 会在项目目录生成 `context-*` 快照目录，包含 `session.json` 和 `context.md`。
+- 真实测试中，当前会话里包含 `token=secret-token` 或 `password=abc123` 时，两个导出文件都会包含原始敏感值。
+- 这类快照更容易被分享或误提交，因此不应默认导出未脱敏内容。
+
+#### 修复
+
+- 在 [src/manus_mini/session.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session.py) 中为导出快照生成脱敏副本。
+- `session.json` 导出前对 `SessionState.model_dump(mode="json")` 递归执行 `redact_sensitive_value()`。
+- `context.md` 渲染时对任务目标、消息内容和压缩摘要执行 `redact_sensitive_text()`。
+- 内部会话状态仍保留原文，避免破坏恢复会话语义。
+
+#### 回归点
+
+- 导出的 `session.json` 不得包含原始 token/password。
+- 导出的 `context.md` 不得包含原始 token/password。
+- 导出内容应包含 `[REDACTED]`，让用户知道该处已脱敏。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -884,6 +905,7 @@
   - summary 日志落盘前必须脱敏用户输入和最终结果
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
+  - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
@@ -940,9 +962,9 @@ pytest -q
 
 结果：
 
-- `398 passed`
+- `399 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.73%（门禁 80%）
+- 分支覆盖率：83.74%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -980,6 +1002,7 @@ pytest -q
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
 - `EventLogger` 写入事件日志和 summary 日志前会脱敏敏感内容
+- `/save-context` 导出的 `session.json` 和 `context.md` 会脱敏敏感内容
 
 ## 后续建议
 

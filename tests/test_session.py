@@ -82,6 +82,24 @@ def test_session_manager_save_context_command_writes_timestamped_snapshot(monkey
     assert "已保存当前上下文" in session.messages[-1].content
 
 
+def test_session_manager_save_context_snapshot_redacts_sensitive_content(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    manager = SessionManager(cwd=tmp_path)
+    manager.current.messages.append(Message.user("我的 token=secret-token"))
+    manager.current.messages.append(Message.agent("结果包含 password=abc123"))
+
+    manager.handle_user_message("/save-context")
+
+    snapshot = next(tmp_path.glob("context-*"))
+    session_json = (snapshot / "session.json").read_text(encoding="utf-8")
+    context_md = (snapshot / "context.md").read_text(encoding="utf-8")
+    exported = session_json + context_md
+    assert "secret-token" not in exported
+    assert "abc123" not in exported
+    assert "token=[REDACTED]" in exported
+    assert "password=[REDACTED]" in exported
+
+
 def test_session_manager_help_command_lists_available_commands(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     manager = SessionManager(cwd=tmp_path)
