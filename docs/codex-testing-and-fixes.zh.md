@@ -1789,6 +1789,30 @@
 - 用户级项目目录不可写时，必须回退到工作区 `.manus-mini`。
 - `manus-mini run` 在该场景下不得抛原始 `PermissionError`。
 
+### 93. 首次运行提示和中文分词兜底不够适合面试演示
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini --help` 时，只能看到参数列表，没有首条示例和恢复路径。
+- 执行 `python -m manus_mini run --help` 时，`prompt` 位置参数没有说明，也没有提示多词 prompt 要加引号。
+- 执行 `python -m manus_mini run --cwd <目录>` 时，argparse 只报缺少 `prompt`，没有下一步示例。
+- 执行 `python -m manus_mini run "" --cwd <目录>` 时，只输出 `Error: prompt is required.`，没有可复制命令。
+- 执行 `python -m manus_mini run 总结 当前 项目 --cwd <目录> --max-steps 1 --max-react 1` 时，中文被 shell 分词成 `总结 当前 项目`，规则兜底无法识别“当前项目”，导致输出低价值的网络错误兜底。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为顶层 help 和 `run --help` 增加首条运行示例、引号说明和恢复命令。
+- `run` 缺少 `prompt` 时，在 argparse 错误后追加可复制示例。
+- 空 prompt、空会话列表、缺失会话恢复错误都补充下一步命令。
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中压缩中文字符之间的空格后再识别“当前项目”，兼容未加引号的中文 prompt。
+
+#### 回归点
+
+- `manus-mini --help` 必须展示项目分析示例和 resume 示例。
+- `manus-mini run --help` 必须说明 `prompt`，并提示多词 prompt 需要加引号。
+- 缺少 prompt、空 prompt、空会话列表、缺失 session 都必须给出可执行下一步。
+- `总结 当前 项目` 必须命中当前项目概览兜底，不能退回只展示网络错误原因。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
@@ -1813,6 +1837,11 @@
   - 无参运行只打印帮助，不再打开交互界面
   - `run` 创建新会话、输出结果和恢复命令
   - 空会话 `list` 提示使用 `run` 创建第一条会话
+  - 顶层 help 展示项目分析示例和 resume 示例
+  - `run --help` 展示 prompt 说明、引号提示和项目分析示例
+  - `run` 缺少 prompt 时输出可复制示例
+  - `run ""` 空 prompt 时输出可复制示例
+  - 缺失 session 的 `resume` 错误会提示先执行 `list`
   - `clear` stdin 缺失时按取消处理，不删除会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
   - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途
@@ -1867,6 +1896,7 @@
   - 越界写入/替换不得通过确认 diff 或 trace diff 泄露工作区外文件内容
   - 待确认 diff 和 replace trace diff 不得展示敏感值
   - fallback 高价值回答
+  - `总结 当前 项目` 这类中文分词后的 prompt 仍能命中当前项目概览兜底
   - 空结果保护
   - 行研问答默认不落文件
   - 行研问答不能通过 `run_bash` 绕过默认不落文件策略

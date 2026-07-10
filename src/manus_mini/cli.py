@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from manus_mini.models import LoopLimits, SessionState
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
@@ -12,13 +13,34 @@ from manus_mini.session_store import CorruptSessionError, SessionStore
 
 
 MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
+PROJECT_OVERVIEW_EXAMPLE = 'Example: manus-mini run "总结一下当前项目" --cwd .'
+RUN_HELP_EPILOG = "\n".join(
+    [
+        PROJECT_OVERVIEW_EXAMPLE,
+        "Quote multi-word prompts so your shell keeps them as one request.",
+        "Then resume with: manus-mini resume <session_id> --cwd .",
+    ]
+)
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    pass
+
+
+class _ManusArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        if self.prog == "manus-mini run":
+            self.exit(2, f"{self.prog}: error: {message}\n{PROJECT_OVERVIEW_EXAMPLE}\n")
+        self.exit(2, f"{self.prog}: error: {message}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ManusArgumentParser(
         prog="manus-mini",
         description="Self-managed coding agent runtime with resumable sessions, guarded tools, and local project storage.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=RUN_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
     )
     _add_runtime_options(parser, include_defaults=True, cwd_dest="global_cwd")
     subparsers = parser.add_subparsers(dest="command")
@@ -30,16 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="run one prompt and save a session",
         description="run one prompt and save a session",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=RUN_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
     )
-    run_parser.add_argument("prompt", nargs="+")
+    run_parser.add_argument("prompt", nargs="+", help="prompt text to execute once")
     _add_runtime_options(run_parser, include_defaults=False, cwd_dest="subcommand_cwd")
 
     resume_parser = subparsers.add_parser(
         "resume",
         help="resume a saved session",
         description="resume a saved session",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
     )
     resume_parser.add_argument("session_id")
     _add_runtime_options(resume_parser, include_defaults=False, cwd_dest="subcommand_cwd")
@@ -166,6 +189,7 @@ def _run_list(cwd: Path) -> None:
     if not sessions:
         print("No saved sessions.")
         print(f'Start with: manus-mini run "你的问题" --cwd {cwd}')
+        print(f'Example: manus-mini run "总结一下当前项目" --cwd {cwd}')
         return
 
     print(f"Saved sessions: {len(sessions)}")
@@ -194,6 +218,7 @@ def _run_once(
 ) -> None:
     if not prompt:
         print("Error: prompt is required.")
+        print(f'Example: manus-mini run "总结一下当前项目" --cwd {cwd}')
         raise SystemExit(1)
     limits = LoopLimits(
         max_engineering_steps=max_steps,
@@ -236,6 +261,7 @@ def _run_resume(
         raise SystemExit(1) from None
     except FileNotFoundError:
         print(f"Error: session '{session_id}' not found.")
+        print(f"List sessions with: manus-mini list --cwd {cwd}")
         raise SystemExit(1) from None
     limits = session.active_task.limits if session.active_task is not None else LoopLimits()
     if limit_overrides["max_engineering_steps"]:

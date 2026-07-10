@@ -683,6 +683,7 @@ class ReActLoop:
 
     def _direct_fallback_answer(self, focus: str) -> str:
         normalized = focus.strip().lower()
+        compact_focus = _compact_cjk_spaces(normalized)
         if any(keyword in normalized for keyword in IDENTITY_GOAL_KEYWORDS):
             return "我是 manus-mini，本地 Agent Runtime，主要用来分析项目、调用工具和协助完成代码与文档任务。"
         if any(keyword in normalized for keyword in STARTUP_GOAL_KEYWORDS):
@@ -701,7 +702,9 @@ class ReActLoop:
                 "如果模型不可用，我会退回规则兜底模式。"
                 "理想情况下会直接给出最小可用答案；如果上下文不足，也会明确说明失败原因，而不是输出原始工具调用。"
             )
-        if _goal_mentions_current_project(focus) and any(keyword in focus for keyword in OVERVIEW_GOAL_KEYWORDS):
+        if _goal_mentions_current_project(compact_focus) and any(
+            keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS
+        ):
             return (
                 "这个项目是 manus-mini，一个本地终端里的 Agent 运行框架。"
                 "它的重点是任务规划、工具调用、结果验证和会话持久化，适合做 Agent 工程能力展示。"
@@ -1388,8 +1391,12 @@ def _optional_int_value(value) -> int | None:
 
 
 def _goal_mentions_current_project(goal: str) -> bool:
-    normalized = goal.lower()
+    normalized = _compact_cjk_spaces(goal.lower())
     return any(
         keyword in normalized
         for keyword in ["当前项目", "这个项目", "项目是做什么", "项目作用", "这个工程", "当前工程"]
     )
+
+
+def _compact_cjk_spaces(text: str) -> str:
+    return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)

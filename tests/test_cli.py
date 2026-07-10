@@ -46,6 +46,7 @@ def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, mo
     assert str(SessionStore(tmp_path).sessions_dir) in out
     assert "Saved sessions:" not in out
     assert f"Start with: manus-mini run \"你的问题\" --cwd {tmp_path}" in out
+    assert f"Example: manus-mini run \"总结一下当前项目\" --cwd {tmp_path}" in out
 
 
 def test_cli_run_creates_session_prints_result_and_resume_command(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -215,6 +216,7 @@ def test_cli_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys
     out = capsys.readouterr().out
     assert error.value.code == 1
     assert "Error: session 'missing-session' not found." in out
+    assert f"List sessions with: manus-mini list --cwd {tmp_path}" in out
 
 
 def test_cli_resume_corrupt_session_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -332,6 +334,8 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert "ReAct iteration limit" in out
     assert "reflection loop limit" in out
     assert "tool retry limit" in out
+    assert 'Example: manus-mini run "总结一下当前项目" --cwd .' in out
+    assert "Then resume with: manus-mini resume <session_id> --cwd ." in out
     assert "(default: 3)" in out
     assert "(default: 99)" in out
     assert "tui" not in out
@@ -360,6 +364,37 @@ def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:
     assert clear_error.value.code == 0
     assert "working directory" in clear_out
     assert "skip confirmation prompt" in clear_out
+
+
+def test_cli_run_help_describes_prompt_and_examples(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["run", "--help"])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 0
+    assert "prompt text to execute once" in out
+    assert 'Example: manus-mini run "总结一下当前项目" --cwd .' in out
+    assert "Quote multi-word prompts" in out
+
+
+def test_cli_run_missing_prompt_prints_actionable_example(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["run"])
+
+    err = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "the following arguments are required: prompt" in err
+    assert 'Example: manus-mini run "总结一下当前项目" --cwd .' in err
+
+
+def test_cli_run_empty_prompt_prints_actionable_example(tmp_path: Path, capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["run", "", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: prompt is required." in out
+    assert f'Example: manus-mini run "总结一下当前项目" --cwd {tmp_path}' in out
 
 
 @pytest.mark.parametrize(

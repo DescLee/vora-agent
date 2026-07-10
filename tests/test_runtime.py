@@ -2654,6 +2654,23 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     assert "tui" not in result.messages[-1].content.lower()
 
 
+def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message("总结 当前 项目", session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "这个项目是 manus-mini" in result.messages[-1].content
+    assert "兜底原因" not in result.messages[-1].content
+
+
 def test_runtime_replaces_empty_final_answer_with_fallback(tmp_path: Path) -> None:
     class EmptyLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
