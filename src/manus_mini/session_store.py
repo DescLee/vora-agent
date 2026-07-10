@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,7 @@ from manus_mini.models import SessionState
 
 
 CURRENT_SESSION_SCHEMA_VERSION = 1
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 KNOWN_ERROR_CODES = {
     "FILE_NOT_FOUND",
     "PATH_OUT_OF_WORKSPACE",
@@ -113,6 +115,7 @@ class SessionStore:
         Returns:
             删除的目录数量
         """
+        validate_session_id(session_id)
         log_dir = self._logs_dir() / session_id
         if not log_dir.exists():
             return 0
@@ -159,7 +162,15 @@ class SessionStore:
         )
 
     def _path_for(self, session_id: str) -> Path:
+        validate_session_id(session_id)
         return self.sessions_dir / f"{session_id}.json"
+
+
+def validate_session_id(session_id: str) -> None:
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(f"invalid session_id: {session_id}")
+    if "/" in session_id or "\\" in session_id:
+        raise ValueError(f"invalid session_id: {session_id}")
 
 
 def migrate_session_data(data: dict) -> dict:

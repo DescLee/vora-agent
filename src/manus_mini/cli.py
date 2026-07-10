@@ -97,6 +97,9 @@ def _run_resume(cwd: Path, session_id: str) -> None:
     store = SessionStore(cwd)
     try:
         session = store.load(session_id)
+    except ValueError:
+        print(f"Error: invalid session id '{session_id}'.")
+        raise SystemExit(1) from None
     except FileNotFoundError:
         print(f"Error: session '{session_id}' not found.")
         raise SystemExit(1) from None
@@ -115,11 +118,15 @@ def _run_remove(cwd: Path, session_id: str) -> None:
     If not found, prints an error message and exits with non-zero status.
     """
     store = SessionStore(cwd)
-    if not store.delete(session_id):
-        print(f"Error: session '{session_id}' not found.")
-        raise SystemExit(1)
+    try:
+        if not store.delete(session_id):
+            print(f"Error: session '{session_id}' not found.")
+            raise SystemExit(1)
+        logs_deleted = store.delete_logs_for_session(session_id)
+    except ValueError:
+        print(f"Error: invalid session id '{session_id}'.")
+        raise SystemExit(1) from None
 
-    logs_deleted = store.delete_logs_for_session(session_id)
     if logs_deleted:
         print(f"Session '{session_id}' has been removed (also cleaned {logs_deleted} log dir(s)).")
     else:

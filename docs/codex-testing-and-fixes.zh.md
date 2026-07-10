@@ -909,6 +909,29 @@
 - URL 查询参数中的 secret 值不得包含原文。
 - 既有 `api_key=[REDACTED]`、`password=[REDACTED]` 格式保持兼容。
 
+### 46. `session_id` 可通过路径片段越过会话目录
+
+#### 现象
+
+- `SessionStore._path_for()` 直接用 `self.sessions_dir / f"{session_id}.json"` 拼接路径。
+- 真实测试中，传入 `../outside` 这类 ID 时，`save/load/delete` 不会拒绝路径片段。
+- `delete_logs_for_session("../sessions")` 会把日志目录拼成 `logs/../sessions`，存在误删会话目录的风险。
+- CLI 的 `resume/remove` 会把非法 ID 当普通缺失会话处理，不能明确暴露输入非法。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中新增 `validate_session_id()`。
+- 只允许普通 ID 字符：字母、数字、下划线、点、短横线，且不能包含 `/` 或 `\`。
+- `save/load/delete` 和日志清理路径统一复用校验，避免 session 文件和 logs 目录路径穿越。
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获非法 ID，输出明确错误并退出。
+
+#### 回归点
+
+- `store.save()` 不得接受包含路径片段的 `session_id`。
+- `store.load/delete("../outside")` 必须拒绝。
+- `delete_logs_for_session("../sessions")` 不得删除 sessions 目录。
+- CLI `resume/remove ../...` 必须返回友好错误。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -916,6 +939,7 @@
   - 旧写法子命令参数兼容
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
+  - `resume/remove` 遇到非法 `session_id` 时输出友好错误
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
   - LLM 指数退避和 `Retry-After`
@@ -929,6 +953,9 @@
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
   - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
+- [tests/test_session_store.py](/Users/liyong/Desktop/ai-manus/tests/test_session_store.py)
+  - `session_id` 不得包含路径穿越片段
+  - 日志清理不得通过非法 `session_id` 越过 logs 目录
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
@@ -985,10 +1012,10 @@ pytest -q
 
 结果：
 
-- `401 passed`
+- `405 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.75%（门禁 80%）
+- 分支覆盖率：83.83%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1029,6 +1056,7 @@ pytest -q
 - `EventLogger` 写入事件日志和 summary 日志前会脱敏敏感内容
 - `/save-context` 导出的 `session.json` 和 `context.md` 会脱敏敏感内容
 - `Authorization: Bearer ...` 和 URL query secret 参数会脱敏敏感值
+- `session_id` 包含路径片段时会被拒绝，不会越过 sessions/logs 目录
 
 ## 后续建议
 

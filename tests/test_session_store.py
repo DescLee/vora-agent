@@ -109,6 +109,42 @@ def test_session_store_rejects_unknown_session(monkeypatch, tmp_path: Path) -> N
         raise AssertionError("expected FileNotFoundError")
 
 
+def test_session_store_rejects_path_traversal_session_id(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.session_id = "../outside"
+
+    for action in (
+        lambda: store.save(session),
+        lambda: store.load("../outside"),
+        lambda: store.delete("../outside"),
+        lambda: store.delete_logs_for_session("../sessions"),
+    ):
+        try:
+            action()
+        except ValueError as error:
+            assert "invalid session_id" in str(error)
+        else:
+            raise AssertionError("expected ValueError")
+
+
+def test_session_store_log_cleanup_cannot_escape_logs_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    saved_path = store.save(session)
+
+    try:
+        store.delete_logs_for_session("../sessions")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    assert saved_path.exists()
+
+
 def test_session_store_cleans_logs_from_user_manus_mini(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: home)

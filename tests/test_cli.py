@@ -60,6 +60,28 @@ def test_cli_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys
     assert "Error: session 'missing-session' not found." in out
 
 
+def test_cli_resume_invalid_session_id_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    with pytest.raises(SystemExit) as error:
+        main(["resume", "../outside", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: invalid session id '../outside'." in out
+
+
+def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    with pytest.raises(SystemExit) as error:
+        main(["remove", "../sessions", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: invalid session id '../sessions'." in out
+
+
 def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkeypatch) -> None:
     seen = {}
 
