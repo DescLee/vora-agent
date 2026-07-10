@@ -201,7 +201,14 @@ def main(argv: list[str] | None = None) -> None:
         _run_clear(cwd, args.force)
         return
     if args.command is None:
-        parser.print_help()
+        _run_default_tui(
+            cwd=cwd,
+            dry_run=dry_run,
+            max_steps=max_steps,
+            max_react=max_react,
+            max_reflect=max_reflect,
+            max_tool_retries=max_tool_retries,
+        )
         return
 
     parser.print_help()
@@ -265,6 +272,24 @@ def _run_once(
     if result.active_task is not None:
         print(f"Status: {result.active_task.status}")
     print(f"Resume with: manus-mini resume {result.session_id} --cwd {cwd}")
+
+
+def _run_default_tui(
+    cwd: Path,
+    dry_run: bool,
+    max_steps: int,
+    max_react: int,
+    max_reflect: int,
+    max_tool_retries: int,
+) -> None:
+    limits = LoopLimits(
+        max_engineering_steps=max_steps,
+        max_react_iterations=max_react,
+        max_reflection_rounds=max_reflect,
+        max_tool_retries=max_tool_retries,
+    )
+    _ensure_interactive_terminal()
+    _run_prompt_tui(PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)))
 
 
 def _run_resume(

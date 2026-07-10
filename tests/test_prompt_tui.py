@@ -109,9 +109,13 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
         llm_config_source=str(env_path),
     )
 
-    assert "欢迎使用 Manus Mini" in welcome
+    assert "Manus Mini TUI" in welcome
+    assert "直接输入任务开始连续对话" in welcome
+    assert "一次性任务：manus-mini run" in welcome
+    assert "恢复会话：manus-mini resume <session_id>" in welcome
     assert "当前模型：deepseek-v4-flash" in welcome
     assert f"配置来源：{env_path}" in welcome
+    assert "运行限制" in welcome
     assert "工程循环上限：3 轮" in welcome
     assert "ReAct 循环上限：99 轮" in welcome
     assert "Reflection 循环上限：3 轮" in welcome
@@ -122,8 +126,11 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     assert "/compact" in welcome
     assert "/save-context" in welcome
     assert "/help" in welcome
-    assert "Enter 发送" in welcome
-    assert "Shift+Enter 换行" in welcome
+    assert "Enter：发送" in welcome
+    assert "Ctrl+J：换行" in welcome
+    assert "Tab：切换输入区和输出区" in welcome
+    assert "Ctrl+C：退出" in welcome
+    assert "manus-mini tui" not in welcome
 
 
 def test_format_welcome_warns_when_llm_config_is_missing(tmp_path: Path) -> None:
@@ -132,7 +139,10 @@ def test_format_welcome_warns_when_llm_config_is_missing(tmp_path: Path) -> None
     welcome = format_welcome(task.limits, llm_configured=False)
 
     assert "未找到可用 LLM 配置" in welcome
+    assert "当前目录 `.env`" in welcome
     assert "LLM_PROVIDER" in welcome
+    assert "LLM_BASE_URL" in welcome
+    assert "LLM_API_KEY" in welcome
     assert "当前模型" not in welcome
 
 
@@ -1747,6 +1757,7 @@ def test_prompt_tui_initial_output_shows_welcome_instead_of_empty_artifact() -> 
     tui = PromptTui()
 
     assert "欢迎使用 Manus Mini" in tui.output.text
+    assert "直接输入任务开始连续对话" in tui.output.text
     assert "工程循环上限" in tui.output.text
     assert "当前产物会显示在这里" not in tui.output.text
 

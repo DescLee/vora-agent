@@ -1881,6 +1881,25 @@
 - 模型不可用时，以上五类操作追问不得展示 `兜底原因`。
 - 回答必须包含对应的工具名、确认机制、边界错误码、验证机制或恢复命令。
 
+### 97. 默认 TUI 入口和首屏信息不符合实际使用方式
+
+#### 现象
+
+- 用户预期执行 `manus-mini` 直接进入 TUI，但旧测试仍要求无参只打印帮助。
+- `manus-mini tui` 已不再需要，但入口关系和首屏说明不够清楚，容易让人误判应该保留显式 `tui` 子命令。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中恢复无子命令启动 `PromptTui`，并保留全局 `--cwd`、`--dry-run`、循环上限参数。
+- 保持 `manus-mini tui` 为非法子命令，不重新暴露旧入口。
+- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中优化欢迎页，明确当前入口、一次性任务入口、恢复会话入口、模型配置来源、运行限制和常用快捷键。
+- README 的运行示例补充默认 TUI 入口。
+
+#### 回归点
+
+- CLI 测试覆盖无子命令启动 TUI，并继续拒绝 `manus-mini tui`。
+- TUI 欢迎页测试覆盖首屏信息不推荐 `manus-mini tui`，并展示 `Enter`、`Ctrl+J`、`Tab`、`Ctrl+C` 等核心操作。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)

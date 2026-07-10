@@ -65,12 +65,14 @@ LLM_RETRY_BACKOFF_SECONDS=0.25
 ## 运行
 
 ```bash
+manus-mini
 manus-mini run "总结一下当前项目" --cwd .
 ```
 
 常用参数：
 
 ```bash
+manus-mini --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 manus-mini run "总结一下当前项目" --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 manus-mini list
 manus-mini resume <session_id> --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run

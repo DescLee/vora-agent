@@ -298,19 +298,25 @@ def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     assert "{list,run,resume,remove,clear}" in err
 
 
-def test_cli_without_command_prints_help_instead_of_opening_tui(capsys, monkeypatch) -> None:
-    def fail_run(self):  # noqa: ANN001
-        raise AssertionError("PromptTui must not start when no subcommand is provided")
+def test_cli_without_command_opens_tui(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    seen = {}
 
-    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fail_run)
+    def fake_run(self):  # noqa: ANN001
+        seen["cwd"] = self.manager.current.cwd
+        seen["dry_run"] = self.manager.runtime.dry_run
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
 
-    main([])
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
 
-    out = capsys.readouterr().out
-    assert "usage: manus-mini" in out
-    assert "list" in out
-    assert "resume" in out
-    assert "tui" not in out
+    main(["--cwd", str(tmp_path), "--dry-run", "--max-react", "1"])
+
+    assert seen == {
+        "cwd": tmp_path,
+        "dry_run": True,
+        "max_react_iterations": 1,
+    }
 
 
 def test_cli_subcommands_preserve_global_cwd_before_command(tmp_path: Path, capsys, monkeypatch) -> None:
