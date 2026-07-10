@@ -131,6 +131,28 @@ def test_run_bash_uses_sanitized_environment(tmp_path: Path, monkeypatch) -> Non
     assert "LLM_API_KEY" not in result.content
 
 
+def test_run_bash_pathlib_write_bytes_requires_confirmation(tmp_path: Path) -> None:
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"from pathlib import Path; Path('note.md').write_bytes(b'x')\"",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "note.md").exists()
+
+
+def test_run_bash_pathlib_open_write_requires_confirmation(tmp_path: Path) -> None:
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"from pathlib import Path; Path('note.md').open('w').write('x')\"",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "note.md").exists()
+
+
 def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
     result = RunTempScriptTool().run(workspace=tmp_path, content="rm -rf /\n")
 

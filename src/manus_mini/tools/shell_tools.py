@@ -30,6 +30,8 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"\bsed\s+-i(?:\s|$)",
     r"\bperl\s+-pi(?:\s|$)",
     r"\bpython(?:3)?\b.*\bwrite_text\s*\(",
+    r"\bpython(?:3)?\b.*\bwrite_bytes\s*\(",
+    r"\bpython(?:3)?\b.*\bPath\s*\([^)]*\)\.open\s*\(\s*['\"][wa]",
     r"\bpython(?:3)?\b.*\bopen\s*\([^)]*,\s*['\"][wa]",
     r"\btee(?:\s+-a)?\s+(?!/)[A-Za-z0-9_.\-/]+",
     r"(^|[\s;&|])(?:>>|>)\s*(?!&|\d|/)[A-Za-z0-9_.\-/]+",

@@ -653,6 +653,28 @@
 - `mypy` 输出必须为 `Success: no issues found`。
 - 类型修复不能改变现有运行行为。
 
+### 34. `run_bash` 中部分 `pathlib` 写文件方式会绕过确认流
+
+#### 现象
+
+- 作为真实用户从 shell 工具入口直接测试时，`Path('note.md').write_bytes(...)` 和 `Path('note.md').open('w').write(...)` 会直接写入工作区文件。
+- 这两类命令没有触发 `COMMAND_REQUIRES_CONFIRMATION`，和项目声明的“写入前需人工确认”安全边界不一致。
+- 运行时层已经覆盖了部分生产代码测试前置门禁，但工具层确认流本身仍存在旁路。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地命令风险启发式。
+- 新增识别：
+  - `Path(...).write_bytes(...)`
+  - `Path(...).open('w'/'a')`
+- 命中后会先返回 `COMMAND_REQUIRES_CONFIRMATION`，未确认前不会执行 shell 命令。
+
+#### 回归点
+
+- `run_bash` 执行 `Path('note.md').write_bytes(...)` 时，必须先进入确认流。
+- `run_bash` 执行 `Path('note.md').open('w').write(...)` 时，必须先进入确认流。
+- 未确认前，目标文件不得被创建或改写。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -694,6 +716,7 @@
 - [tests/test_shell_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_shell_tools.py)
   - shell 超时终止整个子进程组
   - shell 响应 Executor 协作式取消信号
+  - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
   - JSON/Markdown 报告生成
@@ -711,7 +734,7 @@ pytest -q
 
 结果：
 
-- `377 passed`
+- `379 passed`
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83%（门禁 80%）
 - Agent eval：9/9 通过
@@ -737,6 +760,7 @@ pytest -q
 - `run_bash` 通过 `Path(...).write_bytes(...)` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写工作区文件时会先等待确认
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
