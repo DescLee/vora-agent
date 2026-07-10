@@ -1188,6 +1188,25 @@
 - sessions 目录中存在损坏 JSON 文件时，`manus-mini list` 仍应列出正常会话。
 - 损坏文件名不应污染正常列表输出。
 
+### 60. 恢复损坏会话会误报为非法 session id
+
+#### 现象
+
+- `SessionStore.load()` 读取损坏 JSON 时会抛出 `JSONDecodeError`。
+- `JSONDecodeError` 是 `ValueError` 子类，`manus-mini resume` 会把它误捕获为非法 `session_id`。
+- 用户明确恢复一个存在但损坏的会话时，错误提示会误导排查方向。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中增加 `CorruptSessionError`。
+- `load()` 在通过 `session_id` 校验并确认文件存在后，将读取、解析、模型迁移失败统一转换为损坏会话错误。
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中优先捕获损坏会话错误，输出明确的友好错误。
+
+#### 回归点
+
+- `manus-mini resume broken-session` 指向损坏 JSON 时，应提示该会话不可读取或已损坏。
+- 非法 `session_id` 与缺失会话的既有友好错误保持不变。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1195,6 +1214,7 @@
   - 旧写法子命令参数兼容
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
+  - `resume` 指向损坏会话文件时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
   - `list` 展示最近用户消息前必须脱敏并截断预览
   - `list` 遇到损坏会话文件时仍能列出正常会话
@@ -1284,10 +1304,10 @@ pytest -q
 
 结果：
 
-- `424 passed`
+- `425 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.94%（门禁 80%）
+- 分支覆盖率：83.96%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1342,6 +1362,7 @@ pytest -q
 - 结构化 payload 中 `api_key` / `CLIENT_SECRET` 字段值会脱敏，`token_count` 不会被误脱敏
 - `manus-mini list` 展示最近用户消息前会脱敏并截断长文本
 - `manus-mini list` 遇到损坏会话文件时仍能列出其它正常会话
+- `manus-mini resume` 指向损坏会话文件时会输出明确的友好错误
 
 ## 后续建议
 

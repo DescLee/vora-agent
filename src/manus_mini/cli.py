@@ -6,7 +6,7 @@ from pathlib import Path
 from manus_mini.models import LoopLimits
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
 from manus_mini.redaction import redact_sensitive_text
-from manus_mini.session_store import SessionStore
+from manus_mini.session_store import CorruptSessionError, SessionStore
 
 
 MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
@@ -101,6 +101,9 @@ def _run_resume(cwd: Path, session_id: str) -> None:
     store = SessionStore(cwd)
     try:
         session = store.load(session_id)
+    except CorruptSessionError:
+        print(f"Error: session '{session_id}' is unreadable or corrupt.")
+        raise SystemExit(1) from None
     except ValueError:
         print(f"Error: invalid session id '{session_id}'.")
         raise SystemExit(1) from None

@@ -41,6 +41,10 @@ class SessionSummary:
     path: Path
 
 
+class CorruptSessionError(Exception):
+    pass
+
+
 class SessionStore:
     def __init__(self, cwd: Path) -> None:
         self.cwd = cwd
@@ -60,8 +64,11 @@ class SessionStore:
         path = self._path_for(session_id)
         if not path.exists():
             raise FileNotFoundError(f"session not found: {session_id}")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        session = SessionState.model_validate(migrate_session_data(data))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            session = SessionState.model_validate(migrate_session_data(data))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise CorruptSessionError(f"session is unreadable or corrupt: {session_id}") from exc
         session.cwd = self.cwd
         if session.active_task is not None:
             session.active_task.cwd = self.cwd

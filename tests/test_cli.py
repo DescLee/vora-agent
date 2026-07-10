@@ -94,6 +94,20 @@ def test_cli_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys
     assert "Error: session 'missing-session' not found." in out
 
 
+def test_cli_resume_corrupt_session_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "broken-session.json").write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as error:
+        main(["resume", "broken-session", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: session 'broken-session' is unreadable or corrupt." in out
+
+
 def test_cli_resume_invalid_session_id_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
