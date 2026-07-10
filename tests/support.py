@@ -126,7 +126,7 @@ class ScriptedLLM:
         if project_query and "# manus-mini" in tool_text:
             return LLMResult(
                 content=(
-                    "这个项目是 manus-mini，一个面向面试展示的 TUI 版 Manus/Agent 原型。"
+                    "这个项目是 manus-mini，一个本地 TUI 版 Agent Runtime。"
                     "它的核心作用是让用户在终端里连续对话，驱动 Agent 通过 ReAct 循环调用文件工具，"
                     "再经过 reflection 与外层工程循环生成调研、总结或代码相关产物。"
                     "项目已经包含 prompt_toolkit TUI、OpenAI-compatible 配置、文件工具、"

@@ -362,7 +362,7 @@
 #### 回归点
 
 - 模型不可用时，LangChain 取舍追问不得展示 `兜底原因`。
-- 回答必须包含可控性、工具调度、确认流和面试。
+- 回答必须包含可控性、工具调度、确认流和 Agent 工程。
 
 ### 122. 上下文窗口溢出追问在 LLM 不可用时缺少压缩策略说明
 
@@ -449,6 +449,160 @@
 - 模型不可用时，下一版迭代追问不得展示 `兜底原因`。
 - 回答必须包含 streaming、容器沙箱、多 provider 和可观测。
 
+### 127. 并发和状态一致性追问在 LLM 不可用时缺少状态模型说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么处理并发和状态一致性？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要主动说明当前是本地单用户 runtime，以及如何避免工具并发写入和 session 状态错乱。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加并发和状态一致性类直接规则兜底。
+- 回答说明本地单用户定位、单 session 状态机、`ToolScheduler` 写入/敏感工具串行写入、只读工具并行，以及每轮保存 session 和日志。
+
+#### 回归点
+
+- 模型不可用时，并发和状态一致性追问不得展示 `兜底原因`。
+- 回答必须包含单用户、串行写入、`ToolScheduler` 和 session。
+
+### 128. 配置管理和环境隔离追问在 LLM 不可用时缺少配置顺序说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么做配置管理和环境隔离？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要说明配置读取顺序、项目级数据隔离和运行参数覆盖方式。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加配置管理和环境隔离类直接规则兜底。
+- 回答说明环境变量、当前目录 `.env`、`~/.manus-mini/.env`、源码根目录 `.env` 的读取顺序，以及项目级数据按 cwd 映射隔离。
+
+#### 回归点
+
+- 模型不可用时，配置管理追问不得展示 `兜底原因`。
+- 回答必须包含 `.env`、环境变量、源码根目录和项目级。
+
+### 129. session 文件损坏追问在 LLM 不可用时缺少兼容策略说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "如果 session 文件损坏了怎么办？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要说明损坏会话不会拖垮列表和恢复流程。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加损坏 session 类直接规则兜底。
+- 回答说明读取时转成 `CorruptSessionError`，`manus-mini list` 跳过坏文件，`manus-mini resume` 输出友好错误且不暴露 JSON traceback。
+
+#### 回归点
+
+- 模型不可用时，session 损坏追问不得展示 `兜底原因`。
+- 回答必须包含 `CorruptSessionError`、`list`、`resume` 和友好错误。
+
+### 130. 数据隔离追问在 LLM 不可用时缺少项目隔离路径说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么做数据隔离？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要能说清不同项目的数据如何不互相污染。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加数据隔离类直接规则兜底。
+- 回答说明通过 cwd 计算 `project_key`，默认落到 `~/.manus-mini/projects/<project_key>`，每个项目独立保存 `sessions`、`logs`、`outputs` 和 memory。
+
+#### 回归点
+
+- 模型不可用时，数据隔离追问不得展示 `兜底原因`。
+- 回答必须包含 `project_key`、`~/.manus-mini/projects`、`sessions` 和 `logs`。
+
+### 131. 命令超时追问命中泛命令风险回答
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "如果命令执行超时怎么办？" --cwd <目录> --max-steps 1 --max-react 1` 时，虽然不展示兜底原因，但只回答命令风险判断。
+- 面试时需要说明超时上限、错误码和后续 ReAct/Reflection 处理。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加命令超时类直接规则兜底，并让它先于泛命令风险匹配。
+- 回答说明 `max_tool_timeout_seconds`、失败 `ToolObservation`、`TIMEOUT` 类 `error_code` 和失败说明。
+
+#### 回归点
+
+- 命令超时追问必须命中超时专用回答。
+- 回答必须包含 `max_tool_timeout_seconds`、`TIMEOUT`、`ToolObservation` 和失败说明。
+
+### 132. 敏感信息和密钥追问在 LLM 不可用时缺少脱敏链路说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么处理敏感信息和密钥？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要说明日志、TUI、报告、列表展示和长期记忆的敏感信息处理。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加敏感信息和密钥类直接规则兜底。
+- 回答说明 `redact_sensitive_text` 在日志、TUI、报告和列表展示前脱敏，覆盖 API key、token、Authorization 等模式，长期记忆写入前也会过滤密钥。
+
+#### 回归点
+
+- 模型不可用时，敏感信息追问不得展示 `兜底原因`。
+- 回答必须包含 `redact_sensitive_text`、API key、token 和长期记忆。
+
+### 133. LLM 空结果追问在 LLM 不可用时缺少空响应兜底说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "如果 LLM 返回空结果怎么办？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要说明空消息不会被当作成功产物直接交给用户。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加 LLM 空结果类直接规则兜底。
+- 回答说明空结果会走 fallback 兜底生成可读回答，并把任务收敛到 `done`，避免 CLI/TUI 展示空白。
+
+#### 回归点
+
+- 模型不可用时，LLM 空结果追问不得展示 `兜底原因`。
+- 回答必须包含空结果、fallback、兜底和 `done`。
+
+### 134. 错误分级追问在 LLM 不可用时缺少 error_code 体系说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么做错误分级？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时需要能举出结构化错误码，而不是只说“有异常处理”。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加错误分级类直接规则兜底。
+- 回答说明 `error_code` 体系：`PATH_OUT_OF_WORKSPACE`、`RISK_REJECTED`、`TIMEOUT` 和 `CorruptSessionError`。
+
+#### 回归点
+
+- 模型不可用时，错误分级追问不得展示 `兜底原因`。
+- 回答必须包含 `error_code`、`PATH_OUT_OF_WORKSPACE`、`RISK_REJECTED` 和 `TIMEOUT`。
+
+### 135. 项目定位被误写成“面试项目”
+
+#### 现象
+
+- README、产品设计和 ADR 中存在“面向面试展示”“高级工程师面试项目”等表达。
+- 这会把项目定位误导成专门包装出来的面试 demo，而不是用户拿去面试讲解的真实本地 Agent Runtime 项目。
+
+#### 修复
+
+- 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中把定位改为“本地 Agent Runtime”，说明它可以用于面试中讲解 Agent 工程能力，而不是项目本身就是面试项目。
+- 在 [docs/v1-product-design.md](/Users/liyong/Desktop/ai-manus/docs/v1-product-design.md)、[docs/demo-scenarios.zh.md](/Users/liyong/Desktop/ai-manus/docs/demo-scenarios.zh.md)、[docs/adr/0001-self-managed-agent-runtime.zh.md](/Users/liyong/Desktop/ai-manus/docs/adr/0001-self-managed-agent-runtime.zh.md) 和 [docs/fixed-issues-and-optimizations.md](/Users/liyong/Desktop/ai-manus/docs/fixed-issues-and-optimizations.md) 中同步调整定位表述。
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中把“为了面试展示底层可控性”等回答改为“把底层可控性讲清楚”，避免 Agent 自述时贬低项目定位。
+
+#### 回归点
+
+- 项目主文档不得再把 manus-mini 定义成“面试项目”或“面向面试展示”的项目。
+- 面试相关内容只作为项目讲解场景存在，不作为产品定位。
+
 ## 本轮新增/调整测试
 
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
@@ -456,6 +610,9 @@
   - 增加 `test_runtime_fallback_answers_interview_runtime_mechanics_questions`，覆盖 dry-run、命令风险、工具调度、Reflection、eval、架构讲法和打包发布七类面试高频追问。
   - 增加 `test_runtime_fallback_answers_interview_positioning_questions`，覆盖项目边界、Manus 差距、面试演示、工具扩展、生产化、排障和资深度七类面试高频追问。
   - 增加 `test_runtime_fallback_answers_interview_defense_questions`，覆盖核心难点、可观测性、LangChain 取舍、上下文窗口、测试质量、工具失败、幻觉控制和下一版迭代八类面试答辩追问。
+  - 增加 `test_runtime_fallback_answers_interview_reliability_questions`，覆盖并发状态、配置环境、损坏 session、数据隔离、命令超时、敏感信息、LLM 空结果和错误分级八类可靠性追问。
+- [tests/test_package.py](/Users/liyong/Desktop/ai-manus/tests/test_package.py)
+  - 增加 `test_readme_positions_project_as_agent_runtime_not_interview_project`，确认 README 把项目定位为本地 Agent Runtime，而不是面试项目。
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 扩展 `test_format_welcome_explains_limits_and_controls`，覆盖默认 TUI 入口、历史会话查看、写入确认和项目隔离存储位置。
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -477,9 +634,9 @@ python -m build
 
 结果：
 
-- `pytest -q`：528 passed
+- `pytest -q`：537 passed
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - `python evals/run_evals.py`：9/9 通过
-- `pytest --cov=manus_mini --cov-report=term-missing`：85.02%（门禁 80%）
+- `pytest --cov=manus_mini --cov-report=term-missing`：85.10%（门禁 80%）
 - `python -m build`：沙箱内因 DNS/PyPI 访问失败，使用外部权限重跑后通过，生成 sdist 和 wheel

@@ -1,12 +1,12 @@
 # manus-mini
 
-面试演示版 Agent Runtime
+本地 Agent Runtime
 
-`manus-mini` 是一个面向面试展示的本地 Agent Runtime。项目重点不是复刻完整 Manus 产品，而是展示一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架。
+`manus-mini` 是一个本地 Agent Runtime。项目重点不是复刻完整 Manus 产品，而是实现一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架；它可以作为候选人在面试中讲解 Agent 工程能力的项目。
 
 ## 项目定位
 
-当前版本适合作为高级工程师面试项目，重点体现：
+当前版本重点体现：
 
 - Agent 运行编排：`Runtime -> Planner -> ReAct -> ToolScheduler -> Executor -> Observer -> Reflection -> Reporter`
 - 工具调用治理：工具 schema、批次调度、依赖处理、写入确认、命令风险判断。
@@ -88,7 +88,7 @@ pytest --cov=manus_mini --cov-report=term-missing
 python evals/run_evals.py
 ```
 
-## 面试展示建议
+## 项目讲解建议
 
 推荐展示三条路径：
 
@@ -96,7 +96,7 @@ python evals/run_evals.py
 2. 写入确认：让 Agent 修改一个文件，展示 diff preview 和人工确认。
 3. 代码门禁：让 Agent 做代码修改，说明 Reflection 会生成 pytest 验收 case，不通过则回流继续执行。
 
-面试讲法应明确：这是本地单用户 Agent Runtime MVP，核心价值在于 Agent 工程治理，而不是完整生产平台。
+对外讲解时应明确：这是本地单用户 Agent Runtime MVP，核心价值在于 Agent 工程治理，而不是完整生产平台。
 
 仓库内的 GitHub Actions 会自动执行 lint、类型检查、测试覆盖率、Agent eval 和 Python 包构建；覆盖率低于 80% 时门禁失败。
 

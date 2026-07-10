@@ -104,6 +104,14 @@ TEST_QUALITY_GOAL_KEYWORDS = ("测试质量", "保证测试", "测试保障")
 TOOL_FAILURE_GOAL_KEYWORDS = ("工具调用失败", "工具失败", "调用失败")
 HALLUCINATION_GUARD_GOAL_KEYWORDS = ("避免幻觉", "防止幻觉", "减少幻觉", "幻觉")
 NEXT_ITERATION_GOAL_KEYWORDS = ("继续迭代", "下一版", "下个版本", "先做什么")
+CONCURRENCY_STATE_GOAL_KEYWORDS = ("并发和状态一致性", "并发", "状态一致性")
+CONFIG_ENV_ISOLATION_GOAL_KEYWORDS = ("配置管理", "环境隔离", "配置隔离")
+CORRUPT_SESSION_GOAL_KEYWORDS = ("session 文件损坏", "会话文件损坏", "损坏了怎么办", "损坏 session")
+DATA_ISOLATION_GOAL_KEYWORDS = ("数据隔离", "项目隔离", "隔离数据")
+COMMAND_TIMEOUT_GOAL_KEYWORDS = ("命令执行超时", "命令超时", "超时怎么办")
+SECRET_HANDLING_GOAL_KEYWORDS = ("敏感信息", "密钥", "api key", "token")
+EMPTY_LLM_RESULT_GOAL_KEYWORDS = ("llm 返回空", "模型返回空", "空结果")
+ERROR_TAXONOMY_GOAL_KEYWORDS = ("错误分级", "错误分类", "error code", "error_code")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
 EXPLICIT_WRITE_INTENT_KEYWORDS = (
     "保存到",
@@ -741,7 +749,7 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in CAPABILITY_GOAL_KEYWORDS):
             return (
                 "核心能力包括：任务规划、ReAct 工具调用、会话持久化、上下文压缩、写入确认、"
-                "Reflection 质量门禁和结构化运行日志。面试展示时可以按“目标 -> 计划 -> 工具 -> 验证 -> 会话恢复”这条链路讲。"
+                "Reflection 质量门禁和结构化运行日志。项目讲解时可以按“目标 -> 计划 -> 工具 -> 验证 -> 会话恢复”这条链路讲。"
             )
         if any(keyword in compact_focus for keyword in SECURITY_GOAL_KEYWORDS):
             return (
@@ -793,7 +801,7 @@ class ReActLoop:
             return (
                 "会话和本地状态保存在工作目录对应的 `.manus-mini` 存储下，历史会话在 `sessions`，"
                 "结构化运行记录在 `logs`，报告和上下文快照等产物在 `outputs`。"
-                "面试时可以用 `manus-mini list --cwd .` 找会话，再看对应日志和输出目录。"
+                "讲解或排障时可以用 `manus-mini list --cwd .` 找会话，再看对应日志和输出目录。"
             )
         if any(keyword in compact_focus for keyword in CONTEXT_COMPRESSION_GOAL_KEYWORDS):
             return (
@@ -813,7 +821,12 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in DRY_RUN_GOAL_KEYWORDS):
             return (
                 "`--dry-run` 是写入和命令执行的预演模式：工具会返回确认预览和计划动作，但不落盘、不真正执行有副作用操作。"
-                "面试时可以用它展示安全边界和确认流。"
+                "讲解时可以用它展示安全边界和确认流。"
+            )
+        if any(keyword in compact_focus for keyword in COMMAND_TIMEOUT_GOAL_KEYWORDS):
+            return (
+                "命令超时由 `max_tool_timeout_seconds` 控制；超时后工具结果会变成失败的 `ToolObservation`，"
+                "带 `TIMEOUT` 类 `error_code` 和失败说明，再交给 ReAct/Reflection 决定重试、改计划或向用户说明。"
             )
         if any(keyword in compact_focus for keyword in COMMAND_RISK_GOAL_KEYWORDS):
             return (
@@ -884,11 +897,11 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in OBSERVABILITY_GOAL_KEYWORDS):
             return (
                 "可观测性由 `EventLogger`、`trace_events`、run `summary` 和项目级 `logs` 组成。"
-                "它能回看每轮 LLM 请求、计划、工具调用、工具返回、压缩和 Reflection 决策，便于面试现场排障。"
+                "它能回看每轮 LLM 请求、计划、工具调用、工具返回、压缩和 Reflection 决策，便于现场讲解和排障。"
             )
         if any(keyword in compact_focus for keyword in LANGCHAIN_DECISION_GOAL_KEYWORDS):
             return (
-                "不用 LangChain 的取舍是为了面试展示底层可控性：自己实现工具调度、确认流、上下文压缩、"
+                "不用 LangChain 的取舍是为了把底层可控性讲清楚：自己实现工具调度、确认流、上下文压缩、"
                 "安全边界和 Reflection 回流，更容易说明 Agent 工程细节；生产项目可以再评估是否接入框架生态。"
             )
         if any(keyword in compact_focus for keyword in CONTEXT_WINDOW_OVERFLOW_GOAL_KEYWORDS):
@@ -913,8 +926,43 @@ class ReActLoop:
             )
         if any(keyword in compact_focus for keyword in NEXT_ITERATION_GOAL_KEYWORDS):
             return (
-                "下一版我会先做四件和面试价值最高的事：streaming 输出提升 TUI 体验，容器沙箱替代本机命令执行，"
+                "下一版我会先做四件对项目演示和后续落地价值最高的事：streaming 输出提升 TUI 体验，容器沙箱替代本机命令执行，"
                 "多 provider LLM adapter 加强可用性，再把可观测链路升级成更完整的运行详情视图。"
+            )
+        if any(keyword in compact_focus for keyword in CONCURRENCY_STATE_GOAL_KEYWORDS):
+            return (
+                "当前定位是本地单用户 runtime，不做多用户并发写入。状态一致性主要靠单 session 状态机、"
+                "`ToolScheduler` 对写入/敏感工具串行写入、只读工具并行，以及每轮执行后保存 session 和日志。"
+            )
+        if any(keyword in compact_focus for keyword in CONFIG_ENV_ISOLATION_GOAL_KEYWORDS):
+            return (
+                "配置管理按环境变量、当前目录 `.env`、`~/.manus-mini/.env`、源码根目录 `.env` 的顺序读取。"
+                "项目级数据按 cwd 映射隔离，运行时参数如 dry-run、max-react、工具超时可通过 CLI 覆盖。"
+            )
+        if any(keyword in compact_focus for keyword in CORRUPT_SESSION_GOAL_KEYWORDS):
+            return (
+                "session 文件损坏会在读取时转成 `CorruptSessionError`。`manus-mini list` 会跳过坏文件继续列正常会话，"
+                "`manus-mini resume` 会输出友好错误，不把 JSON traceback 暴露给用户。"
+            )
+        if any(keyword in compact_focus for keyword in DATA_ISOLATION_GOAL_KEYWORDS):
+            return (
+                "数据隔离通过 cwd 计算 `project_key`，默认落到 `~/.manus-mini/projects/<project_key>`。"
+                "每个项目有独立的 `sessions`、`logs`、`outputs` 和 memory，避免不同项目互相污染。"
+            )
+        if any(keyword in compact_focus for keyword in SECRET_HANDLING_GOAL_KEYWORDS):
+            return (
+                "敏感信息用 `redact_sensitive_text` 在日志、TUI、报告和列表展示前脱敏，覆盖 API key、token、Authorization 等模式。"
+                "长期记忆写入前也会过滤密钥，避免把凭据持久化。"
+            )
+        if any(keyword in compact_focus for keyword in EMPTY_LLM_RESULT_GOAL_KEYWORDS):
+            return (
+                "LLM 返回空结果时不会把空消息直接当成功产物交给用户；runtime 会使用 fallback 兜底生成可读回答，"
+                "并把任务收敛到 `done`，保证 CLI/TUI 看到的是明确结果而不是空白。"
+            )
+        if any(keyword in compact_focus for keyword in ERROR_TAXONOMY_GOAL_KEYWORDS):
+            return (
+                "错误分级主要靠结构化 `error_code`：路径越界是 `PATH_OUT_OF_WORKSPACE`，命令风险拒绝是 `RISK_REJECTED`，"
+                "超时是 `TIMEOUT`，损坏会话会转成 `CorruptSessionError`，上层再决定提示、重试或终止。"
             )
         if _goal_mentions_current_project(compact_focus) and any(
             keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS

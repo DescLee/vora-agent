@@ -2816,7 +2816,7 @@ def test_runtime_fallback_answers_interview_positioning_questions(
     [
         ("如果面试官问这个项目的核心难点是什么，怎么回答？", ["工具调用闭环", "上下文", "安全", "验证"]),
         ("这个项目怎么体现可观测性？", ["EventLogger", "trace_events", "summary", "logs"]),
-        ("面试官问为什么不用 LangChain，怎么回答？", ["可控性", "工具调度", "确认流", "面试"]),
+        ("面试官问为什么不用 LangChain，怎么回答？", ["可控性", "工具调度", "确认流", "Agent 工程"]),
         ("上下文窗口爆了怎么办？", ["50%", "70%", "90%", "CompressionSnapshot"]),
         ("这个项目怎么保证测试质量？", ["pytest", "ruff", "mypy", "eval"]),
         ("如果工具调用失败会怎么处理？", ["ToolObservation", "error_code", "重试", "Reflection"]),
@@ -2825,6 +2825,41 @@ def test_runtime_fallback_answers_interview_positioning_questions(
     ],
 )
 def test_runtime_fallback_answers_interview_defense_questions(
+    tmp_path: Path,
+    prompt: str,
+    expected_terms: list[str],
+) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("这个项目怎么处理并发和状态一致性？", ["单用户", "串行写入", "ToolScheduler", "session"]),
+        ("这个项目怎么做配置管理和环境隔离？", [".env", "环境变量", "源码根目录", "项目级"]),
+        ("如果 session 文件损坏了怎么办？", ["CorruptSessionError", "list", "resume", "友好错误"]),
+        ("这个项目怎么做数据隔离？", ["project_key", "~/.manus-mini/projects", "sessions", "logs"]),
+        ("如果命令执行超时怎么办？", ["max_tool_timeout_seconds", "TIMEOUT", "ToolObservation", "失败说明"]),
+        ("这个项目怎么处理敏感信息和密钥？", ["redact_sensitive_text", "API key", "token", "长期记忆"]),
+        ("如果 LLM 返回空结果怎么办？", ["空结果", "fallback", "兜底", "done"]),
+        ("这个项目怎么做错误分级？", ["error_code", "PATH_OUT_OF_WORKSPACE", "RISK_REJECTED", "TIMEOUT"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_reliability_questions(
     tmp_path: Path,
     prompt: str,
     expected_terms: list[str],
