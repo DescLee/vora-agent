@@ -1037,6 +1037,27 @@
 - `GH_TOKEN=...` 必须脱敏值。
 - URL query 中 `access_token` 脱敏后仍保留其他 query 参数。
 
+### 52. 搜索和网页抓取工具会在 URL 输出中泄露 query secret
+
+#### 现象
+
+- `web_search` 会把搜索结果 URL 原样写入工具 `content`。
+- `fetch_webpage` 会把原始 URL 写入 `summary` 和 `data.url`。
+- 如果 URL 中包含 `access_token`、`api_key` 等 query secret，工具结果在进入上层日志、TUI、报告前已经包含原值。
+- 搜索 query 本身也会进入 summary，用户误粘贴 token 时同样会泄漏。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/search_tools.py) 中复用统一脱敏函数。
+- `web_search` 对搜索结果标题、摘要、URL、query、warning 和 stderr 做返回前脱敏。
+- `fetch_webpage` 真实请求仍使用原始 URL，但返回的 summary、失败信息和 `data.url` 使用脱敏后的 URL。
+
+#### 回归点
+
+- 搜索结果 URL 中的 `access_token` 不应以原值出现在工具 content。
+- 搜索 query 中的 `access_token` 不应以原值出现在工具 summary/data。
+- 网页抓取结果中的 URL query secret 不应以原值出现在 summary 或 `data.url`。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1069,6 +1090,7 @@
   - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
   - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
   - `fetch_webpage` 必须拒绝本机、内网、link-local 和解析到私网的 URL
+  - `web_search` / `fetch_webpage` 返回 URL 或 query 前必须脱敏 query secret
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - 越界写入/替换不得通过确认 diff 或 trace diff 泄露工作区外文件内容
   - fallback 高价值回答
@@ -1122,10 +1144,10 @@ pytest -q
 
 结果：
 
-- `412 passed`
+- `415 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.83%（门禁 80%）
+- 分支覆盖率：83.84%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1172,6 +1194,7 @@ pytest -q
 - 越界写入/替换不会通过确认 diff 或 trace diff 泄露工作区外文件内容
 - `run_bash` / `run_temp_script` 返回工具结果前会脱敏 stdout/stderr 中的敏感值
 - `AWS_SECRET_ACCESS_KEY`、`CLIENT_SECRET`、`GH_TOKEN` 等组合式凭证名会脱敏值
+- `web_search` / `fetch_webpage` 不会在 URL 或 query 输出中泄露 query secret
 
 ## 后续建议
 

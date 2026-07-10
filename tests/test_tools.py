@@ -588,6 +588,57 @@ def test_web_search_formats_results(monkeypatch) -> None:
     assert result.data["result_count"] == 1
 
 
+def test_web_search_redacts_secret_values_in_result_urls(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+
+    class FakeDDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def text(self, query, max_results):  # noqa: ANN001, ANN201, ARG002
+            return [
+                {
+                    "title": "Callback",
+                    "body": "OAuth callback",
+                    "href": "https://example.com/callback?access_token=plain-secret&ok=1",
+                },
+            ]
+
+    monkeypatch.setattr(search_tools, "DDGS", FakeDDGS)
+
+    result = WebSearchTool().run(query="callback")
+
+    assert result.ok is True
+    assert "plain-secret" not in result.content
+    assert "access_token=[REDACTED]" in result.content
+
+
+def test_web_search_redacts_secret_values_in_query_outputs(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+
+    class FakeDDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def text(self, query, max_results):  # noqa: ANN001, ANN201, ARG002
+            return []
+
+    monkeypatch.setattr(search_tools, "DDGS", FakeDDGS)
+
+    result = WebSearchTool().run(query="status access_token=plain-secret")
+
+    assert result.ok is True
+    assert "plain-secret" not in result.summary
+    assert "plain-secret" not in result.data["query"]
+    assert "access_token=[REDACTED]" in result.summary
+
+
 def test_web_search_suppresses_duckduckgo_package_rename_warning(monkeypatch, recwarn, capsys) -> None:
     from manus_mini.tools import search_tools
     import sys
@@ -704,6 +755,36 @@ def test_fetch_webpage_strips_html(monkeypatch) -> None:
     assert "A&B" in result.content
     assert "bad()" not in result.content
     assert result.data["content_type"] == "text/html"
+
+
+def test_fetch_webpage_redacts_secret_values_in_url_outputs(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+    import socket
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Hello</body></html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout, headers):  # noqa: ANN001, ANN201, ARG002
+        return FakeResponse()
+
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202, ARG002
+        return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(search_tools.requests, "get", fake_get)
+
+    result = FetchWebpageTool().run(url="https://example.com/callback?access_token=plain-secret&ok=1")
+
+    assert result.ok is True
+    assert "plain-secret" not in result.summary
+    assert "plain-secret" not in result.data["url"]
+    assert "access_token=[REDACTED]" in result.summary
+    assert result.data["url"] == "https://example.com/callback?access_token=[REDACTED]&ok=1"
 
 
 def test_append_file_appends_content_with_confirmation(tmp_path: Path) -> None:

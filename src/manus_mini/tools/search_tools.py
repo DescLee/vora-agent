@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import requests
 from duckduckgo_search import DDGS
 
+from manus_mini.redaction import redact_sensitive_text
 from manus_mini.tools.base import BaseTool, ToolResult
 
 
@@ -57,6 +58,7 @@ class WebSearchTool(BaseTool):
                 summary="missing required argument: query",
                 error_code="INVALID_TOOL_PARAMS",
             )
+        safe_query = redact_sensitive_text(query)
         max_results = int(kwargs.get("max_results", 5))
         max_results = max(1, min(max_results, 20))
 
@@ -75,7 +77,7 @@ class WebSearchTool(BaseTool):
             return ToolResult(
                 tool_name=self.name,
                 ok=False,
-                summary=f"Search failed: {exc}",
+                summary=redact_sensitive_text(f"Search failed: {exc}"),
                 error_code="SEARCH_FAILED",
                 data=data,
             )
@@ -87,16 +89,16 @@ class WebSearchTool(BaseTool):
             return ToolResult(
                 tool_name=self.name,
                 ok=True,
-                summary=f"No results found for: {query}",
+                summary=f"No results found for: {safe_query}",
                 content="No results found.",
                 data=data,
             )
 
         lines: list[str] = []
         for i, r in enumerate(results, 1):
-            title = r.get("title", "").strip()
-            snippet = r.get("body", r.get("snippet", "")).strip()
-            url = r.get("href", r.get("link", "")).strip()
+            title = redact_sensitive_text(r.get("title", "").strip())
+            snippet = redact_sensitive_text(r.get("body", r.get("snippet", "")).strip())
+            url = redact_sensitive_text(r.get("href", r.get("link", "")).strip())
             lines.append(f"{i}. {title}")
             if snippet:
                 lines.append(f"   {_truncate(snippet, 200)}")
@@ -108,7 +110,7 @@ class WebSearchTool(BaseTool):
         return ToolResult(
             tool_name=self.name,
             ok=True,
-            summary=f"Found {len(results)} results for: {query}",
+            summary=f"Found {len(results)} results for: {safe_query}",
             content=content,
             data=_web_search_data(query, len(results), captured_warnings, captured_stderr),
         )
@@ -173,6 +175,7 @@ class FetchWebpageTool(BaseTool):
             )
         max_chars = int(kwargs.get("max_chars", 8000))
         max_chars = max(1000, min(max_chars, 50000))
+        safe_url = redact_sensitive_text(url)
 
         try:
             resp = requests.get(url, timeout=15, headers={
@@ -188,16 +191,16 @@ class FetchWebpageTool(BaseTool):
             return ToolResult(
                 tool_name=self.name,
                 ok=False,
-                summary=f"Failed to fetch {url}: {exc}",
+                summary=redact_sensitive_text(f"Failed to fetch {url}: {exc}"),
                 error_code="FETCH_FAILED",
             )
 
         return ToolResult(
             tool_name=self.name,
             ok=True,
-            summary=f"Fetched {url} ({len(text)} chars)",
+            summary=f"Fetched {safe_url} ({len(text)} chars)",
             content=text,
-            data={"url": url, "chars": len(text), "content_type": content_type},
+            data={"url": safe_url, "chars": len(text), "content_type": content_type},
         )
 
 
@@ -253,14 +256,14 @@ def _format_warning_records(records) -> list[str]:
     formatted = []
     for record in records:
         category = getattr(record.category, "__name__", "Warning")
-        message = str(record.message).strip()
+        message = redact_sensitive_text(str(record.message).strip())
         if message:
             formatted.append(f"{category}: {message}")
     return formatted
 
 
 def _format_captured_stderr(stderr: str) -> list[str]:
-    return [line.strip() for line in stderr.splitlines() if line.strip()]
+    return [redact_sensitive_text(line.strip()) for line in stderr.splitlines() if line.strip()]
 
 
 def _web_search_data(
@@ -269,7 +272,7 @@ def _web_search_data(
     captured_warnings: list[str],
     captured_stderr: list[str],
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {"result_count": result_count, "query": query}
+    data: dict[str, Any] = {"result_count": result_count, "query": redact_sensitive_text(query)}
     if captured_warnings:
         data["warnings"] = captured_warnings
     if captured_stderr:
