@@ -1112,6 +1112,24 @@
 
 - LLM 风险判定请求中的命令文本不得包含原始 `CLIENT_SECRET` 值。
 
+### 56. 长期记忆元数据可绕过敏感信息拦截
+
+#### 现象
+
+- `MemoryManager.add_if_allowed()` 只检查 `content` 是否包含敏感信息。
+- `tags` 和 `source_message_ids` 会被直接 JSON 序列化写入 sqlite。
+- 如果调用方误把 `CLIENT_SECRET=...`、`GH_TOKEN=...` 等值放入 tags 或 source id，长期记忆仍会落盘敏感值。
+
+#### 修复
+
+- 在 [src/manus_mini/memory.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/memory.py) 中让 `add_if_allowed()` 同时检查 content、tags 和 source_message_ids。
+- 保留底层 `add()` 的显式写入能力；自动/安全入口继续负责敏感信息拦截。
+
+#### 回归点
+
+- tags 中包含 `CLIENT_SECRET` 时不得写入长期记忆。
+- source_message_ids 中包含 `GH_TOKEN` 时不得写入长期记忆。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1127,6 +1145,9 @@
   - 用户目录不可写时路径回退
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
+- [tests/test_memory.py](/Users/liyong/Desktop/ai-manus/tests/test_memory.py)
+  - 长期记忆 content 中的敏感值不得写入
+  - 长期记忆 tags 和 source_message_ids 中的敏感值不得写入
 - [tests/test_redaction.py](/Users/liyong/Desktop/ai-manus/tests/test_redaction.py)
   - `Authorization: Bearer ...` 必须脱敏 token 值
   - URL query 中的 `access_token` 必须脱敏参数值
@@ -1202,7 +1223,7 @@ pytest -q
 
 结果：
 
-- `420 passed`
+- `421 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.91%（门禁 80%）
@@ -1256,6 +1277,7 @@ pytest -q
 - 待确认 diff 和 replace trace diff 不会展示 `CLIENT_SECRET` 等敏感值
 - 工具 preview summary/args 不会展示 URL query secret 或 shell 命令中的敏感值
 - Shell LLM 风险判定请求不会发送命令里的原始敏感值
+- 长期记忆安全入口不会通过 tags/source_message_ids 落盘敏感值
 
 ## 后续建议
 

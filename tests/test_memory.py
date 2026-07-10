@@ -84,6 +84,32 @@ def test_sensitive_content_is_not_written_to_long_term_memory(tmp_path: Path) ->
     assert manager.search("secret", limit=10) == []
 
 
+def test_sensitive_memory_metadata_is_not_written_to_long_term_memory(tmp_path: Path) -> None:
+    manager = MemoryManager(tmp_path / "memory.db")
+
+    assert (
+        manager.add_if_allowed(
+            scope="user",
+            kind="preference",
+            content="用户偏好：报告用 Markdown。",
+            tags=["CLIENT_SECRET=plain-secret"],
+        )
+        is None
+    )
+    assert (
+        manager.add_if_allowed(
+            scope="user",
+            kind="preference",
+            content="用户偏好：报告用 Markdown。",
+            tags=["markdown"],
+            source_message_ids=["GH_TOKEN=plain-secret"],
+        )
+        is None
+    )
+
+    assert manager.search("", limit=10) == []
+
+
 def test_search_result_exposes_id_and_content(tmp_path: Path) -> None:
     manager = MemoryManager(tmp_path / "memory.db")
 

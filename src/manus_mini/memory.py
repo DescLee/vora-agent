@@ -118,15 +118,17 @@ class MemoryManager:
         confidence: float = 1.0,
         source_message_ids: Iterable[str] | None = None,
     ) -> MemoryItem | None:
-        if contains_sensitive_text(content) or SENSITIVE_PATTERN.search(content):
+        tags_list = list(tags)
+        source_ids = list(source_message_ids or [])
+        if any(_contains_sensitive_memory_text(value) for value in [content, *tags_list, *source_ids]):
             return None
         return self.add(
             scope=scope,
             kind=kind,
             content=content,
-            tags=tags,
+            tags=tags_list,
             confidence=confidence,
-            source_message_ids=source_message_ids,
+            source_message_ids=source_ids,
         )
 
     def search(self, query: str, limit: int = 5) -> list[MemoryItem]:
@@ -228,6 +230,10 @@ class MemoryManager:
     @staticmethod
     def _normalize_query(query: str) -> list[str]:
         return re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", query.lower())
+
+
+def _contains_sensitive_memory_text(content: str) -> bool:
+    return contains_sensitive_text(content) or SENSITIVE_PATTERN.search(content) is not None
 
 
 __all__ = ["MemoryManager"]
