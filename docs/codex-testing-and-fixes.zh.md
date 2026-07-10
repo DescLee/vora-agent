@@ -766,6 +766,27 @@
 - `Path('.env.example').read_text()` 仍允许执行。
 - 未确认前，shell 输出不得包含密钥内容。
 
+### 39. 嵌套 shell 可绕过敏感文件读取检测
+
+#### 现象
+
+- 敏感读取检测只分析顶层命令名。
+- 真实测试中，`bash -c 'echo nested; cat .env'` 和 `sh -c 'echo nested; head -n 1 .env.test'` 会把敏感文件读取命令藏在 `-c` 脚本文本里。
+- 顶层命令名是 `bash` / `sh`，不会命中 `cat` / `head` 等读取命令列表，导致密钥内容直接输出给模型。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中识别 `sh` / `bash` / `zsh` 的 `-c` 脚本文本。
+- 使用保留引号语义的 shell token 分段，避免先按分号切分时把 `-c` 脚本文本切坏。
+- 对 `-c` 后的脚本文本递归复用敏感读取检测。
+- 递归深度限制为两层，避免异常命令造成无限递归或过度分析。
+
+#### 回归点
+
+- `run_bash` 执行 `bash -c 'echo nested; cat .env'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_temp_script` 执行 `sh -c 'echo nested; head -n 1 .env.test'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- 未确认前，shell 输出不得包含密钥内容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -814,6 +835,7 @@
   - shell 响应 Executor 协作式取消信号
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
+  - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
@@ -832,9 +854,9 @@ pytest -q
 
 结果：
 
-- `389 passed`
+- `391 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.64%（门禁 80%）
+- 分支覆盖率：83.60%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -858,6 +880,7 @@ pytest -q
 - `run_bash` 通过 `Path(...).write_bytes(...)` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写工作区文件时会先等待确认
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
+- `run_bash` / `run_temp_script` 通过嵌套 shell 读取敏感文件时会先等待确认
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
 - `.env.example` 仍可作为安全模板文件写入

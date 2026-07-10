@@ -39,6 +39,7 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
 SENSITIVE_READ_COMMANDS = {"awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "tail"}
+NESTED_SHELL_COMMANDS = {"bash", "sh", "zsh"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:
 - risk_level: "high" or "low"
@@ -419,21 +420,53 @@ def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
     return CommandRisk(False, source="local_heuristic")
 
 
-def _reads_sensitive_workspace_file(command_text: str) -> bool:
+def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> bool:
+    if depth > 2:
+        return False
     if _python_reads_sensitive_file(command_text):
         return True
-    for segment in re.split(r"[;&|\n]+", command_text):
-        try:
-            tokens = shlex.split(segment)
-        except ValueError:
-            continue
+    for tokens in _shell_command_segments(command_text):
         if not tokens:
             continue
         command_name = Path(tokens[0]).name
+        if command_name in NESTED_SHELL_COMMANDS and _nested_shell_reads_sensitive_file(tokens, depth=depth):
+            return True
         if command_name not in SENSITIVE_READ_COMMANDS:
             continue
         if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
             return True
+    return False
+
+
+def _shell_command_segments(command_text: str) -> list[list[str]]:
+    try:
+        lexer = shlex.shlex(command_text, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token and all(char in ";&|" for char in token):
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _nested_shell_reads_sensitive_file(tokens: list[str], *, depth: int) -> bool:
+    for index, token in enumerate(tokens[1:], start=1):
+        if token.startswith("-") and "c" in token:
+            script_index = index + 1
+            if script_index >= len(tokens):
+                return False
+            return _reads_sensitive_workspace_file(tokens[script_index], depth=depth + 1)
     return False
 
 
