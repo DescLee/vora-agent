@@ -38,7 +38,7 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"(^|[;&|]\s*)printf\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
-SENSITIVE_READ_COMMANDS = {"awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "tail"}
+SENSITIVE_READ_COMMANDS = {".", "awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "source", "tail"}
 NESTED_SHELL_COMMANDS = {"bash", "sh", "zsh"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:
@@ -430,7 +430,7 @@ def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> boo
     for tokens in _shell_command_segments(command_text):
         if not tokens:
             continue
-        command_name = Path(tokens[0]).name
+        command_name = "." if tokens[0] == "." else Path(tokens[0]).name
         if command_name in NESTED_SHELL_COMMANDS and _nested_shell_reads_sensitive_file(tokens, depth=depth):
             return True
         if _has_sensitive_input_redirection(tokens):
@@ -486,7 +486,7 @@ def _read_parenthesized_content(command_text: str, start_index: int) -> tuple[st
 
 def _shell_command_segments(command_text: str) -> list[list[str]]:
     try:
-        lexer = shlex.shlex(command_text, posix=True, punctuation_chars=";&|<>")
+        lexer = shlex.shlex(command_text.replace("\n", ";"), posix=True, punctuation_chars=";&|<>")
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
