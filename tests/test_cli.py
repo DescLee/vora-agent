@@ -83,6 +83,7 @@ def test_cli_list_skips_corrupt_session_files(tmp_path: Path, capsys, monkeypatc
 
 def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
     store.save(session)
@@ -100,6 +101,7 @@ def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch
 
 def test_cli_resume_honors_global_dry_run_and_limit_overrides(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
     store.save(session)
@@ -121,8 +123,33 @@ def test_cli_resume_honors_global_dry_run_and_limit_overrides(tmp_path: Path, mo
     }
 
 
+def test_cli_resume_accepts_runtime_overrides_after_session_id(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+    seen = {}
+
+    def fake_run(self):  # noqa: ANN001
+        seen["dry_run"] = self.manager.runtime.dry_run
+        seen["max_engineering_steps"] = self.manager.runtime.default_limits.max_engineering_steps
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
+
+    main(["resume", session.session_id, "--cwd", str(tmp_path), "--dry-run", "--max-steps", "2", "--max-react", "1"])
+
+    assert seen == {
+        "dry_run": True,
+        "max_engineering_steps": 2,
+        "max_react_iterations": 1,
+    }
+
+
 def test_cli_resume_preserves_saved_active_task_limits_without_overrides(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
     session.active_task = TaskState.create(goal="继续任务", cwd=tmp_path)
@@ -176,6 +203,25 @@ def test_cli_resume_invalid_session_id_prints_friendly_error(tmp_path: Path, cap
     assert "Error: invalid session id '../outside'." in out
 
 
+def test_cli_resume_prints_friendly_error_when_terminal_is_unavailable(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+
+    def raise_terminal_error(self):  # noqa: ANN001
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", raise_terminal_error)
+
+    with pytest.raises(SystemExit) as error:
+        main(["resume", session.session_id, "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: interactive TUI requires a terminal." in out
+
+
 def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
@@ -188,6 +234,7 @@ def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, cap
 
 
 def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     seen = {}
 
     def fake_run(self):  # noqa: ANN001
@@ -201,6 +248,7 @@ def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkey
 
 
 def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     seen = {}
 
     def fake_run(self):  # noqa: ANN001
@@ -213,6 +261,20 @@ def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, 
 
     assert seen["cwd"] == tmp_path
     assert seen["max_react_iterations"] == 99
+
+
+def test_cli_tui_prints_friendly_error_when_terminal_is_unavailable(tmp_path: Path, capsys, monkeypatch) -> None:
+    def raise_terminal_error(self):  # noqa: ANN001
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", raise_terminal_error)
+
+    with pytest.raises(SystemExit) as error:
+        main(["tui", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: interactive TUI requires a terminal." in out
 
 
 def test_cli_subcommands_preserve_global_cwd_before_command(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -313,3 +375,21 @@ def test_cli_clear_requires_confirmation_before_deleting_sessions(tmp_path: Path
     assert "Clear cancelled." in out
     summaries = store.list_sessions()
     assert [item.session_id for item in summaries] == [session.session_id]
+
+
+def test_cli_clear_treats_missing_stdin_as_cancelled(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+
+    def raise_eof(prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+
+    main(["clear", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "Clear cancelled." in out
+    assert [item.session_id for item in store.list_sessions()] == [session.session_id]

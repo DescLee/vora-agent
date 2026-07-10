@@ -25,9 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="list saved sessions")
     _add_cwd_option(list_parser, dest="subcommand_cwd", default=None)
 
-    resume_parser = subparsers.add_parser("resume", help="resume a saved session")
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="resume a saved session",
+        description="resume a saved session",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     resume_parser.add_argument("session_id")
-    _add_cwd_option(resume_parser, dest="subcommand_cwd", default=None)
+    _add_runtime_options(resume_parser, include_defaults=False, cwd_dest="subcommand_cwd")
 
     remove_parser = subparsers.add_parser("remove", help="remove a saved session")
     remove_parser.add_argument("session_id")
@@ -202,10 +207,13 @@ def _run_resume(
         limits.max_reflection_rounds = max_reflect
     if limit_overrides["max_tool_retries"]:
         limits.max_tool_retries = max_tool_retries
-    PromptTui(
-        options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run),
-        initial_session=session,
-    ).run()
+    _ensure_interactive_terminal()
+    _run_prompt_tui(
+        PromptTui(
+            options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run),
+            initial_session=session,
+        )
+    )
 
 
 def _run_remove(cwd: Path, session_id: str) -> None:
@@ -244,7 +252,11 @@ def _run_clear(cwd: Path, force: bool) -> None:
         print("No saved sessions to clear.")
         return
     if not force:
-        answer = input(f"Are you sure you want to clear all {count} saved session(s)? [y/N] ").strip().lower()
+        try:
+            answer = input(f"Are you sure you want to clear all {count} saved session(s)? [y/N] ").strip().lower()
+        except EOFError:
+            print("Clear cancelled.")
+            return
         if answer not in ("y", "yes", "确认", "是"):
             print("Clear cancelled.")
             return
@@ -268,7 +280,24 @@ def _run_tui(
         max_reflection_rounds=max_reflect,
         max_tool_retries=max_tool_retries,
     )
-    PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)).run()
+    _ensure_interactive_terminal()
+    _run_prompt_tui(PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)))
+
+
+def _ensure_interactive_terminal() -> None:
+    if not sys.stdin.isatty():
+        print("Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
+        raise SystemExit(1)
+
+
+def _run_prompt_tui(tui: PromptTui) -> None:
+    try:
+        tui.run()
+    except OSError as exc:
+        if getattr(exc, "errno", None) == 22:
+            print("Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
+            raise SystemExit(1) from None
+        raise
 
 
 def _option_was_provided(argv: list[str], name: str) -> bool:

@@ -1651,6 +1651,61 @@
 - 最近用户消息仍必须先脱敏并截断。
 - 空会话时仍保持简洁提示，不输出无意义表头。
 
+### 86. `manus-mini clear` 在非交互环境会抛 `EOFError` 栈
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini clear --cwd /Users/liyong/Desktop/ai-manus` 时，stdin 没有可读输入会触发 `EOFError`。
+- 旧实现直接泄露 Python traceback，用户无法判断会话是否已被删除。
+- 这属于 CLI 删除类操作的可诊断性和安全感问题。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获确认输入阶段的 `EOFError`。
+- stdin 不可读时按取消处理，输出 `Clear cancelled.`，不删除任何会话。
+
+#### 回归点
+
+- 非交互执行 `clear` 不得输出 traceback。
+- stdin 缺失时必须保留原会话。
+
+### 87. `resume` 子命令不接受 session id 后面的运行参数
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini resume <session-id> --max-react 1 --cwd ...` 时，旧实现报 `unrecognized arguments`。
+- 但 `tui` 子命令支持后置运行参数，且用户自然会把恢复会话的参数写在 session id 后面。
+- 这会让面试演示中的“恢复会话并覆盖本轮限制”显得不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中给 `resume` 子命令注册和 `tui` 一致的运行参数。
+- 支持 `--dry-run`、`--max-steps`、`--max-react`、`--max-reflect`、`--max-tool-retries` 在 `resume <session-id>` 后传入。
+
+#### 回归点
+
+- `manus-mini resume <session-id> --max-react 1 --cwd ...` 必须能通过解析。
+- 后置 runtime 参数必须真正覆盖本次恢复运行的 limits。
+
+### 88. 非终端环境启动 TUI 会泄露 prompt_toolkit 栈
+
+#### 现象
+
+- 在非终端环境执行 `python -m manus_mini tui --cwd ...` 或 `resume` 进入 TUI 时，旧实现会抛出 prompt_toolkit / asyncio traceback。
+- 这类框架栈对用户没有帮助，也会明显影响命令行工具的专业度。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中进入 TUI 前先检查 stdin 是否是终端。
+- 非终端环境直接输出友好错误：
+  - `Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.`
+- 同时保留对 TUI 运行阶段终端错误的兜底捕获。
+
+#### 回归点
+
+- 非终端执行 `tui` 或 `resume` 不得输出框架 traceback。
+- 提示信息必须明确说明交互 TUI 需要 terminal。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
@@ -1663,12 +1718,16 @@
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
   - `resume` 使用本次传入的 dry-run 和 limits
+  - `resume` 支持 session id 后传入 dry-run 和 limits
   - `resume` 未传 limits 时保留已保存 active task limits
+  - `resume` 在非终端环境输出友好错误，而不是泄露 prompt_toolkit 栈
   - `resume` 指向损坏会话文件时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
   - `list` 有会话时展示会话目录、总数、表头和恢复命令
   - `list` 展示最近用户消息前必须脱敏并截断预览
   - `list` 遇到损坏会话文件时仍能列出正常会话
+  - `tui` 在非终端环境输出友好错误
+  - `clear` stdin 缺失时按取消处理，不删除会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
   - `tui --help` 展示可覆盖的运行参数，且不输出 `(default: None)` 噪音
   - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途
@@ -1789,7 +1848,7 @@ pytest -q
 
 结果：
 
-- `477 passed`
+- `481 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - 分支覆盖率：84.29%（门禁 80%）
@@ -1851,6 +1910,9 @@ pytest -q
 - `manus-mini resume` 指向损坏会话文件时会输出明确的友好错误
 - `EventLogger` 写入事件日志和 summary 日志前会拒绝非法 `session_id` 路径穿越
 - 批量日志清理会删除 symlink 本身但不会跟随删除外部目录
+- `manus-mini clear` 在 stdin 不可读时会取消操作，不再输出 traceback
+- `manus-mini resume <session-id> --max-react 1 --cwd ...` 不再被 argparse 拒绝
+- `manus-mini tui` / `resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
 
 ## 后续建议
 
