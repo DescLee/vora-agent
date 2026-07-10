@@ -1016,6 +1016,27 @@
 - shell stdout/stderr 中的 Bearer token 不应以原值出现在工具结果中。
 - shell stderr 中 URL query secret 参数不应以原值出现在工具结果中。
 
+### 51. 常见环境变量式凭证名未被统一脱敏
+
+#### 现象
+
+- 统一脱敏层此前只覆盖 `api_key`、`token`、`password`、`secret` 这类独立键名。
+- `AWS_SECRET_ACCESS_KEY=...`、`CLIENT_SECRET: ...`、`GH_TOKEN=...` 等生产中常见的组合式环境变量名不会被脱敏。
+- 由于日志、TUI、报告、会话导出和 shell 输出都复用同一脱敏层，这个缺口会放大到多个输出面。
+
+#### 修复
+
+- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中扩展键名识别。
+- 只要键名包含 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 等敏感片段，即可保留键名和分隔符，并将值替换为 `[REDACTED]`。
+- 保留 URL query secret 的既有行为，避免新规则吞掉后续非敏感 query 参数。
+
+#### 回归点
+
+- `AWS_SECRET_ACCESS_KEY=...` 必须脱敏值。
+- `CLIENT_SECRET: ...` 必须脱敏值。
+- `GH_TOKEN=...` 必须脱敏值。
+- URL query 中 `access_token` 脱敏后仍保留其他 query 参数。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1034,6 +1055,7 @@
 - [tests/test_redaction.py](/Users/liyong/Desktop/ai-manus/tests/test_redaction.py)
   - `Authorization: Bearer ...` 必须脱敏 token 值
   - URL query 中的 `access_token` 必须脱敏参数值
+  - 常见环境变量式凭证名必须脱敏值
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
   - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
@@ -1100,7 +1122,7 @@ pytest -q
 
 结果：
 
-- `411 passed`
+- `412 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.83%（门禁 80%）
@@ -1149,6 +1171,7 @@ pytest -q
 - 文件工具越界路径会返回结构化 `PATH_OUT_OF_WORKSPACE` 错误
 - 越界写入/替换不会通过确认 diff 或 trace diff 泄露工作区外文件内容
 - `run_bash` / `run_temp_script` 返回工具结果前会脱敏 stdout/stderr 中的敏感值
+- `AWS_SECRET_ACCESS_KEY`、`CLIENT_SECRET`、`GH_TOKEN` 等组合式凭证名会脱敏值
 
 ## 后续建议
 

@@ -11,6 +11,10 @@ SECRET_VALUE_PATTERNS = [
         r"[^&#\s`'\"]+"
     ),
     re.compile(r"\bsk-[A-Za-z0-9._-]{8,}\b"),
+    re.compile(
+        r"(?i)(?P<prefix>\b[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET)[A-Z0-9_.-]*\b\s*[:=]\s*['\"]?)"
+        r"[^&#'\"\s`]+"
+    ),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*['\"]?[^'\"\s`]+"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s+(?:is|是|为)\s*['\"]?[^'\"\s`]+"),
 ]

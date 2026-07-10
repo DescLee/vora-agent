@@ -15,3 +15,22 @@ def test_redacts_url_query_secret_values() -> None:
 
     assert "secret-token" not in redacted
     assert redacted == "https://x.test/cb?access_token=[REDACTED]&ok=1"
+
+
+def test_redacts_common_environment_secret_names() -> None:
+    content = "\n".join(
+        [
+            "AWS_SECRET_ACCESS_KEY=aws-secret-value",
+            "CLIENT_SECRET: client-secret-value",
+            "GH_TOKEN=ghp_secretvalue123",
+        ]
+    )
+
+    redacted = redact_sensitive_text(content)
+
+    assert "aws-secret-value" not in redacted
+    assert "client-secret-value" not in redacted
+    assert "ghp_secretvalue123" not in redacted
+    assert "AWS_SECRET_ACCESS_KEY=[REDACTED]" in redacted
+    assert "CLIENT_SECRET: [REDACTED]" in redacted
+    assert "GH_TOKEN=[REDACTED]" in redacted
