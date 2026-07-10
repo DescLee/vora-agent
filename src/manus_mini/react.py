@@ -68,6 +68,9 @@ OVERVIEW_GOAL_KEYWORDS = (
 IDENTITY_GOAL_KEYWORDS = ("你是谁", "你的名字", "你叫什么")
 STARTUP_GOAL_KEYWORDS = ("怎么启动", "如何启动", "怎么运行", "如何运行", "怎么使用", "如何使用")
 UNAVAILABLE_GOAL_KEYWORDS = ("模型不可用", "llm 不可用", "llm不可用", "模型挂了", "模型异常")
+CAPABILITY_GOAL_KEYWORDS = ("核心能力", "主要能力", "功能亮点", "项目亮点")
+SECURITY_GOAL_KEYWORDS = ("怎么保证安全", "安全", "安全边界", "权限")
+TESTING_GOAL_KEYWORDS = ("测试怎么跑", "怎么测试", "如何测试", "验证怎么跑", "质量门禁")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
 EXPLICIT_WRITE_INTENT_KEYWORDS = (
     "保存到",
@@ -701,6 +704,21 @@ class ReActLoop:
             return (
                 "如果模型不可用，我会退回规则兜底模式。"
                 "理想情况下会直接给出最小可用答案；如果上下文不足，也会明确说明失败原因，而不是输出原始工具调用。"
+            )
+        if any(keyword in compact_focus for keyword in CAPABILITY_GOAL_KEYWORDS):
+            return (
+                "核心能力包括：任务规划、ReAct 工具调用、会话持久化、上下文压缩、写入确认、"
+                "Reflection 质量门禁和结构化运行日志。面试展示时可以按“目标 -> 计划 -> 工具 -> 验证 -> 会话恢复”这条链路讲。"
+            )
+        if any(keyword in compact_focus for keyword in SECURITY_GOAL_KEYWORDS):
+            return (
+                "安全设计主要靠工作区边界、写入确认、命令风险识别、敏感信息脱敏和会话文件路径校验。"
+                "文件工具默认限制在 cwd 内，危险命令和写入动作会进入确认或拒绝路径。"
+            )
+        if any(keyword in compact_focus for keyword in TESTING_GOAL_KEYWORDS):
+            return (
+                "建议按这个顺序验证：`pytest -q`、`ruff check src tests evals`、`mypy`、"
+                "`python evals/run_evals.py`、`pytest --cov=manus_mini --cov-report=term-missing`、`python -m build`。"
             )
         if _goal_mentions_current_project(compact_focus) and any(
             keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS

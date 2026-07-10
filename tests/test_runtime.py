@@ -4,6 +4,8 @@ import re
 import threading
 from time import perf_counter, sleep
 
+import pytest
+
 from manus_mini.llm import LLMResult
 from manus_mini.context import estimate_message_tokens
 from manus_mini.executor import Executor
@@ -2652,6 +2654,32 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     assert "manus-mini list --cwd ." in result.messages[-1].content
     assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
     assert "tui" not in result.messages[-1].content.lower()
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("这个项目有哪些核心能力？", ["任务规划", "工具调用", "会话持久化", "质量门禁"]),
+        ("这个项目怎么保证安全？", ["工作区边界", "写入确认", "敏感信息脱敏", "命令风险"]),
+        ("这个项目测试怎么跑？", ["pytest -q", "ruff check", "mypy", "python evals/run_evals.py"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_project_questions(tmp_path: Path, prompt: str, expected_terms: list[str]) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
 
 
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
