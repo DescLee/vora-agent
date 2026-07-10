@@ -40,6 +40,7 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
 SENSITIVE_READ_COMMANDS = {".", "awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "source", "tail"}
+SENSITIVE_FILE_TRANSFER_COMMANDS = {"cp", "install", "mv", "rsync", "tar"}
 NESTED_SHELL_COMMANDS = {"bash", "sh", "zsh"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:
@@ -524,7 +525,7 @@ def _has_sensitive_input_redirection(tokens: list[str]) -> bool:
 
 def _copies_sensitive_file(tokens: list[str]) -> bool:
     command_name = Path(tokens[0]).name if tokens else ""
-    if command_name != "cp":
+    if command_name not in SENSITIVE_FILE_TRANSFER_COMMANDS:
         return False
     return any(_is_sensitive_shell_path(token) for token in tokens[1:])
 

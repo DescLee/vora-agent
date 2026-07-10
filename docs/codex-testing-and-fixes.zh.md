@@ -1522,8 +1522,115 @@
 - `resume` 不带 `--max-react` 时，应保留已保存 active task 的 `max_react_iterations`。
 - `resume --max-react 1` 仍应使用本次传入值。
 
+### 79. `run_bash` 可无确认移动敏感文件
+
+#### 现象
+
+- 上轮已拦截 `cp .env leaked.txt`，但实际使用中 `mv .env leaked.txt` 仍会直接执行。
+- 这会把敏感配置文件移出原位置，并生成新的未保护文件名。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中把 `mv` 纳入敏感文件外带命令集合。
+- 命中 `.env*`、`*.pem`、`*.key` 时先进入确认流。
+
+#### 回归点
+
+- `mv .env leaked.txt` 未确认时不得执行。
+- 原敏感文件必须保留，目标文件不得生成。
+
+### 80. `install` 命令可无确认复制密钥文件
+
+#### 现象
+
+- `install private.pem copied.pem` 会读取源文件并写出副本，但旧规则没有识别。
+- 在开发环境里 `install` 是常见复制/安装命令，可能被用来外带密钥。
+
+#### 修复
+
+- 将 `install` 纳入敏感文件外带命令集合。
+- 读取敏感路径时要求人工确认。
+
+#### 回归点
+
+- `install private.pem copied.pem` 未确认时不得执行。
+- 目标密钥副本不得生成。
+
+### 81. `tar` 可无确认打包敏感文件
+
+#### 现象
+
+- `tar -cf leaked.tar .env` 不直接打印敏感内容，但会生成包含敏感文件的归档。
+- 旧敏感读取规则没有覆盖归档命令。
+
+#### 修复
+
+- 将 `tar` 纳入敏感文件外带命令集合。
+- 命令参数中出现敏感路径时进入确认流。
+
+#### 回归点
+
+- `tar -cf leaked.tar .env` 未确认时不得执行。
+- 敏感归档文件不得生成。
+
+### 82. `rsync` 可无确认复制敏感文件
+
+#### 现象
+
+- `rsync .env leaked.txt` 是复制敏感文件的另一条常见路径。
+- 如果系统安装了 `rsync`，旧实现会直接执行。
+
+#### 修复
+
+- 将 `rsync` 纳入敏感文件外带命令集合。
+- 风险检测在命令执行前完成，不依赖系统是否安装该命令。
+
+#### 回归点
+
+- `rsync .env leaked.txt` 未确认时必须被拦截。
+- 目标文件不得生成。
+
+### 83. 强制压缩可能记录“移除 0 条”的假快照
+
+#### 现象
+
+- `force_truncate_history()` 会强保留 system segment 和首尾用户消息。
+- 当所有可保留段都不能移除时，压缩结果没有变化，但仍生成 `force_truncate` snapshot，摘要显示移除 0 条。
+- 用户会看到已压缩状态，但上下文 token 实际没有下降。
+
+#### 修复
+
+- 在 [src/manus_mini/context.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/context.py) 中检测强制截断是否实际覆盖了消息。
+- 如果消息未减少且内容未改写，返回 `snapshot=None`，避免记录假压缩。
+
+#### 回归点
+
+- 强制截断没有移除任何消息时，不得生成 compression snapshot。
+- 原消息列表应保持不变。
+
+### 84. TUI 异常失败不保存到会话，影响恢复排障
+
+#### 现象
+
+- `PromptTui.run_agent_turn()` 捕获普通异常后只更新界面。
+- 会话里的 active task 没有标记失败，错误信息也没有写入 session store。
+- 用户重新 `resume` 或 `list` 时看不到这次失败记录。
+
+#### 修复
+
+- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 的异常渲染路径中同步更新 session。
+- active task 标记为 failed，记录 `UNKNOWN_ERROR`，写入系统消息，并调用 `_save_current()`。
+
+#### 回归点
+
+- TUI 普通异常后 active task 必须变为 failed。
+- 错误信息必须写入消息和 task result。
+- 异常状态必须被保存，供后续 resume 排查。
+
 ## 本轮新增/调整测试
 
+- [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
+  - 强制截断没有实际减少上下文时不生成假 compression snapshot
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
   - `python -m manus_mini` 复用 CLI 入口
   - 顶层 `--cwd` 兼容
@@ -1616,6 +1723,7 @@
   - `source .env*` / `. .env*` 加载敏感文件时必须先进入确认流
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
   - `cp .env*` 复制敏感文件必须先进入确认流
+  - `mv` / `install` / `tar` / `rsync` 外带敏感文件必须先进入确认流
   - `1>out.txt` / `2>err.log` 这类 FD 重定向写工作区文件必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
@@ -1624,6 +1732,7 @@
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在 TUI 中直接展示并保留长度截断
   - 待确认时输入 `取消` 再提交会拒绝 pending 操作，而不是误确认
+  - 普通异常失败会写入会话并保存，便于后续恢复排障
 
 ## 验证结果
 
@@ -1635,10 +1744,10 @@ pytest -q
 
 结果：
 
-- `443 passed`
+- `449 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.21%（门禁 80%）
+- 分支覆盖率：84.26%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助

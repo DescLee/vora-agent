@@ -1608,6 +1608,38 @@ def test_run_agent_turn_resets_state_after_exception(monkeypatch) -> None:
     asyncio.run(run())
 
 
+def test_run_agent_turn_saves_unexpected_error_for_resume(tmp_path: Path) -> None:
+    class FailingManager:
+        def __init__(self) -> None:
+            self.current = SessionState.create(cwd=tmp_path)
+            self.current.active_task = TaskState.create(goal="测试", cwd=tmp_path)
+            self.saved = []
+
+        def handle_user_message(self, content: str, append_user_message: bool = True):  # noqa: ARG002
+            raise RuntimeError("boom")
+
+        def _save_current(self, session):  # noqa: ANN001
+            self.saved.append(session.model_copy(deep=True))
+            return session
+
+    async def run() -> None:
+        manager = FailingManager()
+        tui = PromptTui(cwd=tmp_path)
+        tui.manager = manager
+        tui.is_running = True
+
+        await tui.run_agent_turn("测试")
+
+        assert manager.current.active_task is not None
+        assert manager.current.active_task.status == "failed"
+        assert manager.current.active_task.errors[-1].code == "UNKNOWN_ERROR"
+        assert manager.current.active_task.result == "执行失败：boom"
+        assert manager.current.messages[-1].content == "执行失败：boom"
+        assert manager.saved
+
+    asyncio.run(run())
+
+
 def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(tmp_path: Path) -> None:
     from manus_mini.context import validate_tool_call_pairs
 

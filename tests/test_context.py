@@ -9,6 +9,7 @@ from manus_mini.context import (
     complete_interrupted_tool_messages,
     run_context_compression_pipeline,
     estimate_tokens,
+    force_truncate_history,
     should_include_project_code_overview,
     validate_tool_call_pairs,
 )
@@ -262,6 +263,19 @@ def test_context_compression_upgrades_to_force_truncate_when_history_summary_sta
 
     assert "history_summary" in result.applied_strategies
     assert "force_truncate" in result.applied_strategies
+
+
+def test_force_truncate_returns_no_snapshot_when_no_context_was_reduced() -> None:
+    messages = [
+        Message.system("system 1 " + ("x" * 400)),
+        Message.system("system 2 " + ("y" * 400)),
+        Message.user("唯一用户消息"),
+    ]
+
+    compacted, snapshot = force_truncate_history(messages, token_budget=10)
+
+    assert compacted == messages
+    assert snapshot is None
 
 
 def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path) -> None:

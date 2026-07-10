@@ -367,6 +367,47 @@ def test_run_temp_script_copy_sensitive_file_requires_confirmation(tmp_path: Pat
     assert not (tmp_path / "leaked.txt").exists()
 
 
+def test_run_bash_move_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="mv .env leaked.txt")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert (tmp_path / ".env").exists()
+    assert not (tmp_path / "leaked.txt").exists()
+
+
+def test_run_bash_install_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / "private.pem").write_text("pem-secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="install private.pem copied.pem")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "copied.pem").exists()
+
+
+def test_run_bash_tar_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="tar -cf leaked.tar .env")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "leaked.tar").exists()
+
+
+def test_run_bash_rsync_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="rsync .env leaked.txt")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "leaked.txt").exists()
+
+
 def test_run_bash_fd_redirection_to_workspace_file_requires_confirmation(tmp_path: Path) -> None:
     result = RunBashTool().run(workspace=tmp_path, command="python -c 'print(123)' 1>out.txt")
 

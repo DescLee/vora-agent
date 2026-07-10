@@ -21,7 +21,7 @@ from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from manus_mini.config import AppConfig
 from manus_mini.logging import project_memory_path
-from manus_mini.models import LoopLimits, Message, PendingConfirmation, SessionState, TaskState
+from manus_mini.models import AgentError, LoopLimits, Message, PendingConfirmation, SessionState, TaskState
 from manus_mini.memory import MemoryManager
 from manus_mini.prompt_tui_formatting import (  # noqa: F401
     build_display_line_starts,
@@ -624,9 +624,19 @@ class PromptTui:
             self.app.invalidate()
 
     def render_unexpected_error(self, error: Exception) -> None:
+        result = f"执行失败：{error}"
+        task = self.manager.current.active_task
+        if task is not None:
+            task.status = "failed"
+            task.result = result
+            task.errors.append(AgentError(code="UNKNOWN_ERROR", message=str(error), retryable=False))
+        self.manager.current.messages.append(Message.system(result))
+        save_current = getattr(self.manager, "_save_current", None)
+        if callable(save_current):
+            save_current(self.manager.current)
         self.is_running = False
         self.is_streaming_artifact = False
-        self.set_output_text(f"{self.output.text}\n\n最终产物\n执行失败：{error}")
+        self.set_output_text(f"{self.output.text}\n\n最终产物\n{result}")
         self.status.text = "failed"
         self.app.layout.focus(self.input)
         self.app.invalidate()

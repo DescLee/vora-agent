@@ -387,9 +387,12 @@ def force_truncate_history(
 
     compacted = _rewrite_latest_user_if_needed(compacted, token_budget=token_budget, llm=llm)
     validate_tool_call_pairs(compacted)
+    covered_message_ids = [message.id for segment in covered for message in segment.messages]
+    if not covered_message_ids and [message.id for message in compacted] == [message.id for message in messages]:
+        return compacted, None
     summary = f"历史上下文强制截断：移除 {sum(len(segment.messages) for segment in covered)} 条低相关历史消息。"
     snapshot = CompressionSnapshot(
-        covered_message_ids=[message.id for segment in covered for message in segment.messages],
+        covered_message_ids=covered_message_ids,
         covered_observation_ids=[],
         summary=summary,
         retained_facts=[summary],
