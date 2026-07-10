@@ -420,6 +420,8 @@ def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
 
 
 def _reads_sensitive_workspace_file(command_text: str) -> bool:
+    if _python_reads_sensitive_file(command_text):
+        return True
     for segment in re.split(r"[;&|\n]+", command_text):
         try:
             tokens = shlex.split(segment)
@@ -431,6 +433,19 @@ def _reads_sensitive_workspace_file(command_text: str) -> bool:
         if command_name not in SENSITIVE_READ_COMMANDS:
             continue
         if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
+            return True
+    return False
+
+
+def _python_reads_sensitive_file(command_text: str) -> bool:
+    if not re.search(r"\bpython(?:3)?\b", command_text):
+        return False
+    patterns = (
+        r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]",
+        r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:read_text|read_bytes|open)\s*\(",
+    )
+    for pattern in patterns:
+        if any(_is_sensitive_shell_path(match.group(1)) for match in re.finditer(pattern, command_text)):
             return True
     return False
 

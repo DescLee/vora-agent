@@ -173,6 +173,41 @@ def test_run_bash_grep_sensitive_file_requires_confirmation(tmp_path: Path) -> N
     assert "secret pem" not in result.content
 
 
+def test_run_bash_python_open_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="python -c \"print(open('.env').read())\"")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_bash_python_pathlib_read_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"from pathlib import Path; print(Path('.env').read_text())\"",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_bash_python_pathlib_read_env_example_is_allowed(tmp_path: Path) -> None:
+    (tmp_path / ".env.example").write_text("LLM_API_KEY=", encoding="utf-8")
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"from pathlib import Path; print(Path('.env.example').read_text())\"",
+    )
+
+    assert result.ok is True
+    assert "LLM_API_KEY=" in result.content
+
+
 def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
     result = RunTempScriptTool().run(workspace=tmp_path, content="rm -rf /\n")
 

@@ -741,6 +741,31 @@
 - `run_temp_script` 执行 `head -n 1 .env.test` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
 - 未确认前，shell 输出不得包含密钥内容。
 
+### 38. `python -c` 读取敏感文件会绕过 shell 敏感读取检测
+
+#### 现象
+
+- 上一轮只覆盖了 `cat`、`grep`、`head` 等常见 shell 读取命令。
+- 真实测试中，模型也可通过 `python -c "open('.env').read()"` 或 `Path('.env').read_text()` 读取敏感文件。
+- 这类命令不会命中常见读取命令列表，仍会把 `.env` 内容输出给模型。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展敏感读取启发式。
+- 新增识别：
+  - `open('敏感路径')`
+  - `Path('敏感路径').read_text()`
+  - `Path('敏感路径').read_bytes()`
+  - `Path('敏感路径').open()`
+- `.env.example` 仍作为安全模板例外。
+
+#### 回归点
+
+- `run_bash` 执行 `python -c "open('.env').read()"` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_bash` 执行 `Path('.env').read_text()` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `Path('.env.example').read_text()` 仍允许执行。
+- 未确认前，shell 输出不得包含密钥内容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -789,6 +814,7 @@
   - shell 响应 Executor 协作式取消信号
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
+  - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
   - JSON/Markdown 报告生成
@@ -806,9 +832,9 @@ pytest -q
 
 结果：
 
-- `386 passed`
+- `389 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.58%（门禁 80%）
+- 分支覆盖率：83.64%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
