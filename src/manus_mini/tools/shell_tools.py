@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from manus_mini.llm import LLMClient
 from manus_mini.models import Message
+from manus_mini.redaction import redact_sensitive_text
 from manus_mini.tools.base import BaseTool, ToolPreview, ToolResult
 
 
@@ -230,6 +231,8 @@ def _run_command(
     while True:
         if cancel_event is not None and cancel_event.is_set():
             stdout, stderr = _terminate_process_group(process)
+            stdout = redact_sensitive_text(stdout or "")
+            stderr = redact_sensitive_text(stderr or "")
             return ToolResult(
                 tool_name=tool_name,
                 ok=False,
@@ -246,6 +249,8 @@ def _run_command(
             )
         if timeout_seconds is not None and time.monotonic() - started_at >= timeout_seconds:
             stdout, stderr = _terminate_process_group(process)
+            stdout = redact_sensitive_text(stdout or "")
+            stderr = redact_sensitive_text(stderr or "")
             return ToolResult(
                 tool_name=tool_name,
                 ok=False,
@@ -268,6 +273,8 @@ def _run_command(
 
     stdout = stdout or ""
     stderr = stderr or ""
+    stdout = redact_sensitive_text(stdout)
+    stderr = redact_sensitive_text(stderr)
     ok = process.returncode == 0
     return ToolResult(
         tool_name=tool_name,

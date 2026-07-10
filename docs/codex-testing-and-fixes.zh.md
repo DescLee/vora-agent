@@ -999,6 +999,23 @@
 - 越界 `replace_in_file` 的 trace diff 不得包含工作区外文件内容。
 - 正常工作区内 `replace_in_file` 和 dry-run 写入仍应显示 diff。
 
+### 50. Shell 命令输出会原样回传敏感值
+
+#### 现象
+
+- `run_bash` 的执行环境已经限制为安全白名单，但命令自身输出仍会直接写入 `ToolResult.content`、`data.stdout` 和 `data.stderr`。
+- 如果命令回显 `Authorization: Bearer ...`、URL query 中的 `access_token` 等敏感值，上层模型、日志或报告在拿到工具结果前仍有机会接触原文。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中复用统一的 `redact_sensitive_text`。
+- `run_bash` / `run_temp_script` 的正常完成、超时和取消分支，都在写入 `ToolResult` 前先脱敏 stdout/stderr。
+
+#### 回归点
+
+- shell stdout/stderr 中的 Bearer token 不应以原值出现在工具结果中。
+- shell stderr 中 URL query secret 参数不应以原值出现在工具结果中。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1058,6 +1075,7 @@
 - [tests/test_shell_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_shell_tools.py)
   - shell 超时终止整个子进程组
   - shell 响应 Executor 协作式取消信号
+  - shell stdout/stderr 中的敏感值必须先脱敏再返回工具结果
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
   - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
@@ -1082,10 +1100,10 @@ pytest -q
 
 结果：
 
-- `410 passed`
+- `411 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.82%（门禁 80%）
+- 分支覆盖率：83.83%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1130,6 +1148,7 @@ pytest -q
 - `fetch_webpage` 会拒绝本机、内网、link-local 和解析到受保护地址的 URL
 - 文件工具越界路径会返回结构化 `PATH_OUT_OF_WORKSPACE` 错误
 - 越界写入/替换不会通过确认 diff 或 trace diff 泄露工作区外文件内容
+- `run_bash` / `run_temp_script` 返回工具结果前会脱敏 stdout/stderr 中的敏感值
 
 ## 后续建议
 

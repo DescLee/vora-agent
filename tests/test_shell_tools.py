@@ -131,6 +131,24 @@ def test_run_bash_uses_sanitized_environment(tmp_path: Path, monkeypatch) -> Non
     assert "LLM_API_KEY" not in result.content
 
 
+def test_run_bash_redacts_sensitive_values_from_output(tmp_path: Path) -> None:
+    token = "sk-shell-output-secret"
+    url = "https://example.test/callback?access_token=plain-secret&ok=1"
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command=f"printf 'Authorization: Bearer {token}\\n'; printf '{url}\\n' >&2",
+    )
+
+    assert result.ok is True
+    assert token not in result.content
+    assert "plain-secret" not in result.content
+    assert token not in result.data["stdout"]
+    assert "plain-secret" not in result.data["stderr"]
+    assert "Authorization: Bearer [REDACTED]" in result.content
+    assert "access_token=[REDACTED]" in result.data["stderr"]
+
+
 def test_run_bash_pathlib_write_bytes_requires_confirmation(tmp_path: Path) -> None:
     result = RunBashTool().run(
         workspace=tmp_path,
