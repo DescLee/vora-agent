@@ -2881,6 +2881,41 @@ def test_runtime_fallback_answers_interview_reliability_questions(
         assert term in result.messages[-1].content
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("这个项目怎么做任务取消和中断恢复？", ["Ctrl+C", "session", "resume", "日志"]),
+        ("这个项目怎么保证日志不会泄露隐私？", ["redact_sensitive_text", "logs", "token", "落盘前"]),
+        ("这个项目怎么处理工具参数校验？", ["ToolSpec", "schema", "INVALID_ARGUMENTS", "ToolResult"]),
+        ("这个项目怎么限制工具权限范围？", ["ToolSpec", "risk", "cwd", "确认"]),
+        ("这个项目怎么做审计追踪？", ["trace_events", "EventLogger", "run_id", "summary"]),
+        ("这个项目如何避免重复读取和上下文浪费？", ["重复读取", "dedupe", "read_file", "上下文"]),
+        ("这个项目怎么处理长输出和报告落盘？", ["outputs", "Markdown", "摘要", "上下文"]),
+        ("这个项目怎么处理多轮对话里的目标漂移？", ["session", "active_task", "Planner", "Reflection"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_operational_controls_questions(
+    tmp_path: Path,
+    prompt: str,
+    expected_terms: list[str],
+) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002

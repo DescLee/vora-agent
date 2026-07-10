@@ -603,6 +603,142 @@
 - 项目主文档不得再把 manus-mini 定义成“面试项目”或“面向面试展示”的项目。
 - 面试相关内容只作为项目讲解场景存在，不作为产品定位。
 
+### 136. 任务取消和中断恢复追问在 LLM 不可用时缺少恢复路径
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么做任务取消和中断恢复？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明 TUI 退出、session 保存和 resume 恢复之间的关系。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加任务取消和中断恢复类直接规则兜底。
+- 回答说明 `Ctrl+C` 退出交互后，已保存的 session、日志和上下文仍可通过 `manus-mini list` / `manus-mini resume` 恢复排查或继续。
+
+#### 回归点
+
+- 模型不可用时，任务取消和中断恢复追问不得展示 `兜底原因`。
+- 回答必须包含 `Ctrl+C`、session、resume 和日志。
+
+### 137. 日志隐私追问命中日志位置回答
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么保证日志不会泄露隐私？" --cwd <目录> --max-steps 1 --max-react 1` 时，回答只说明 `logs` 保存位置，没有说明脱敏链路。
+- 这类问题需要回答落盘前脱敏，而不是只告诉用户日志在哪。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加日志隐私类直接规则兜底，并让它先于泛日志位置匹配。
+- 回答说明 `redact_sensitive_text`、`logs` 落盘前压缩脱敏、token/API key/Authorization 替换，以及 TUI/报告/列表展示复用脱敏逻辑。
+
+#### 回归点
+
+- 日志隐私追问必须命中脱敏专用回答。
+- 回答必须包含 `redact_sensitive_text`、`logs`、token 和落盘前。
+
+### 138. 工具参数校验追问在 LLM 不可用时缺少 schema 说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么处理工具参数校验？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明工具 schema、本地校验、失败结果和错误码。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加工具参数校验类直接规则兜底。
+- 回答说明 `ToolSpec` 的 JSON schema、本地校验、`ToolResult` 失败结果和 `INVALID_ARGUMENTS`。
+
+#### 回归点
+
+- 模型不可用时，工具参数校验追问不得展示 `兜底原因`。
+- 回答必须包含 `ToolSpec`、schema、`INVALID_ARGUMENTS` 和 `ToolResult`。
+
+### 139. 工具权限范围追问命中泛安全回答
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么限制工具权限范围？" --cwd <目录> --max-steps 1 --max-react 1` 时，只回答泛安全边界。
+- 这类问题需要说明工具元数据和执行层权限校验。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加工具权限范围类直接规则兜底，并让它先于泛安全匹配。
+- 回答说明 `ToolSpec` 描述 schema、risk 和是否需要确认，执行层还会校验 cwd 边界，高风险工具拒绝或进入确认流程。
+
+#### 回归点
+
+- 工具权限范围追问必须命中权限范围专用回答。
+- 回答必须包含 `ToolSpec`、risk、cwd 和确认。
+
+### 140. 审计追踪追问在 LLM 不可用时缺少链路说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么做审计追踪？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明如何串起请求、计划、工具、确认和 Reflection 决策。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加审计追踪类直接规则兜底。
+- 回答说明 `trace_events`、`EventLogger`、`run_id` 和 run `summary`。
+
+#### 回归点
+
+- 模型不可用时，审计追踪追问不得展示 `兜底原因`。
+- 回答必须包含 `trace_events`、`EventLogger`、`run_id` 和 `summary`。
+
+### 141. 重复读取和上下文浪费追问在 LLM 不可用时缺少 dedupe 说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目如何避免重复读取和上下文浪费？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明同轮 read_file 去重和跨轮上下文压缩。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加重复读取和上下文浪费类直接规则兜底。
+- 回答说明同轮 `read_file` dedupe、重复请求记录 skipped trace，以及跨轮依赖上下文压缩和摘要。
+
+#### 回归点
+
+- 模型不可用时，重复读取追问不得展示 `兜底原因`。
+- 回答必须包含重复读取、dedupe、`read_file` 和上下文。
+
+### 142. 长输出和报告落盘追问在 LLM 不可用时缺少产物策略说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么处理长输出和报告落盘？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明长报告如何落盘、如何避免直接挤爆上下文。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加长输出和报告落盘类直接规则兜底。
+- 回答说明长输出优先生成 Markdown 产物落到 `outputs`，运行摘要记录路径，进入上下文前做摘要或截断。
+
+#### 回归点
+
+- 模型不可用时，长输出追问不得展示 `兜底原因`。
+- 回答必须包含 `outputs`、Markdown、摘要和上下文。
+
+### 143. 多轮对话目标漂移追问在 LLM 不可用时缺少状态回流说明
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么处理多轮对话里的目标漂移？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 工程评审时需要说明 session、active_task、Planner 和 Reflection 如何共同控制目标漂移。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加目标漂移类直接规则兜底。
+- 回答说明同一 session 维护历史和 `active_task`，新输入交给 Planner 重新判断目标，Reflection 检查是否偏离，必要时 replan 或 regenerate。
+
+#### 回归点
+
+- 模型不可用时，目标漂移追问不得展示 `兜底原因`。
+- 回答必须包含 session、`active_task`、Planner 和 Reflection。
+
 ## 本轮新增/调整测试
 
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
@@ -611,6 +747,7 @@
   - 增加 `test_runtime_fallback_answers_interview_positioning_questions`，覆盖项目边界、Manus 差距、面试演示、工具扩展、生产化、排障和资深度七类面试高频追问。
   - 增加 `test_runtime_fallback_answers_interview_defense_questions`，覆盖核心难点、可观测性、LangChain 取舍、上下文窗口、测试质量、工具失败、幻觉控制和下一版迭代八类面试答辩追问。
   - 增加 `test_runtime_fallback_answers_interview_reliability_questions`，覆盖并发状态、配置环境、损坏 session、数据隔离、命令超时、敏感信息、LLM 空结果和错误分级八类可靠性追问。
+  - 增加 `test_runtime_fallback_answers_interview_operational_controls_questions`，覆盖任务取消、日志隐私、工具参数、工具权限、审计追踪、重复读取、长输出落盘和目标漂移八类运行控制追问。
 - [tests/test_package.py](/Users/liyong/Desktop/ai-manus/tests/test_package.py)
   - 增加 `test_readme_positions_project_as_agent_runtime_not_interview_project`，确认 README 把项目定位为本地 Agent Runtime，而不是面试项目。
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
@@ -634,9 +771,9 @@ python -m build
 
 结果：
 
-- `pytest -q`：537 passed
+- `pytest -q`：545 passed
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - `python evals/run_evals.py`：9/9 通过
-- `pytest --cov=manus_mini --cov-report=term-missing`：85.10%（门禁 80%）
+- `pytest --cov=manus_mini --cov-report=term-missing`：85.17%（门禁 80%）
 - `python -m build`：沙箱内因 DNS/PyPI 访问失败，使用外部权限重跑后通过，生成 sdist 和 wheel
