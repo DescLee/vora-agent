@@ -808,6 +808,26 @@
 - `run_temp_script` 执行 `bash -c 'python -c ... < .env.test'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
 - 未确认前，shell 输出不得包含密钥内容。
 
+### 41. 命令替换可绕过敏感文件读取检测
+
+#### 现象
+
+- 敏感读取检测会分析顶层命令和嵌套 shell 脚本文本，但不会进入命令替换片段。
+- 真实测试中，`echo $(cat .env)` 的顶层命令是 `echo`，敏感读取藏在 `$()` 内部。
+- 临时脚本中也可通过 `bash -c 'echo $(cat .env.test)'` 泄露敏感文件内容。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中提取 `$()` 和反引号命令替换内容。
+- 对提取出来的命令替换内容递归复用敏感读取检测。
+- 复用既有递归深度限制，避免异常输入造成过度分析。
+
+#### 回归点
+
+- `run_bash` 执行 `echo $(cat .env)` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_temp_script` 执行 `bash -c 'echo $(cat .env.test)'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- 未确认前，shell 输出不得包含密钥内容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -858,6 +878,7 @@
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
   - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
   - `< .env*` 输入重定向读取敏感文件时必须先进入确认流
+  - `$()` / 反引号命令替换读取敏感文件时必须先进入确认流
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
@@ -876,9 +897,9 @@ pytest -q
 
 结果：
 
-- `393 passed`
+- `395 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.63%（门禁 80%）
+- 分支覆盖率：83.56%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -904,6 +925,7 @@ pytest -q
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` / `run_temp_script` 通过嵌套 shell 读取敏感文件时会先等待确认
 - `run_bash` / `run_temp_script` 通过输入重定向读取敏感文件时会先等待确认
+- `run_bash` / `run_temp_script` 通过命令替换读取敏感文件时会先等待确认
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
 - `.env.example` 仍可作为安全模板文件写入

@@ -219,6 +219,26 @@ def test_run_temp_script_nested_sensitive_input_redirection_requires_confirmatio
     assert "LLM_API_KEY" not in result.content
 
 
+def test_run_bash_sensitive_command_substitution_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="echo $(cat .env)")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_temp_script_nested_sensitive_command_substitution_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
+
+    result = RunTempScriptTool().run(workspace=tmp_path, content="bash -c 'echo $(cat .env.test)'\n")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
 def test_run_bash_python_open_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 

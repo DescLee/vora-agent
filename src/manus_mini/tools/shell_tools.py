@@ -425,6 +425,8 @@ def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> boo
         return False
     if _python_reads_sensitive_file(command_text):
         return True
+    if _command_substitutions_read_sensitive_file(command_text, depth=depth):
+        return True
     for tokens in _shell_command_segments(command_text):
         if not tokens:
             continue
@@ -438,6 +440,48 @@ def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> boo
         if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
             return True
     return False
+
+
+def _command_substitutions_read_sensitive_file(command_text: str, *, depth: int) -> bool:
+    for nested_command in _command_substitution_contents(command_text):
+        if _reads_sensitive_workspace_file(nested_command, depth=depth + 1):
+            return True
+    return False
+
+
+def _command_substitution_contents(command_text: str) -> list[str]:
+    contents: list[str] = []
+    index = 0
+    while index < len(command_text):
+        if command_text.startswith("$(", index):
+            content, next_index = _read_parenthesized_content(command_text, index + 2)
+            if content is not None:
+                contents.append(content)
+                index = next_index
+                continue
+        if command_text[index] == "`":
+            end_index = command_text.find("`", index + 1)
+            if end_index != -1:
+                contents.append(command_text[index + 1 : end_index])
+                index = end_index + 1
+                continue
+        index += 1
+    return contents
+
+
+def _read_parenthesized_content(command_text: str, start_index: int) -> tuple[str | None, int]:
+    depth = 1
+    index = start_index
+    while index < len(command_text):
+        char = command_text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return command_text[start_index:index], index + 1
+        index += 1
+    return None, len(command_text)
 
 
 def _shell_command_segments(command_text: str) -> list[list[str]]:
