@@ -341,7 +341,7 @@ class PromptTui:
 
         @key_bindings.add("enter", filter=confirmation_active)
         def _confirm_confirmation(_) -> None:
-            self.confirm_pending_confirmation()
+            self.submit_confirmation_input(self.input.text)
 
         @key_bindings.add("c-j", filter=input_focused)
         def _insert_newline(_) -> None:
@@ -517,6 +517,22 @@ class PromptTui:
         self.app.layout.focus(self.input)
         self.app.invalidate()
         self.start_agent_turn("确认", confirmation_turn=True)
+
+    def submit_confirmation_input(self, content: str) -> None:
+        normalized = content.strip()
+        if not normalized:
+            self.confirm_pending_confirmation()
+            return
+        self.input.text = ""
+        if normalized in {"确认", "y", "yes", "是"}:
+            self.confirm_pending_confirmation()
+            return
+        self.manager.current = self.manager.handle_user_message(normalized)
+        self.refresh_confirmation_panel()
+        self.status.text = format_status(self.manager.current)
+        self.set_output_text(self.format_transcript_with_history(self.manager.current, show_process=True), force_follow=True)
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
 
     def reject_pending_confirmation(self) -> None:
         if self.manager.current.pending_confirmation is None:

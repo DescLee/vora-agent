@@ -1386,6 +1386,142 @@
 - symlink 日志目录下不得写入 `node.jsonl`。
 - symlink 日志目录下不得写入 `summary.jsonl`。
 
+### 71. `run_bash` 可无确认复制敏感文件
+
+#### 现象
+
+- 实际使用 `run_bash` 执行 `cp .env leaked.txt` 会直接复制敏感文件。
+- 旧的敏感读取检测覆盖了 `cat`、`grep`、`source` 等读命令，但没有覆盖复制命令。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中识别 `cp` 命令读取 `.env*`、`*.pem`、`*.key`。
+- 命中后进入人工确认流，默认不执行复制。
+
+#### 回归点
+
+- `run_bash` 执行 `cp .env leaked.txt` 必须要求确认。
+- 未确认时不得生成复制后的目标文件。
+
+### 72. `run_temp_script` 可无确认复制敏感文件
+
+#### 现象
+
+- `run_temp_script` 复用 shell 风险分析，但旧规则同样漏掉 `cp .env.test leaked.txt`。
+- 这会让临时脚本绕过敏感文件读取确认。
+
+#### 修复
+
+- 临时脚本内容同样走增强后的 `cp` 敏感路径检测。
+- 未确认时阻止脚本执行。
+
+#### 回归点
+
+- `run_temp_script` 中复制 `.env.test` 必须要求确认。
+- 未确认时不得生成复制后的目标文件。
+
+### 73. FD 前缀重定向写文件会绕过确认流
+
+#### 现象
+
+- 旧重定向规则只匹配 `> file` 和 `>> file`。
+- `1>out.txt`、`2>err.log` 这类常见 FD 重定向会直接创建或覆盖工作区文件。
+
+#### 修复
+
+- 扩展 shell 写入重定向检测，支持可选数字 FD 前缀。
+- 保留 `2>&1` 等 FD 合并场景的排除逻辑。
+
+#### 回归点
+
+- `1>out.txt` 写工作区文件必须要求确认。
+- `2>err.log` 写工作区文件必须要求确认。
+
+### 74. 写文件工具对目录目标抛原始异常
+
+#### 现象
+
+- `write_file` 指向已有目录时，会从 `Path.write_bytes()` 抛 `IsADirectoryError`。
+- `append_file` 指向已有目录时，也可能在读取或追加时抛原始异常。
+- 这和其它文件工具返回结构化错误的体验不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中为 `write_file` 和 `append_file` 增加目录目标检查。
+- 已存在但不是普通文件时返回 `INVALID_TOOL_PARAMS` 和 `not a file` 摘要。
+
+#### 回归点
+
+- `write_file` 指向目录时必须返回结构化错误。
+- `append_file` 指向目录时必须返回结构化错误。
+
+### 75. `resume` 静默忽略本次传入的 dry-run 和 limits
+
+#### 现象
+
+- 实际使用 `manus-mini --dry-run --max-react 1 resume <session>` 时，CLI 已解析参数，但 `_run_resume()` 没有接收这些参数。
+- 恢复会话后仍使用默认或旧限制，用户以为开启了 dry-run/限制回合，实际没有生效。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中将 `dry_run` 和 `max-*` 参数传入 resume 启动路径。
+- `PromptTuiOptions` 使用本次 CLI 参数构造，保证用户显式输入生效。
+
+#### 回归点
+
+- `manus-mini --dry-run --max-react 1 resume <session>` 必须开启 dry-run。
+- 恢复后的运行限制必须使用本次传入的 `max-react=1`。
+
+### 76. TUI 待确认时输入“取消”会被 Enter 当作确认
+
+#### 现象
+
+- 待确认写入出现时，TUI 的 Enter 绑定直接调用确认函数，不读取输入框内容。
+- 用户按提示输入“取消”再回车时，仍会触发确认流程，属于 UX 和安全风险。
+
+#### 修复
+
+- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 中增加确认输入提交路径。
+- 输入框非空时走 `SessionManager.handle_user_message()` 的确认/取消语义；空 Enter 保留快捷确认。
+
+#### 回归点
+
+- 待确认时输入 `取消` 再提交必须拒绝 pending 操作。
+- 拒绝时不得启动确认后的后台执行。
+
+### 77. TUI 确认输入后未清空输入框
+
+#### 现象
+
+- 待确认状态下输入确认/取消文本后，如果不清空输入框，后续焦点仍在旧内容上。
+- 这会造成用户继续输入时混入上一条确认文本。
+
+#### 修复
+
+- `submit_confirmation_input()` 在处理非空确认文本前清空输入框。
+- 空 Enter 快捷确认不改动输入框内容。
+
+#### 回归点
+
+- 待确认时输入 `取消` 后，输入框内容必须被清空。
+
+### 78. `resume` 未传 limits 时会覆盖已保存任务限制
+
+#### 现象
+
+- 修复 resume 支持本次 CLI limits 后，如果无条件使用默认值，会把已保存 active task 的运行限制覆盖掉。
+- 用户只是恢复会话时，历史任务上下文里的限制不应被默认值重置。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中识别用户本次是否显式传入 `--max-*`。
+- 只有显式传入的限制才覆盖已保存 active task limits；未传入时保留保存值。
+
+#### 回归点
+
+- `resume` 不带 `--max-react` 时，应保留已保存 active task 的 `max_react_iterations`。
+- `resume --max-react 1` 仍应使用本次传入值。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1395,6 +1531,8 @@
   - 旧写法子命令参数兼容
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
+  - `resume` 使用本次传入的 dry-run 和 limits
+  - `resume` 未传 limits 时保留已保存 active task limits
   - `resume` 指向损坏会话文件时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
   - `list` 展示最近用户消息前必须脱敏并截断预览
@@ -1430,6 +1568,7 @@
   - legacy 会话迁移会跳过 symlink JSON 文件
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - 文件工具越界路径必须返回 `PATH_OUT_OF_WORKSPACE`，不得直接抛异常
+  - 写文件和追加文件指向目录时返回结构化错误
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
   - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
@@ -1476,12 +1615,15 @@
   - `$()` / 反引号命令替换读取敏感文件时必须先进入确认流
   - `source .env*` / `. .env*` 加载敏感文件时必须先进入确认流
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
+  - `cp .env*` 复制敏感文件必须先进入确认流
+  - `1>out.txt` / `2>err.log` 这类 FD 重定向写工作区文件必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
   - JSON/Markdown 报告生成
   - 未知 runner 配置拒绝
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 英文 reasoning 在 TUI 中直接展示并保留长度截断
+  - 待确认时输入 `取消` 再提交会拒绝 pending 操作，而不是误确认
 
 ## 验证结果
 
@@ -1493,10 +1635,10 @@ pytest -q
 
 结果：
 
-- `435 passed`
+- `443 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.13%（门禁 80%）
+- 分支覆盖率：84.21%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助

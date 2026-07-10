@@ -1138,6 +1138,32 @@ def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path
     assert started == [("确认", True)]
 
 
+def test_prompt_tui_enter_cancel_text_rejects_pending_confirmation(tmp_path: Path) -> None:
+    from manus_mini.models import PendingConfirmation
+
+    session = SessionState.create(cwd=tmp_path)
+    session.pending_confirmation = PendingConfirmation(
+        tool_name="write_file",
+        tool_call_id="call-write",
+        summary="即将修改 notes.txt",
+        prompt="即将修改 notes.txt",
+        diff_preview="+large diff",
+    )
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+    started = []
+
+    tui.start_agent_turn = lambda content, confirmation_turn=False: started.append((content, confirmation_turn))  # type: ignore[method-assign]
+
+    tui.input.text = "取消"
+    tui.submit_confirmation_input(tui.input.text)
+
+    assert tui.manager.current.pending_confirmation is None
+    assert tui.confirmation_in_progress is False
+    assert tui.input.text == ""
+    assert started == []
+    assert tui.manager.current.messages[-1].content == "用户拒绝了待确认写入。"
+
+
 def test_format_status_context_usage_includes_active_task_process(tmp_path: Path) -> None:
     from manus_mini.models import TraceEvent
 

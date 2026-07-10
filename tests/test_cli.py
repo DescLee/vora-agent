@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from manus_mini.cli import main
-from manus_mini.models import Message, SessionState
+from manus_mini.models import LoopLimits, Message, SessionState, TaskState
 from manus_mini.session_store import SessionStore
 
 
@@ -88,6 +88,48 @@ def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch
     main(["resume", session.session_id, "--cwd", str(tmp_path)])
 
     assert seen["initial_session"] == session.session_id
+
+
+def test_cli_resume_honors_global_dry_run_and_limit_overrides(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+    seen = {}
+
+    def fake_run(self):  # noqa: ANN001
+        seen["initial_session"] = self.manager.current.session_id
+        seen["dry_run"] = self.manager.runtime.dry_run
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
+
+    main(["--dry-run", "--max-react", "1", "resume", session.session_id, "--cwd", str(tmp_path)])
+
+    assert seen == {
+        "initial_session": session.session_id,
+        "dry_run": True,
+        "max_react_iterations": 1,
+    }
+
+
+def test_cli_resume_preserves_saved_active_task_limits_without_overrides(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.active_task = TaskState.create(goal="继续任务", cwd=tmp_path)
+    session.active_task.limits = LoopLimits(max_react_iterations=7)
+    store.save(session)
+    seen = {}
+
+    def fake_run(self):  # noqa: ANN001
+        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
+
+    main(["resume", session.session_id, "--cwd", str(tmp_path)])
+
+    assert seen["max_react_iterations"] == 7
 
 
 def test_cli_resume_missing_session_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:

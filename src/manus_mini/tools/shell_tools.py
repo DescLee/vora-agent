@@ -35,7 +35,7 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"\bpython(?:3)?\b.*\bPath\s*\([^)]*\)\.open\s*\(\s*['\"][wa]",
     r"\bpython(?:3)?\b.*\bopen\s*\([^)]*,\s*['\"][wa]",
     r"\btee(?:\s+-a)?\s+(?!/)[A-Za-z0-9_.\-/]+",
-    r"(^|[\s;&|])(?:>>|>)\s*(?!&|\d|/)[A-Za-z0-9_.\-/]+",
+    r"(^|[\s;&|])(?:\d+)?(?:>>|>)\s*(?!&|\d|/)[A-Za-z0-9_.\-/]+",
     r"(^|[;&|]\s*)printf\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
@@ -442,6 +442,8 @@ def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> boo
             return True
         if _has_sensitive_input_redirection(tokens):
             return True
+        if _copies_sensitive_file(tokens):
+            return True
         if command_name not in SENSITIVE_READ_COMMANDS:
             continue
         if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
@@ -518,6 +520,13 @@ def _has_sensitive_input_redirection(tokens: list[str]) -> bool:
         if token in {"<", "<>"} and _is_sensitive_shell_path(tokens[index + 1]):
             return True
     return False
+
+
+def _copies_sensitive_file(tokens: list[str]) -> bool:
+    command_name = Path(tokens[0]).name if tokens else ""
+    if command_name != "cp":
+        return False
+    return any(_is_sensitive_shell_path(token) for token in tokens[1:])
 
 
 def _nested_shell_reads_sensitive_file(tokens: list[str], *, depth: int) -> bool:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from manus_mini.models import LoopLimits
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     cwd = getattr(args, "subcommand_cwd", None) or args.global_cwd or Path.cwd()
     dry_run = bool(args.dry_run) if getattr(args, "dry_run", None) is not None else False
     max_steps = int(args.max_steps) if getattr(args, "max_steps", None) is not None else 3
@@ -61,7 +63,21 @@ def main(argv: list[str] | None = None) -> None:
         _run_list(cwd)
         return
     if args.command == "resume":
-        _run_resume(cwd, args.session_id)
+        _run_resume(
+            cwd=cwd,
+            session_id=args.session_id,
+            dry_run=dry_run,
+            max_steps=max_steps,
+            max_react=max_react,
+            max_reflect=max_reflect,
+            max_tool_retries=max_tool_retries,
+            limit_overrides={
+                "max_engineering_steps": _option_was_provided(raw_argv, "--max-steps"),
+                "max_react_iterations": _option_was_provided(raw_argv, "--max-react"),
+                "max_reflection_rounds": _option_was_provided(raw_argv, "--max-reflect"),
+                "max_tool_retries": _option_was_provided(raw_argv, "--max-tool-retries"),
+            },
+        )
         return
     if args.command == "remove":
         _run_remove(cwd, args.session_id)
@@ -97,7 +113,16 @@ def _run_list(cwd: Path) -> None:
         )
 
 
-def _run_resume(cwd: Path, session_id: str) -> None:
+def _run_resume(
+    cwd: Path,
+    session_id: str,
+    dry_run: bool,
+    max_steps: int,
+    max_react: int,
+    max_reflect: int,
+    max_tool_retries: int,
+    limit_overrides: dict[str, bool],
+) -> None:
     store = SessionStore(cwd)
     try:
         session = store.load(session_id)
@@ -111,8 +136,16 @@ def _run_resume(cwd: Path, session_id: str) -> None:
         print(f"Error: session '{session_id}' not found.")
         raise SystemExit(1) from None
     limits = session.active_task.limits if session.active_task is not None else LoopLimits()
+    if limit_overrides["max_engineering_steps"]:
+        limits.max_engineering_steps = max_steps
+    if limit_overrides["max_react_iterations"]:
+        limits.max_react_iterations = max_react
+    if limit_overrides["max_reflection_rounds"]:
+        limits.max_reflection_rounds = max_reflect
+    if limit_overrides["max_tool_retries"]:
+        limits.max_tool_retries = max_tool_retries
     PromptTui(
-        options=PromptTuiOptions(cwd=cwd, limits=limits),
+        options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run),
         initial_session=session,
     ).run()
 
@@ -178,6 +211,10 @@ def _run_tui(
         max_tool_retries=max_tool_retries,
     )
     PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)).run()
+
+
+def _option_was_provided(argv: list[str], name: str) -> bool:
+    return any(item == name or item.startswith(f"{name}=") for item in argv)
 
 
 def _format_last_user_message(message: str) -> str:

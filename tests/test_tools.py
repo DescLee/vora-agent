@@ -39,6 +39,19 @@ def test_file_write_tools_return_structured_error_for_workspace_escape(tmp_path:
     assert all(result.ok is False for result in results)
 
 
+def test_file_write_tools_reject_directory_targets_with_structured_error(tmp_path: Path) -> None:
+    (tmp_path / "notes").mkdir()
+
+    results = [
+        WriteFileTool().run(workspace=tmp_path, path="notes", content="x", confirmed=True),
+        AppendFileTool().run(workspace=tmp_path, path="notes", content="x", confirmed=True),
+    ]
+
+    assert [result.error_code for result in results] == ["INVALID_TOOL_PARAMS", "INVALID_TOOL_PARAMS"]
+    assert all(result.ok is False for result in results)
+    assert all("not a file" in result.summary for result in results)
+
+
 def test_resolve_workspace_path_allows_system_tmp(tmp_path: Path) -> None:
     target = resolve_workspace_path(tmp_path, "/tmp/manus-mini-test.txt")
 

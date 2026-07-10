@@ -496,6 +496,13 @@ class WriteFileTool(BaseTool):
                 summary=f"protected write target: {relative_path}",
                 error_code="PROTECTED_PATH",
             )
+        if target.exists() and not target.is_file():
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"not a file: {relative_path}",
+                error_code="INVALID_TOOL_PARAMS",
+            )
         encoded = str(content).encode(kwargs.get("encoding", "utf-8"))
         max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_WRITE_BYTES)
         if len(encoded) > max_bytes:
@@ -750,6 +757,8 @@ class AppendFileTool(BaseTool):
         previous_preview = _preview_existing_text(target)
         if _is_protected_write_path(Path(relative_path)):
             return ToolResult(tool_name=self.name, ok=False, summary=f"protected write target: {relative_path}", error_code="PROTECTED_PATH")
+        if target.exists() and not target.is_file():
+            return ToolResult(tool_name=self.name, ok=False, summary=f"not a file: {relative_path}", error_code="INVALID_TOOL_PARAMS")
         encoded = str(content).encode(kwargs.get("encoding", "utf-8"))
         max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_WRITE_BYTES)
         if target.exists():
