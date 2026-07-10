@@ -1207,6 +1207,26 @@
 - `manus-mini resume broken-session` 指向损坏 JSON 时，应提示该会话不可读取或已损坏。
 - 非法 `session_id` 与缺失会话的既有友好错误保持不变。
 
+### 61. 事件日志 session_id 可越过日志根目录
+
+#### 现象
+
+- `EventLogger.record()` 和 `record_summary()` 直接使用 `self.root / session_id` 作为写盘目录。
+- 如果调用方传入 `../outside` 这类值，日志文件会被写到日志根目录之外。
+- 会话存储层已有 `session_id` 校验，但日志写盘入口没有同等边界保护。
+
+#### 修复
+
+- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中为日志入口增加本地 `session_id` 校验。
+- `record()` 和 `record_summary()` 在计算路径和写盘前先拒绝路径穿越、斜杠和非法字符。
+- 不从 `session_store` 反向导入校验函数，避免日志模块与会话存储模块形成循环依赖。
+
+#### 回归点
+
+- `EventLogger.record("../outside", ...)` 必须拒绝写盘。
+- `EventLogger.record_summary("../outside", ...)` 必须拒绝写盘。
+- 日志根目录外不得被创建路径穿越目标。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1225,6 +1245,7 @@
   - 用户目录不可写时路径回退
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
+  - 事件日志和 summary 日志必须拒绝非法 `session_id` 路径穿越
 - [tests/test_memory.py](/Users/liyong/Desktop/ai-manus/tests/test_memory.py)
   - 长期记忆 content 中的敏感值不得写入
   - 长期记忆 tags 和 source_message_ids 中的敏感值不得写入
@@ -1304,7 +1325,7 @@ pytest -q
 
 结果：
 
-- `425 passed`
+- `426 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.96%（门禁 80%）
@@ -1363,6 +1384,7 @@ pytest -q
 - `manus-mini list` 展示最近用户消息前会脱敏并截断长文本
 - `manus-mini list` 遇到损坏会话文件时仍能列出其它正常会话
 - `manus-mini resume` 指向损坏会话文件时会输出明确的友好错误
+- `EventLogger` 写入事件日志和 summary 日志前会拒绝非法 `session_id` 路径穿越
 
 ## 后续建议
 

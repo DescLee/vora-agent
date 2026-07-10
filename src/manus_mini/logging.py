@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import re
 import tempfile
 from shutil import copy2
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
 
 MAX_LOG_MESSAGE_CONTENT_CHARS = 1200
 MAX_REFLECTION_OBSERVATIONS = 12
+LOG_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def default_manus_home() -> Path:
@@ -107,6 +109,7 @@ class EventLogger:
         self.enabled = enabled
 
     def record(self, session_id: str, run_id: str, event: dict[str, Any]) -> Path:
+        _validate_log_session_id(session_id)
         session_dir = self.root / session_id
         node_path = session_dir / self.node_filename
         node_id = self._next_node_id(session_id, run_id, event)
@@ -140,6 +143,7 @@ class EventLogger:
         result: str,
         status: str,
     ) -> Path:
+        _validate_log_session_id(session_id)
         session_dir = self.root / session_id
         path = session_dir / self.summary_filename
         if not self.enabled:
@@ -193,6 +197,13 @@ def build_pipeline_event(
         "message_id": event.get("message_id") or event.get("tool_call_id") or event.get("id"),
         "upstream_node_ids": upstream_node_ids,
     }
+
+
+def _validate_log_session_id(session_id: str) -> None:
+    if not LOG_SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(f"invalid session_id: {session_id}")
+    if "/" in session_id or "\\" in session_id:
+        raise ValueError(f"invalid session_id: {session_id}")
 
 
 def pipeline_node_name(event: dict[str, Any]) -> str:

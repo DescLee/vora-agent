@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from manus_mini.logging import (
     EventLogger,
     default_manus_home,
@@ -118,6 +120,17 @@ def test_event_logger_redacts_summary_values(tmp_path: Path) -> None:
     assert "abc123" not in raw
     assert row["user_input"] == "请记住 token=[REDACTED]"
     assert row["result"] == "结果包含 password=[REDACTED]"
+
+
+def test_event_logger_rejects_session_id_path_traversal(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "logs", enabled=True)
+
+    with pytest.raises(ValueError):
+        logger.record("../outside", "run-1", {"type": "context_budget"})
+    with pytest.raises(ValueError):
+        logger.record_summary("../outside", "run-1", "input", "result", "done")
+
+    assert not (tmp_path / "outside").exists()
 
 
 def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
