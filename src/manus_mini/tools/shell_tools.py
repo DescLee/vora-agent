@@ -39,7 +39,26 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"(^|[;&|]\s*)printf\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
-SENSITIVE_READ_COMMANDS = {".", "awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "source", "tail"}
+SENSITIVE_READ_COMMANDS = {
+    ".",
+    "awk",
+    "base64",
+    "cat",
+    "egrep",
+    "fgrep",
+    "grep",
+    "head",
+    "less",
+    "more",
+    "od",
+    "openssl",
+    "sed",
+    "source",
+    "strings",
+    "tail",
+    "wc",
+    "xxd",
+}
 SENSITIVE_FILE_TRANSFER_COMMANDS = {"cp", "install", "mv", "rsync", "tar"}
 NESTED_SHELL_COMMANDS = {"bash", "sh", "zsh"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
@@ -543,14 +562,37 @@ def _nested_shell_reads_sensitive_file(tokens: list[str], *, depth: int) -> bool
 def _python_reads_sensitive_file(command_text: str) -> bool:
     if not re.search(r"\bpython(?:3)?\b", command_text):
         return False
+    sensitive_vars = _python_sensitive_path_vars(command_text)
     patterns = (
         r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]",
         r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:read_text|read_bytes|open)\s*\(",
+        r"\bshutil\.(?:copy|copy2|copyfile|move)\s*\(\s*['\"]([^'\"]+)['\"]",
     )
     for pattern in patterns:
         if any(_is_sensitive_shell_path(match.group(1)) for match in re.finditer(pattern, command_text)):
             return True
+    for variable in sensitive_vars:
+        escaped = re.escape(variable)
+        variable_patterns = (
+            rf"\bopen\s*\(\s*{escaped}\b",
+            rf"\bPath\s*\(\s*{escaped}\b\s*\)\.(?:read_text|read_bytes|open)\s*\(",
+            rf"\b{escaped}\.(?:read_text|read_bytes|open)\s*\(",
+            rf"\bshutil\.(?:copy|copy2|copyfile|move)\s*\(\s*{escaped}\b",
+        )
+        if any(re.search(pattern, command_text) for pattern in variable_patterns):
+            return True
     return False
+
+
+def _python_sensitive_path_vars(command_text: str) -> set[str]:
+    variables: set[str] = set()
+    for match in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*['\"]([^'\"]+)['\"]", command_text):
+        if _is_sensitive_shell_path(match.group(2)):
+            variables.add(match.group(1))
+    for match in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*Path\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", command_text):
+        if _is_sensitive_shell_path(match.group(2)):
+            variables.add(match.group(1))
+    return variables
 
 
 def _is_sensitive_shell_path(token: str) -> bool:

@@ -1724,6 +1724,9 @@
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
   - `cp .env*` 复制敏感文件必须先进入确认流
   - `mv` / `install` / `tar` / `rsync` 外带敏感文件必须先进入确认流
+  - `base64` / `wc` / `openssl -in` 读取敏感文件必须先进入确认流
+  - `python -c` 中通过变量间接 `open()` / `Path.read_text()` 读取敏感文件必须先进入确认流
+  - `python -c` 中通过 `shutil.copyfile()` 复制敏感文件必须先进入确认流
   - `1>out.txt` / `2>err.log` 这类 FD 重定向写工作区文件必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
@@ -1744,10 +1747,10 @@ pytest -q
 
 结果：
 
-- `449 passed`
+- `456 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.26%（门禁 80%）
+- 分支覆盖率：84.28%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助

@@ -408,6 +408,78 @@ def test_run_bash_rsync_sensitive_file_requires_confirmation(tmp_path: Path) -> 
     assert not (tmp_path / "leaked.txt").exists()
 
 
+def test_run_bash_base64_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    preview = RunBashTool().preview(workspace=tmp_path, command="base64 .env")
+
+    assert preview.requires_confirmation is True
+    assert "sensitive workspace files" in preview.summary
+
+
+def test_run_bash_wc_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="wc -c .env")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+
+
+def test_run_bash_openssl_input_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    preview = RunBashTool().preview(workspace=tmp_path, command="openssl base64 -in .env")
+
+    assert preview.requires_confirmation is True
+    assert "sensitive workspace files" in preview.summary
+
+
+def test_run_bash_python_shutil_copy_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"import shutil; shutil.copyfile('.env', 'leaked.txt')\"",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert not (tmp_path / "leaked.txt").exists()
+
+
+def test_run_bash_python_variable_open_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="python -c \"p='.env'; print(open(p).read())\"")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_bash_python_variable_pathlib_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(
+        workspace=tmp_path,
+        command="python -c \"from pathlib import Path; p=Path('.env'); print(p.read_text())\"",
+    )
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_temp_script_base64_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
+
+    preview = RunTempScriptTool().preview(workspace=tmp_path, content="base64 .env.test\n")
+
+    assert preview.requires_confirmation is True
+    assert "sensitive workspace files" in preview.summary
+
+
 def test_run_bash_fd_redirection_to_workspace_file_requires_confirmation(tmp_path: Path) -> None:
     result = RunBashTool().run(workspace=tmp_path, command="python -c 'print(123)' 1>out.txt")
 
