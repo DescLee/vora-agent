@@ -96,6 +96,14 @@ TOOL_EXTENSION_GOAL_KEYWORDS = ("扩展一个新工具", "新增工具", "加一
 PRODUCTION_READINESS_GOAL_KEYWORDS = ("生产化", "生产级", "上线还缺", "还缺什么")
 TROUBLESHOOTING_GOAL_KEYWORDS = ("怎么排障", "如何排障", "出问题", "定位问题")
 SENIORITY_GOAL_KEYWORDS = ("8年经验", "八年经验", "高级工程师", "资深")
+CORE_DIFFICULTY_GOAL_KEYWORDS = ("核心难点", "难点是什么", "最大难点")
+OBSERVABILITY_GOAL_KEYWORDS = ("可观测性", "观测性", "怎么观测")
+LANGCHAIN_DECISION_GOAL_KEYWORDS = ("不用 langchain", "为什么不用langchain", "langchain")
+CONTEXT_WINDOW_OVERFLOW_GOAL_KEYWORDS = ("上下文窗口爆", "窗口爆", "上下文爆", "context window")
+TEST_QUALITY_GOAL_KEYWORDS = ("测试质量", "保证测试", "测试保障")
+TOOL_FAILURE_GOAL_KEYWORDS = ("工具调用失败", "工具失败", "调用失败")
+HALLUCINATION_GUARD_GOAL_KEYWORDS = ("避免幻觉", "防止幻觉", "减少幻觉", "幻觉")
+NEXT_ITERATION_GOAL_KEYWORDS = ("继续迭代", "下一版", "下个版本", "先做什么")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
 EXPLICIT_WRITE_INTENT_KEYWORDS = (
     "保存到",
@@ -866,6 +874,47 @@ class ReActLoop:
             return (
                 "它体现的不是页面复杂度，而是工程边界：有安全边界、可观测日志、会话恢复、上下文压缩、"
                 "工具调度、Reflection 质量门禁和测试/eval 门禁，这些是资深工程师会主动补齐的系统能力。"
+            )
+        if any(keyword in compact_focus for keyword in CORE_DIFFICULTY_GOAL_KEYWORDS):
+            return (
+                "核心难点不是接一个聊天接口，而是把工具调用闭环、上下文预算、安全边界和结果验证做成稳定系统。"
+                "面试时可以强调：工具要可调度、可确认、可回放；上下文要能压缩且保持 tool exchange 完整；"
+                "代码结果还要经过 Reflection 和测试证据验证。"
+            )
+        if any(keyword in compact_focus for keyword in OBSERVABILITY_GOAL_KEYWORDS):
+            return (
+                "可观测性由 `EventLogger`、`trace_events`、run `summary` 和项目级 `logs` 组成。"
+                "它能回看每轮 LLM 请求、计划、工具调用、工具返回、压缩和 Reflection 决策，便于面试现场排障。"
+            )
+        if any(keyword in compact_focus for keyword in LANGCHAIN_DECISION_GOAL_KEYWORDS):
+            return (
+                "不用 LangChain 的取舍是为了面试展示底层可控性：自己实现工具调度、确认流、上下文压缩、"
+                "安全边界和 Reflection 回流，更容易说明 Agent 工程细节；生产项目可以再评估是否接入框架生态。"
+            )
+        if any(keyword in compact_focus for keyword in CONTEXT_WINDOW_OVERFLOW_GOAL_KEYWORDS):
+            return (
+                "上下文窗口接近上限时按 50% / 70% / 90% 分层处理：压缩长工具输出、摘要历史消息，"
+                "必要时强制截断，并记录 `CompressionSnapshot`，同时保持 assistant/tool call/result 成组完整。"
+            )
+        if any(keyword in compact_focus for keyword in TEST_QUALITY_GOAL_KEYWORDS):
+            return (
+                "测试质量靠多层门禁：`pytest` 覆盖核心流程和边界，`ruff` 管代码风格，`mypy` 管类型，"
+                "`python evals/run_evals.py` 覆盖 Agent 关键约束，覆盖率门禁防止核心路径无人看守。"
+            )
+        if any(keyword in compact_focus for keyword in TOOL_FAILURE_GOAL_KEYWORDS):
+            return (
+                "工具调用失败会转成 `ToolObservation`，保留 `error_code`、summary 和可读错误。"
+                "可重试错误走工具重试上限；不可恢复错误进入上下文给 ReAct/Reflection 判断，必要时改计划或给出失败说明。"
+            )
+        if any(keyword in compact_focus for keyword in HALLUCINATION_GUARD_GOAL_KEYWORDS):
+            return (
+                "避免幻觉主要靠工具结果和证据约束：回答应基于真实 observation、文件内容和搜索结果；"
+                "证据不足时明确说明不会编造。代码类结果还会经过 Reflection 和测试证据检查。"
+            )
+        if any(keyword in compact_focus for keyword in NEXT_ITERATION_GOAL_KEYWORDS):
+            return (
+                "下一版我会先做四件和面试价值最高的事：streaming 输出提升 TUI 体验，容器沙箱替代本机命令执行，"
+                "多 provider LLM adapter 加强可用性，再把可观测链路升级成更完整的运行详情视图。"
             )
         if _goal_mentions_current_project(compact_focus) and any(
             keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS

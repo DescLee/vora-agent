@@ -2811,6 +2811,41 @@ def test_runtime_fallback_answers_interview_positioning_questions(
         assert term in result.messages[-1].content
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("如果面试官问这个项目的核心难点是什么，怎么回答？", ["工具调用闭环", "上下文", "安全", "验证"]),
+        ("这个项目怎么体现可观测性？", ["EventLogger", "trace_events", "summary", "logs"]),
+        ("面试官问为什么不用 LangChain，怎么回答？", ["可控性", "工具调度", "确认流", "面试"]),
+        ("上下文窗口爆了怎么办？", ["50%", "70%", "90%", "CompressionSnapshot"]),
+        ("这个项目怎么保证测试质量？", ["pytest", "ruff", "mypy", "eval"]),
+        ("如果工具调用失败会怎么处理？", ["ToolObservation", "error_code", "重试", "Reflection"]),
+        ("这个项目怎么避免幻觉？", ["工具结果", "证据", "Reflection", "不会编造"]),
+        ("如果让我继续迭代下一版，你会先做什么？", ["streaming", "容器沙箱", "多 provider", "可观测"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_defense_questions(
+    tmp_path: Path,
+    prompt: str,
+    expected_terms: list[str],
+) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
