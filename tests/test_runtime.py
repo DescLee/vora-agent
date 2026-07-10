@@ -2105,6 +2105,48 @@ def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) 
     assert "+    return 'new'" in session.pending_confirmation.diff_preview
 
 
+def test_executor_confirmation_diff_preview_does_not_read_outside_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("OUTSIDE_SECRET", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="write outside", cwd=tmp_path)
+    call = ToolCall(
+        id="call-write-outside",
+        name="write_file",
+        args={"workspace": tmp_path, "path": "../outside-secret.txt", "content": "new"},
+    )
+
+    result = Executor(ToolRegistry()).execute(call, session, task)
+
+    assert result.error_code == "WRITE_REQUIRES_CONFIRMATION"
+    assert session.pending_confirmation is not None
+    assert "OUTSIDE_SECRET" not in session.pending_confirmation.diff_preview
+    assert not any("OUTSIDE_SECRET" in str(event.data.get("diff_preview") or "") for event in task.trace_events)
+
+
+def test_executor_replace_diff_trace_does_not_read_outside_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("OUTSIDE_SECRET", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="replace outside", cwd=tmp_path)
+    call = ToolCall(
+        id="call-replace-outside",
+        name="replace_in_file",
+        args={
+            "workspace": tmp_path,
+            "path": "../outside-secret.txt",
+            "old_text": "OUTSIDE_SECRET",
+            "new_text": "redacted",
+            "confirmed": True,
+        },
+    )
+
+    result = Executor(ToolRegistry()).execute(call, session, task)
+
+    assert result.error_code == "PATH_OUT_OF_WORKSPACE"
+    assert not any("OUTSIDE_SECRET" in str(event.data.get("diff_preview") or "") for event in task.trace_events)
+
+
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:
     class FakeReactLoop:
         def run(self, task: TaskState, session: SessionState) -> str:  # noqa: ARG002

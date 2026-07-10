@@ -10,7 +10,7 @@ from difflib import unified_diff
 from pathlib import Path, PurePosixPath
 
 from manus_mini.models import PendingConfirmation, SessionState, TaskState, TraceEvent, ToolCall
-from manus_mini.tools.base import ToolPreview, ToolResult
+from manus_mini.tools.base import ToolPreview, ToolResult, resolve_workspace_path
 from manus_mini.tools.file_tools import NOISE_DIR_NAMES
 from manus_mini.tools.registry import ToolRegistry
 
@@ -226,7 +226,10 @@ class Executor:
         if tool_name == "make_directory":
             return f"+ mkdir -p {path}\n"
 
-        target = (workspace / path).expanduser().resolve()
+        try:
+            target = resolve_workspace_path(workspace, path)
+        except PermissionError:
+            return ""
         before = _read_text_preview(target)
         if tool_name == "replace_in_file":
             after = _preview_replace_content(before, args)

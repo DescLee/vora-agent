@@ -978,6 +978,27 @@
 - `write_file`、`replace_in_file`、`append_file`、`make_directory` 的越界路径必须返回结构化错误。
 - 正常工作区内文件读写行为保持不变。
 
+### 49. 越界写入的 diff 预览会读取工作区外文件内容
+
+#### 现象
+
+- 写入类工具在真正执行前会生成确认面板 diff 预览。
+- 旧实现的 `_build_diff_preview()` 直接用 `(workspace / path).resolve()` 定位目标，再读取旧内容。
+- 真实测试中，`write_file(path="../outside-secret.txt")` 虽然执行阶段会被拒绝，但确认面板的 diff 已经包含工作区外文件内容。
+- `replace_in_file(path="../outside-secret.txt", confirmed=True)` 也会在执行前写入 trace diff，泄露工作区外内容。
+
+#### 修复
+
+- 在 [src/manus_mini/executor.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/executor.py) 中，diff 预览生成前复用 `resolve_workspace_path()`。
+- 如果路径越过工作区，直接不生成 diff 预览。
+- 保留工作区内文件的确认 diff 和 replace trace diff 行为。
+
+#### 回归点
+
+- 越界 `write_file` 的 `pending_confirmation.diff_preview` 不得包含工作区外文件内容。
+- 越界 `replace_in_file` 的 trace diff 不得包含工作区外文件内容。
+- 正常工作区内 `replace_in_file` 和 dry-run 写入仍应显示 diff。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1010,6 +1031,7 @@
   - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
   - `fetch_webpage` 必须拒绝本机、内网、link-local 和解析到私网的 URL
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
+  - 越界写入/替换不得通过确认 diff 或 trace diff 泄露工作区外文件内容
   - fallback 高价值回答
   - 空结果保护
   - 行研问答默认不落文件
@@ -1060,10 +1082,10 @@ pytest -q
 
 结果：
 
-- `408 passed`
+- `410 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.81%（门禁 80%）
+- 分支覆盖率：83.82%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1107,6 +1129,7 @@ pytest -q
 - `session_id` 包含路径片段时会被拒绝，不会越过 sessions/logs 目录
 - `fetch_webpage` 会拒绝本机、内网、link-local 和解析到受保护地址的 URL
 - 文件工具越界路径会返回结构化 `PATH_OUT_OF_WORKSPACE` 错误
+- 越界写入/替换不会通过确认 diff 或 trace diff 泄露工作区外文件内容
 
 ## 后续建议
 
