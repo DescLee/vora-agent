@@ -1813,6 +1813,32 @@
 - 缺少 prompt、空 prompt、空会话列表、缺失 session 都必须给出可执行下一步。
 - `总结 当前 项目` 必须命中当前项目概览兜底，不能退回只展示网络错误原因。
 
+### 94. 会话管理命令缺少风险说明和下一步提示
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini remove --help` 时，只显示裸 `session_id`，没有说明会删除什么。
+- 执行 `python -m manus_mini clear --help` 时，没有说明清空范围和 `--force` 的使用风险。
+- 执行 `python -m manus_mini remove missing-session --cwd <目录>` 时，只输出缺失错误，没有提示先 `list`。
+- 执行 `python -m manus_mini clear --cwd <空目录>` 时，只输出无会话可清理，没有提示如何开始或检查会话。
+- 有会话时的 `list` 只提示 resume，不提示 remove/clear，现场演示会话生命周期不完整。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为 `remove` 增加 session_id 说明、日志清理风险说明和示例。
+- 为 `clear` 增加清空范围、日志清理风险、`--force` 使用建议和示例。
+- `remove` 找不到 session 时提示先执行 `manus-mini list --cwd ...`。
+- 空目录执行 `clear` 时提示如何新建会话和查看会话。
+- `list` 有会话时同时输出 resume、remove、clear all 三类下一步命令。
+
+#### 回归点
+
+- `remove --help` 必须说明 `session_id` 和日志目录清理。
+- `clear --help` 必须说明作用范围、日志目录清理和 `--force` 风险。
+- 删除缺失会话必须提示先列出会话。
+- 空会话清理必须提示新建和列出会话。
+- 有会话列表必须展示恢复、删除和清空命令。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
@@ -1842,6 +1868,11 @@
   - `run` 缺少 prompt 时输出可复制示例
   - `run ""` 空 prompt 时输出可复制示例
   - 缺失 session 的 `resume` 错误会提示先执行 `list`
+  - `list` 有会话时提示 `resume`、`remove` 和 `clear`
+  - `remove --help` 说明 session id、日志清理和示例
+  - `clear --help` 说明作用范围、日志清理和 `--force` 风险
+  - `remove` 缺失会话时提示先执行 `list`
+  - `clear` 空会话时提示新建和列出会话
   - `clear` stdin 缺失时按取消处理，不删除会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
   - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途

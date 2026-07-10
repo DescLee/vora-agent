@@ -21,6 +21,19 @@ RUN_HELP_EPILOG = "\n".join(
         "Then resume with: manus-mini resume <session_id> --cwd .",
     ]
 )
+REMOVE_HELP_EPILOG = "\n".join(
+    [
+        "This also removes matching log directories.",
+        "Example: manus-mini remove <session_id> --cwd .",
+    ]
+)
+CLEAR_HELP_EPILOG = "\n".join(
+    [
+        "This also removes matching log directories.",
+        "Use --force only in scripts after checking the target --cwd.",
+        "Example: manus-mini clear --cwd .",
+    ]
+)
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -67,11 +80,23 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("session_id")
     _add_runtime_options(resume_parser, include_defaults=False, cwd_dest="subcommand_cwd")
 
-    remove_parser = subparsers.add_parser("remove", help="remove a saved session")
-    remove_parser.add_argument("session_id")
+    remove_parser = subparsers.add_parser(
+        "remove",
+        help="remove a saved session",
+        description="remove one saved session for the working directory",
+        epilog=REMOVE_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
+    )
+    remove_parser.add_argument("session_id", help="saved session id to remove")
     _add_cwd_option(remove_parser, dest="subcommand_cwd", default=None)
 
-    clear_parser = subparsers.add_parser("clear", help="clear all saved sessions")
+    clear_parser = subparsers.add_parser(
+        "clear",
+        help="clear all saved sessions",
+        description="clear all saved sessions for the working directory",
+        epilog=CLEAR_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
+    )
     _add_cwd_option(clear_parser, dest="subcommand_cwd", default=None)
     clear_parser.add_argument("--force", "-f", action="store_true", help="skip confirmation prompt")
     return parser
@@ -205,6 +230,8 @@ def _run_list(cwd: Path) -> None:
         )
     print()
     print(f"Resume with: manus-mini resume {sessions[0].session_id} --cwd {cwd}")
+    print(f"Remove with: manus-mini remove {sessions[0].session_id} --cwd {cwd}")
+    print(f"Clear all with: manus-mini clear --cwd {cwd}")
 
 
 def _run_once(
@@ -292,6 +319,7 @@ def _run_remove(cwd: Path, session_id: str) -> None:
     try:
         if not store.delete(session_id):
             print(f"Error: session '{session_id}' not found.")
+            print(f"List sessions with: manus-mini list --cwd {cwd}")
             raise SystemExit(1)
         logs_deleted = store.delete_logs_for_session(session_id)
     except ValueError:
@@ -315,6 +343,8 @@ def _run_clear(cwd: Path, force: bool) -> None:
     count = len(sessions)
     if count == 0:
         print("No saved sessions to clear.")
+        print(f'Start with: manus-mini run "你的问题" --cwd {cwd}')
+        print(f"List sessions with: manus-mini list --cwd {cwd}")
         return
     if not force:
         try:

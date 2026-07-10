@@ -28,6 +28,8 @@ def test_cli_list_prints_readable_session_table_without_opening_tui(tmp_path: Pa
     assert session.session_id in out
     assert "上一轮问题" in out
     assert f"Resume with: manus-mini resume {session.session_id} --cwd {tmp_path}" in out
+    assert f"Remove with: manus-mini remove {session.session_id} --cwd {tmp_path}" in out
+    assert f"Clear all with: manus-mini clear --cwd {tmp_path}" in out
 
 
 def test_package_exposes_python_module_entrypoint() -> None:
@@ -274,6 +276,18 @@ def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, cap
     assert "Error: invalid session id '../sessions'." in out
 
 
+def test_cli_remove_missing_session_suggests_listing_sessions(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    with pytest.raises(SystemExit) as error:
+        main(["remove", "missing-session", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 1
+    assert "Error: session 'missing-session' not found." in out
+    assert f"List sessions with: manus-mini list --cwd {tmp_path}" in out
+
+
 def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit) as error:
         main(["tui", "--cwd", str(tmp_path)])
@@ -366,6 +380,28 @@ def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:
     assert "skip confirmation prompt" in clear_out
 
 
+def test_cli_remove_help_describes_session_id_and_risk(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["remove", "--help"])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 0
+    assert "saved session id to remove" in out
+    assert "also removes matching log directories" in out
+    assert "Example: manus-mini remove <session_id> --cwd ." in out
+
+
+def test_cli_clear_help_describes_scope_and_force(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["clear", "--help"])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 0
+    assert "clear all saved sessions for the working directory" in out
+    assert "also removes matching log directories" in out
+    assert "Use --force only in scripts" in out
+
+
 def test_cli_run_help_describes_prompt_and_examples(capsys) -> None:
     with pytest.raises(SystemExit) as error:
         main(["run", "--help"])
@@ -444,3 +480,14 @@ def test_cli_clear_treats_missing_stdin_as_cancelled(tmp_path: Path, capsys, mon
     out = capsys.readouterr().out
     assert "Clear cancelled." in out
     assert [item.session_id for item in store.list_sessions()] == [session.session_id]
+
+
+def test_cli_clear_empty_sessions_suggests_starting_or_listing(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    main(["clear", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "No saved sessions to clear." in out
+    assert f"Start with: manus-mini run \"你的问题\" --cwd {tmp_path}" in out
+    assert f"List sessions with: manus-mini list --cwd {tmp_path}" in out
