@@ -1644,6 +1644,9 @@
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
   - `list` 展示最近用户消息前必须脱敏并截断预览
   - `list` 遇到损坏会话文件时仍能列出正常会话
+  - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
+  - `tui --help` 展示可覆盖的运行参数，且不输出 `(default: None)` 噪音
+  - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
   - LLM 指数退避和 `Retry-After`
@@ -1761,7 +1764,7 @@ pytest -q
 
 结果：
 
-- `474 passed`
+- `477 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - 分支覆盖率：84.28%（门禁 80%）

@@ -14,38 +14,87 @@ MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="manus-mini")
-    parser.add_argument("--cwd", dest="global_cwd", type=Path, default=Path.cwd())
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--max-steps", type=_positive_cli_int, default=3)
-    parser.add_argument("--max-react", type=_positive_cli_int, default=99)
-    parser.add_argument("--max-reflect", type=_positive_cli_int, default=3)
-    parser.add_argument("--max-tool-retries", type=_positive_cli_int, default=3)
+    parser = argparse.ArgumentParser(
+        prog="manus-mini",
+        description="Self-managed coding agent TUI with resumable sessions, guarded tools, and local project storage.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    _add_runtime_options(parser, include_defaults=True, cwd_dest="global_cwd")
     subparsers = parser.add_subparsers(dest="command")
 
     list_parser = subparsers.add_parser("list", help="list saved sessions")
-    list_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
+    _add_cwd_option(list_parser, dest="subcommand_cwd", default=None)
 
     resume_parser = subparsers.add_parser("resume", help="resume a saved session")
     resume_parser.add_argument("session_id")
-    resume_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
+    _add_cwd_option(resume_parser, dest="subcommand_cwd", default=None)
 
     remove_parser = subparsers.add_parser("remove", help="remove a saved session")
     remove_parser.add_argument("session_id")
-    remove_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
+    _add_cwd_option(remove_parser, dest="subcommand_cwd", default=None)
 
     clear_parser = subparsers.add_parser("clear", help="clear all saved sessions")
-    clear_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
+    _add_cwd_option(clear_parser, dest="subcommand_cwd", default=None)
     clear_parser.add_argument("--force", "-f", action="store_true", help="skip confirmation prompt")
 
-    tui_parser = subparsers.add_parser("tui", help="start the interactive TUI")
-    tui_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
-    tui_parser.add_argument("--dry-run", action="store_true")
-    tui_parser.add_argument("--max-steps", type=_positive_cli_int)
-    tui_parser.add_argument("--max-react", type=_positive_cli_int)
-    tui_parser.add_argument("--max-reflect", type=_positive_cli_int)
-    tui_parser.add_argument("--max-tool-retries", type=_positive_cli_int)
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="start the interactive TUI",
+        description="start the interactive TUI",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    _add_runtime_options(tui_parser, include_defaults=False, cwd_dest="subcommand_cwd")
     return parser
+
+
+def _add_runtime_options(parser: argparse.ArgumentParser, *, include_defaults: bool, cwd_dest: str) -> None:
+    defaults = {
+        "max_steps": 3 if include_defaults else argparse.SUPPRESS,
+        "max_react": 99 if include_defaults else argparse.SUPPRESS,
+        "max_reflect": 3 if include_defaults else argparse.SUPPRESS,
+        "max_tool_retries": 3 if include_defaults else argparse.SUPPRESS,
+    }
+    _add_cwd_option(parser, dest=cwd_dest, default=Path.cwd() if include_defaults else argparse.SUPPRESS)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False if include_defaults else argparse.SUPPRESS,
+        help="preview tool execution without side effects",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=_positive_cli_int,
+        default=defaults["max_steps"],
+        help="engineering loop limit",
+    )
+    parser.add_argument(
+        "--max-react",
+        type=_positive_cli_int,
+        default=defaults["max_react"],
+        help="ReAct iteration limit",
+    )
+    parser.add_argument(
+        "--max-reflect",
+        type=_positive_cli_int,
+        default=defaults["max_reflect"],
+        help="reflection loop limit",
+    )
+    parser.add_argument(
+        "--max-tool-retries",
+        type=_positive_cli_int,
+        default=defaults["max_tool_retries"],
+        help="tool retry limit",
+    )
+
+
+def _add_cwd_option(parser: argparse.ArgumentParser, *, dest: str, default: object) -> None:
+    parser.add_argument(
+        "--cwd",
+        dest=dest,
+        type=Path,
+        default=default,
+        help="working directory used for project storage and tool execution",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

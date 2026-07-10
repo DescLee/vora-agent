@@ -228,6 +228,54 @@ def test_cli_rejects_unknown_subcommand_even_with_global_options(tmp_path: Path)
         main(["--cwd", str(tmp_path), "unknown"])
 
 
+def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--help"])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 0
+    assert "Self-managed coding agent TUI" in out
+    assert "working directory" in out
+    assert "preview tool execution without side effects" in out
+    assert "engineering loop limit" in out
+    assert "ReAct iteration limit" in out
+    assert "reflection loop limit" in out
+    assert "tool retry limit" in out
+    assert "(default: 3)" in out
+    assert "(default: 99)" in out
+
+
+def test_cli_tui_help_describes_options_and_defaults(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["tui", "--help"])
+
+    out = capsys.readouterr().out
+    assert error.value.code == 0
+    assert "start the interactive TUI" in out
+    assert "working directory" in out
+    assert "preview tool execution without side effects" in out
+    assert "engineering loop limit" in out
+    assert "ReAct iteration limit" in out
+    assert "reflection loop limit" in out
+    assert "tool retry limit" in out
+    assert "(default: None)" not in out
+
+
+def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:
+    with pytest.raises(SystemExit) as list_error:
+        main(["list", "--help"])
+    list_out = capsys.readouterr().out
+    assert list_error.value.code == 0
+    assert "working directory" in list_out
+
+    with pytest.raises(SystemExit) as clear_error:
+        main(["clear", "--help"])
+    clear_out = capsys.readouterr().out
+    assert clear_error.value.code == 0
+    assert "working directory" in clear_out
+    assert "skip confirmation prompt" in clear_out
+
+
 @pytest.mark.parametrize(
     ("option", "value"),
     [
