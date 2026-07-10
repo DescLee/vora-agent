@@ -787,6 +787,27 @@
 - `run_temp_script` 执行 `sh -c 'echo nested; head -n 1 .env.test'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
 - 未确认前，shell 输出不得包含密钥内容。
 
+### 40. 输入重定向可绕过敏感文件读取检测
+
+#### 现象
+
+- 敏感读取检测主要看命令参数里的敏感路径。
+- 真实测试中，`python -c "import sys; print(sys.stdin.read())" < .env` 可通过输入重定向读取敏感文件。
+- 嵌套 shell 中同样可以使用 `bash -c 'python ... < .env.test'` 泄露内容。
+- 这类命令的顶层程序不一定是 `cat` / `grep` / `head` 等常见读取命令，导致已有规则不会拦截。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展 quote-aware shell token 分析。
+- 对 `<` / `<>` 后面的路径执行敏感文件判定。
+- 该检测复用嵌套 shell 的递归分析，因此 `bash -c` / `sh -c` 内部输入重定向也会被拦截。
+
+#### 回归点
+
+- `run_bash` 执行 `python -c ... < .env` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_temp_script` 执行 `bash -c 'python -c ... < .env.test'` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- 未确认前，shell 输出不得包含密钥内容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -836,6 +857,7 @@
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
   - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
   - `sh` / `bash` / `zsh -c` 嵌套读取敏感文件时必须先进入确认流
+  - `< .env*` 输入重定向读取敏感文件时必须先进入确认流
   - `python -c` 中 `open()` / `Path.read_text()` 读取敏感文件时必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
@@ -854,9 +876,9 @@ pytest -q
 
 结果：
 
-- `391 passed`
+- `393 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.60%（门禁 80%）
+- 分支覆盖率：83.63%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -881,6 +903,7 @@ pytest -q
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写工作区文件时会先等待确认
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` / `run_temp_script` 通过嵌套 shell 读取敏感文件时会先等待确认
+- `run_bash` / `run_temp_script` 通过输入重定向读取敏感文件时会先等待确认
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
 - `.env.example` 仍可作为安全模板文件写入
