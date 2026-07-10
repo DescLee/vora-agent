@@ -21,6 +21,7 @@ RUN_HELP_EPILOG = "\n".join(
         "Then resume with: manus-mini resume <session_id> --cwd .",
     ]
 )
+MAIN_HELP_EPILOG = "\n".join(["Interactive mode: manus-mini --cwd .", RUN_HELP_EPILOG])
 REMOVE_HELP_EPILOG = "\n".join(
     [
         "This also removes matching log directories.",
@@ -52,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _ManusArgumentParser(
         prog="manus-mini",
         description="Self-managed coding agent runtime with resumable sessions, guarded tools, and local project storage.",
-        epilog=RUN_HELP_EPILOG,
+        epilog=MAIN_HELP_EPILOG,
         formatter_class=_HelpFormatter,
     )
     _add_runtime_options(parser, include_defaults=True, cwd_dest="global_cwd")

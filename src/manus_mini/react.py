@@ -89,6 +89,13 @@ TOOL_SCHEDULER_GOAL_KEYWORDS = ("工具并行", "并行调度", "工具调度", 
 EVAL_GOAL_KEYWORDS = ("eval", "评测", "评估怎么跑")
 ARCHITECTURE_GOAL_KEYWORDS = ("架构怎么讲", "架构", "模块关系", "设计怎么讲")
 PACKAGE_BUILD_GOAL_KEYWORDS = ("打包发布", "怎么打包", "构建包", "发布")
+PROJECT_BOUNDARY_GOAL_KEYWORDS = ("边界和不足", "项目边界", "不足", "局限")
+MANUS_GAP_GOAL_KEYWORDS = ("真正的manus", "真正的 manus", "manus 比", "和manus")
+DEMO_GOAL_KEYWORDS = ("怎么演示", "如何演示", "面试演示", "演示这个项目")
+TOOL_EXTENSION_GOAL_KEYWORDS = ("扩展一个新工具", "新增工具", "加一个工具", "扩展工具")
+PRODUCTION_READINESS_GOAL_KEYWORDS = ("生产化", "生产级", "上线还缺", "还缺什么")
+TROUBLESHOOTING_GOAL_KEYWORDS = ("怎么排障", "如何排障", "出问题", "定位问题")
+SENIORITY_GOAL_KEYWORDS = ("8年经验", "八年经验", "高级工程师", "资深")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
 EXPLICIT_WRITE_INTENT_KEYWORDS = (
     "保存到",
@@ -824,6 +831,41 @@ class ReActLoop:
             return (
                 "打包由 `pyproject.toml` 定义，执行 `python -m build` 会生成 sdist 和 wheel，产物在 `dist/`。"
                 "提交前还要跑 pytest、ruff、mypy、eval 和覆盖率，保证包构建不是唯一门禁。"
+            )
+        if any(keyword in compact_focus for keyword in PROJECT_BOUNDARY_GOAL_KEYWORDS):
+            return (
+                "当前边界要讲清：这是本地单用户、非生产级 Agent Runtime；命令执行不是容器沙箱，"
+                "memory 还是 SQLite + 关键词检索而非向量检索，LLM 也还没有 streaming、多 provider 和完整云端权限体系。"
+            )
+        if any(keyword in compact_focus for keyword in MANUS_GAP_GOAL_KEYWORDS):
+            return (
+                "它不是完整 Manus。差距主要在浏览器自动化、远程沙箱、多租户账号体系、任务市场、"
+                "长周期任务编排和云端可观测平台；本项目聚焦本地 Agent Runtime 的工程骨架。"
+            )
+        if any(keyword in compact_focus for keyword in DEMO_GOAL_KEYWORDS):
+            return (
+                "面试演示建议走三段：先做项目分析展示规划和工具读取，再做一次写入确认展示安全边界，"
+                "最后讲 Reflection/pytest gate 和会话恢复，说明它不是一次 LLM 调用。"
+            )
+        if any(keyword in compact_focus for keyword in TOOL_EXTENSION_GOAL_KEYWORDS):
+            return (
+                "扩展新工具通常是新增工具类、定义 `ToolSpec`、返回 `ToolResult`，再注册到 `ToolRegistry`。"
+                "同时补工具单测、调度/风险测试，必要时更新 prompt 或 eval。"
+            )
+        if any(keyword in compact_focus for keyword in PRODUCTION_READINESS_GOAL_KEYWORDS):
+            return (
+                "生产化还缺多租户、容器隔离、权限审计、集中可观测性、配额和成本控制、"
+                "更严格的密钥托管、任务队列以及真实用户级 SLA。"
+            )
+        if any(keyword in compact_focus for keyword in TROUBLESHOOTING_GOAL_KEYWORDS):
+            return (
+                "排障先拿 `session_id`，再看对应 `logs`、会话 JSON、`trace_events` 和 summary。"
+                "通常按 LLM 请求、tool call、工具返回、Reflection 决策、最终报告这条链路定位。"
+            )
+        if any(keyword in compact_focus for keyword in SENIORITY_GOAL_KEYWORDS):
+            return (
+                "它体现的不是页面复杂度，而是工程边界：有安全边界、可观测日志、会话恢复、上下文压缩、"
+                "工具调度、Reflection 质量门禁和测试/eval 门禁，这些是资深工程师会主动补齐的系统能力。"
             )
         if _goal_mentions_current_project(compact_focus) and any(
             keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS

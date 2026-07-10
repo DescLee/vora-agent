@@ -111,8 +111,12 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
 
     assert "Manus Mini TUI" in welcome
     assert "直接输入任务开始连续对话" in welcome
+    assert "默认 TUI 入口：manus-mini --cwd ." in welcome
     assert "一次性任务：manus-mini run" in welcome
+    assert "查看历史会话：manus-mini list --cwd ." in welcome
     assert "恢复会话：manus-mini resume <session_id>" in welcome
+    assert "写入文件前会展示 diff 并等待确认" in welcome
+    assert "~/.manus-mini/projects/<project_key>" in welcome
     assert "当前模型：deepseek-v4-flash" in welcome
     assert f"配置来源：{env_path}" in welcome
     assert "运行限制" in welcome

@@ -354,6 +354,7 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert "ReAct iteration limit" in out
     assert "reflection loop limit" in out
     assert "tool retry limit" in out
+    assert "Interactive mode: manus-mini --cwd ." in out
     assert 'Example: manus-mini run "总结一下当前项目" --cwd .' in out
     assert "Then resume with: manus-mini resume <session_id> --cwd ." in out
     assert "(default: 3)" in out
