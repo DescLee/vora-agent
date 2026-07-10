@@ -9,7 +9,7 @@ from evals.run_evals import load_cases, main
 def test_declared_eval_cases_have_unique_runners() -> None:
     cases = load_cases()
 
-    assert len(cases) == 9
+    assert len(cases) == 12
     assert len({case.case_id for case in cases}) == len(cases)
 
 
@@ -30,6 +30,7 @@ def test_eval_runner_writes_machine_and_human_reports(tmp_path: Path) -> None:
     assert exit_code == 0
     assert payload["failed"] == 0
     assert "Manus Mini Eval 报告" in markdown_report.read_text(encoding="utf-8")
+    assert "分类统计" in markdown_report.read_text(encoding="utf-8")
 
 
 def test_eval_case_file_rejects_unknown_runner(tmp_path: Path) -> None:

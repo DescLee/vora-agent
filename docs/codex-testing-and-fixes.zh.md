@@ -626,7 +626,7 @@
 - 新增 `evals/cases.zh.json`，统一声明用例 ID、类别和中文目标。
 - runner 校验重复 ID、缺失 runner 和未声明 runner，避免声明与实现漂移。
 - 支持 `--json-report` 和 `--markdown-report`。
-- 安全 eval 增加写入确认和危险命令拒绝，当前共 9 个产品约束用例。
+- 安全 eval 增加写入确认和危险命令拒绝，当前共 12 个产品约束用例。
 
 #### 回归点
 
@@ -645,7 +645,7 @@
 
 - 提取 `AgentErrorCode`、`MemoryScope`、`MemoryKind` 类型别名。
 - 修正 Runtime、MemoryManager、Context 和 ToolRegistry 的类型声明。
-- 将 mypy 纳入 CI，当前 29 个源码文件检查通过。
+- 将 mypy 纳入 CI，当前 30 个源码文件检查通过。
 
 #### 回归点
 
@@ -2110,11 +2110,11 @@ pytest -q
 
 结果：
 
-- `481 passed`
+- `545 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - 分支覆盖率：84.27%（门禁 80%）
-- Agent eval：9/9 通过
+- Agent eval：12/12 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
 
@@ -2146,6 +2146,7 @@ pytest -q
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
 - `.env.example` 仍可作为安全模板文件写入
+- `evals/run_evals.py` 新增 3 个核心回归 case，覆盖报告默认不落文件、待确认状态隔离和 `Path.write_bytes` 代码门禁
 - `list_files` 不会列出 `.env*`、`*.pem`、`*.key` 等敏感文件
 - `read_file` 直接读取敏感配置或密钥文件时会返回 `PROTECTED_PATH`
 - `run_bash` / `run_temp_script` 常见读取命令读取敏感文件时会先等待确认

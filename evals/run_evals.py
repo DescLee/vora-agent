@@ -19,9 +19,11 @@ if SRC.as_posix() not in sys.path:
 from manus_mini.context import validate_tool_call_pairs
 from manus_mini.llm import LLMResult
 from manus_mini.memory import MemoryManager
-from manus_mini.models import Message, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
+from manus_mini.models import Message, PendingConfirmation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
+from manus_mini.react import ReActLoop
 from manus_mini.reflection import ReflectionLoop
 from manus_mini.scheduler import ToolScheduler
+from manus_mini.session import SessionManager
 from manus_mini.tools.file_tools import ReadFileTool, WriteFileTool
 from manus_mini.tools.registry import ToolRegistry
 from manus_mini.tools.shell_tools import RunBashTool
@@ -174,6 +176,62 @@ def eval_dangerous_command_is_rejected() -> None:
         assert result.error_code == "COMMAND_REJECTED"
 
 
+def eval_report_write_requires_explicit_file_request() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        task = TaskState.create(goal="请给我一份 AI Agent 框架行研摘要", cwd=cwd)
+        call = ToolCall(
+            id="call-report",
+            name="run_bash",
+            args={"command": "printf 'draft' > docs/report.md"},
+        )
+
+        result = ReActLoop()._report_write_precondition_error(call, task)
+
+        assert result is not None
+        assert result.error_code == "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST"
+        assert result.data["path"] == "docs/report.md"
+
+
+def eval_pending_confirmation_blocks_unrelated_messages() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        manager = SessionManager(cwd)
+        manager.current.pending_confirmation = PendingConfirmation(
+            tool_name="write_file",
+            tool_call_id="call-write",
+            tool_args={"path": "note.md"},
+            summary="write note.md",
+            prompt="confirm write",
+        )
+
+        session = manager.handle_user_message("再问一个问题")
+
+        assert session.pending_confirmation is not None
+        assert session.pending_confirmation.tool_call_id == "call-write"
+        assert session.active_task is None
+        assert any(message.role == "system" for message in session.messages)
+
+
+def eval_shell_pathlib_write_bytes_requires_test_first() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        task = TaskState.create(goal="修改代码修复 bug", cwd=cwd)
+        call = ToolCall(
+            id="call-shell",
+            name="run_bash",
+            args={
+                "command": "python -c \"from pathlib import Path; Path('app.py').write_bytes(b'new\\n')\"",
+            },
+        )
+
+        result = ReActLoop()._code_change_precondition_error(call, task, SessionState.create(cwd=cwd))
+
+        assert result is not None
+        assert result.error_code == "CODE_CHANGE_REQUIRES_TEST_FIRST"
+        assert result.data["path"] == "app.py"
+
+
 CASE_RUNNERS: dict[str, Callable[[], None]] = {
     "reflection_rejects_unvalidated_code": eval_reflection_rejects_unvalidated_code,
     "reflection_accepts_validated_code": eval_reflection_accepts_validated_code,
@@ -184,6 +242,9 @@ CASE_RUNNERS: dict[str, Callable[[], None]] = {
     "path_escape_is_rejected": eval_path_escape_is_rejected,
     "write_requires_confirmation": eval_write_requires_confirmation,
     "dangerous_command_is_rejected": eval_dangerous_command_is_rejected,
+    "report_write_requires_explicit_file_request": eval_report_write_requires_explicit_file_request,
+    "pending_confirmation_blocks_unrelated_messages": eval_pending_confirmation_blocks_unrelated_messages,
+    "shell_pathlib_write_bytes_requires_test_first": eval_shell_pathlib_write_bytes_requires_test_first,
 }
 
 
@@ -216,6 +277,10 @@ def load_cases(path: Path = ROOT / "evals" / "cases.zh.json") -> list[EvalCase]:
 
 
 def _markdown_report(report: dict[str, Any]) -> str:
+    category_counts: dict[str, dict[str, int]] = {}
+    for result in report["results"]:
+        bucket = category_counts.setdefault(result["category"], {"passed": 0, "failed": 0})
+        bucket["passed" if result["ok"] else "failed"] += 1
     lines = [
         "# Manus Mini Eval 报告",
         "",
@@ -223,9 +288,21 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- 通过：{report['passed']}",
         f"- 失败：{report['failed']}",
         "",
+        "## 分类统计",
+        "",
+        "| 类别 | 通过 | 失败 |",
+        "|---|---:|---:|",
+    ]
+    for category in sorted(category_counts):
+        counts = category_counts[category]
+        lines.append(f"| {category} | {counts['passed']} | {counts['failed']} |")
+    lines.extend([
+        "",
+        "## 用例明细",
+        "",
         "| 用例 | 类别 | 结果 | 目标 |",
         "|---|---|---:|---|",
-    ]
+    ])
     for result in report["results"]:
         status = "通过" if result["ok"] else f"失败：{result['error']}"
         lines.append(f"| `{result['id']}` | {result['category']} | {status} | {result['target']} |")

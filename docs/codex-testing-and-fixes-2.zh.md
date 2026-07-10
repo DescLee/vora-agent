@@ -133,12 +133,12 @@
 #### 修复
 
 - 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加 eval 类直接规则兜底。
-- 回答说明 `python evals/run_evals.py` 当前覆盖 9 个关键约束，包括 Reflection、tool exchange、并行调度、写入确认和安全边界。
+- 回答说明 `python evals/run_evals.py` 当前覆盖 12 个关键约束，包括 Reflection、tool exchange、并行调度、写入确认和安全边界。
 
 #### 回归点
 
 - 模型不可用时，eval 追问不得展示 `兜底原因`。
-- 回答必须包含 eval 命令、9 个约束、Reflection 和安全边界。
+- 回答必须包含 eval 命令、12 个约束、Reflection 和安全边界。
 
 ### 109. 架构讲法追问在 LLM 不可用时缺少主链路说明
 
@@ -739,6 +739,26 @@
 - 模型不可用时，目标漂移追问不得展示 `兜底原因`。
 - 回答必须包含 session、`active_task`、Planner 和 Reflection。
 
+### 144. 评测体系缺少面试里最容易被追问的工程边界回归
+
+#### 现象
+
+- 现有 `evals/run_evals.py` 只覆盖 9 个基础约束，缺少报告默认不落文件、待确认状态隔离和 `Path.write_bytes` 代码门禁这类高频追问的回归。
+- 这会让 eval 报告更像基础单测汇总，而不是可直接展示的工程约束回归集。
+
+#### 修复
+
+- 在 [evals/cases.zh.json](/Users/liyong/Desktop/ai-manus/evals/cases.zh.json) 中新增 3 个 eval case，分别覆盖：
+  - 报告类请求默认不能通过 shell 旁路落文件
+  - 待确认写入期间，普通消息不能开启新任务
+  - shell 里的 `Path.write_bytes` 生产代码写入必须先有测试证据
+- 在 [evals/run_evals.py](/Users/liyong/Desktop/ai-manus/evals/run_evals.py) 中补充分类统计，方便面试时直接展示 eval 结构。
+
+#### 回归点
+
+- `python evals/run_evals.py` 必须返回 12/12 通过。
+- markdown 报告中应同时展示用例明细和分类统计。
+
 ## 本轮新增/调整测试
 
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
@@ -748,6 +768,9 @@
   - 增加 `test_runtime_fallback_answers_interview_defense_questions`，覆盖核心难点、可观测性、LangChain 取舍、上下文窗口、测试质量、工具失败、幻觉控制和下一版迭代八类面试答辩追问。
   - 增加 `test_runtime_fallback_answers_interview_reliability_questions`，覆盖并发状态、配置环境、损坏 session、数据隔离、命令超时、敏感信息、LLM 空结果和错误分级八类可靠性追问。
   - 增加 `test_runtime_fallback_answers_interview_operational_controls_questions`，覆盖任务取消、日志隐私、工具参数、工具权限、审计追踪、重复读取、长输出落盘和目标漂移八类运行控制追问。
+- [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
+  - 更新 `test_declared_eval_cases_have_unique_runners`，确认 eval case 总数扩展到 12 个。
+  - 更新 `test_eval_runner_writes_machine_and_human_reports`，确认 markdown 报告新增分类统计。
 - [tests/test_package.py](/Users/liyong/Desktop/ai-manus/tests/test_package.py)
   - 增加 `test_readme_positions_project_as_agent_runtime_not_interview_project`，确认 README 把项目定位为本地 Agent Runtime，而不是面试项目。
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
@@ -774,6 +797,6 @@ python -m build
 - `pytest -q`：545 passed
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- `python evals/run_evals.py`：9/9 通过
+- `python evals/run_evals.py`：12/12 通过
 - `pytest --cov=manus_mini --cov-report=term-missing`：85.17%（门禁 80%）
 - `python -m build`：沙箱内因 DNS/PyPI 访问失败，使用外部权限重跑后通过，生成 sdist 和 wheel

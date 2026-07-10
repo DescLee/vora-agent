@@ -43,5 +43,20 @@
     "id": "dangerous_command_is_rejected",
     "category": "security",
     "target": "明确危险的系统命令必须被本地规则拒绝"
+  },
+  {
+    "id": "report_write_requires_explicit_file_request",
+    "category": "reporting",
+    "target": "普通行研摘要默认不能通过 shell 旁路落文件"
+  },
+  {
+    "id": "pending_confirmation_blocks_unrelated_messages",
+    "category": "session",
+    "target": "待确认写入期间，普通消息不能开启新任务"
+  },
+  {
+    "id": "shell_pathlib_write_bytes_requires_test_first",
+    "category": "security",
+    "target": "shell 里的 Path.write_bytes 生产代码写入必须先有测试证据"
   }
 ]
