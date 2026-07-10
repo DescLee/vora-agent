@@ -77,7 +77,7 @@ def migrate_legacy_project_storage(cwd: Path) -> list[Path]:
     if legacy_sessions_dir.exists():
         target_sessions_dir = project_sessions_dir(cwd)
         for source in legacy_sessions_dir.glob("*.json"):
-            if not source.is_file():
+            if source.is_symlink() or not source.is_file():
                 continue
             target = target_sessions_dir / source.name
             if target.exists():
@@ -94,6 +94,11 @@ def migrate_legacy_project_storage(cwd: Path) -> list[Path]:
         copied.append(target_memory)
 
     return copied
+
+
+def _ensure_real_log_dir(path: Path) -> None:
+    if path.is_symlink():
+        raise OSError(f"log session directory is a symlink: {path}")
 
 
 class EventLogger:
@@ -117,6 +122,7 @@ class EventLogger:
         self._last_node_ids[(session_id, run_id)] = node_id
         if not self.enabled:
             return node_path
+        _ensure_real_log_dir(session_dir)
         session_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(UTC).isoformat()
         compacted_event = redact_sensitive_value(compact_event(event))
@@ -148,6 +154,7 @@ class EventLogger:
         path = session_dir / self.summary_filename
         if not self.enabled:
             return path
+        _ensure_real_log_dir(session_dir)
         session_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "ts": datetime.now(UTC).isoformat(),

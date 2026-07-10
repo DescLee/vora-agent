@@ -14,7 +14,7 @@ MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="manus-mini")
-    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--cwd", dest="global_cwd", type=Path, default=Path.cwd())
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-steps", type=int, default=3)
     parser.add_argument("--max-react", type=int, default=99)
@@ -23,22 +23,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     list_parser = subparsers.add_parser("list", help="list saved sessions")
-    list_parser.add_argument("--cwd", type=Path)
+    list_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
 
     resume_parser = subparsers.add_parser("resume", help="resume a saved session")
     resume_parser.add_argument("session_id")
-    resume_parser.add_argument("--cwd", type=Path)
+    resume_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
 
     remove_parser = subparsers.add_parser("remove", help="remove a saved session")
     remove_parser.add_argument("session_id")
-    remove_parser.add_argument("--cwd", type=Path)
+    remove_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
 
     clear_parser = subparsers.add_parser("clear", help="clear all saved sessions")
-    clear_parser.add_argument("--cwd", type=Path)
+    clear_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
     clear_parser.add_argument("--force", "-f", action="store_true", help="skip confirmation prompt")
 
     tui_parser = subparsers.add_parser("tui", help="start the interactive TUI")
-    tui_parser.add_argument("--cwd", type=Path)
+    tui_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
     tui_parser.add_argument("--dry-run", action="store_true")
     tui_parser.add_argument("--max-steps", type=int)
     tui_parser.add_argument("--max-react", type=int)
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    cwd = args.cwd or Path.cwd()
+    cwd = getattr(args, "subcommand_cwd", None) or args.global_cwd or Path.cwd()
     dry_run = bool(args.dry_run) if getattr(args, "dry_run", None) is not None else False
     max_steps = int(args.max_steps) if getattr(args, "max_steps", None) is not None else 3
     max_react = int(args.max_react) if getattr(args, "max_react", None) is not None else 99

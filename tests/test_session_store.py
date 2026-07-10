@@ -3,7 +3,7 @@ from pathlib import Path
 
 from manus_mini.models import Message, SessionState, TaskState
 from manus_mini.logging import project_logs_dir, project_memory_path, project_sessions_dir
-from manus_mini.session_store import SessionStore
+from manus_mini.session_store import CorruptSessionError, SessionStore
 
 
 def test_session_store_saves_loads_and_lists_sessions(monkeypatch, tmp_path: Path) -> None:
@@ -129,6 +129,55 @@ def test_session_store_rejects_path_traversal_session_id(monkeypatch, tmp_path: 
             raise AssertionError("expected ValueError")
 
 
+def test_session_store_load_rejects_symlinked_session_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    outside = tmp_path / "outside-session.json"
+    outside.write_text(session.model_dump_json(indent=2), encoding="utf-8")
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "session-link.json").symlink_to(outside)
+
+    try:
+        store.load("session-link")
+    except CorruptSessionError as error:
+        assert "symlink" in str(error)
+    else:
+        raise AssertionError("expected CorruptSessionError")
+
+
+def test_session_store_save_refuses_existing_symlinked_session_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.session_id = "session-link"
+    outside = tmp_path / "outside-session.json"
+    outside.write_text("outside", encoding="utf-8")
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "session-link.json").symlink_to(outside)
+
+    try:
+        store.save(session)
+    except CorruptSessionError as error:
+        assert "symlink" in str(error)
+    else:
+        raise AssertionError("expected CorruptSessionError")
+
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_session_store_delete_removes_broken_symlinked_session_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    broken_link = store.sessions_dir / "session-broken.json"
+    broken_link.symlink_to(tmp_path / "missing-session.json")
+
+    assert store.delete("session-broken") is True
+    assert not broken_link.exists()
+    assert not broken_link.is_symlink()
+
+
 def test_session_store_log_cleanup_cannot_escape_logs_dir(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
@@ -182,6 +231,22 @@ def test_session_store_clear_logs_does_not_follow_symlinked_log_dirs(monkeypatch
     assert not (logs_dir / "session-link").exists()
 
 
+def test_session_store_deletes_broken_symlink_for_single_log_cleanup(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    session_id = "session-broken-link"
+    logs_dir = project_logs_dir(tmp_path)
+    logs_dir.mkdir(parents=True)
+    broken_link = logs_dir / session_id
+    broken_link.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    store = SessionStore(tmp_path)
+
+    assert store.delete_logs_for_session(session_id) == 1
+    assert not broken_link.exists()
+    assert not broken_link.is_symlink()
+
+
 def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     legacy_session = SessionState.create(cwd=tmp_path)
@@ -198,6 +263,19 @@ def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path:
     migrated_session = project_sessions_dir(tmp_path) / f"{legacy_session.session_id}.json"
     assert migrated_session.exists()
     assert project_memory_path(tmp_path).read_bytes() == b"legacy-memory"
+
+
+def test_session_store_migration_skips_legacy_symlinked_session_files(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    legacy_sessions_dir = tmp_path / ".manus-mini" / "sessions"
+    legacy_sessions_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-session.json"
+    outside.write_text(SessionState.create(cwd=tmp_path).model_dump_json(indent=2), encoding="utf-8")
+    (legacy_sessions_dir / "session-link.json").symlink_to(outside)
+
+    SessionStore(tmp_path)
+
+    assert not (project_sessions_dir(tmp_path) / "session-link.json").exists()
 
 
 def test_session_store_migration_does_not_overwrite_existing_project_data(monkeypatch, tmp_path: Path) -> None:

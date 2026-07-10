@@ -54,6 +54,8 @@ class SessionStore:
     def save(self, session: SessionState) -> Path:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         path = self._path_for(session.session_id)
+        if path.is_symlink():
+            raise CorruptSessionError(f"session path is a symlink: {session.session_id}")
         path.write_text(
             session.model_dump_json(indent=2),
             encoding="utf-8",
@@ -62,6 +64,8 @@ class SessionStore:
 
     def load(self, session_id: str) -> SessionState:
         path = self._path_for(session_id)
+        if path.is_symlink():
+            raise CorruptSessionError(f"session path is a symlink: {session_id}")
         if not path.exists():
             raise FileNotFoundError(f"session not found: {session_id}")
         try:
@@ -92,6 +96,9 @@ class SessionStore:
         Returns True if the session was found and deleted, False otherwise.
         """
         path = self._path_for(session_id)
+        if path.is_symlink():
+            path.unlink()
+            return True
         if not path.exists():
             return False
         path.unlink()
@@ -129,7 +136,7 @@ class SessionStore:
         """
         validate_session_id(session_id)
         log_dir = self._logs_dir() / session_id
-        if not log_dir.exists():
+        if not log_dir.exists() and not log_dir.is_symlink():
             return 0
         return _remove_log_entry(log_dir)
 
@@ -154,6 +161,8 @@ class SessionStore:
         return self.clear_all_logs()
 
     def _summary(self, path: Path) -> SessionSummary:
+        if path.is_symlink():
+            raise CorruptSessionError(f"session path is a symlink: {path.stem}")
         data = json.loads(path.read_text(encoding="utf-8"))
         session = SessionState.model_validate(migrate_session_data(data))
         last_user_message = ""

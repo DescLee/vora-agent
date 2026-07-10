@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,12 @@ def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, caps
     out = capsys.readouterr().out
     assert session.session_id in out
     assert "上一轮问题" in out
+
+
+def test_package_exposes_python_module_entrypoint() -> None:
+    module = importlib.import_module("manus_mini.__main__")
+
+    assert module.main is main
 
 
 def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -156,6 +163,22 @@ def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, 
 
     assert seen["cwd"] == tmp_path
     assert seen["max_react_iterations"] == 99
+
+
+def test_cli_subcommands_preserve_global_cwd_before_command(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    project = tmp_path / "project"
+    project.mkdir()
+    store = SessionStore(project)
+    session = SessionState.create(cwd=project)
+    session.messages.append(Message.user("来自全局 cwd"))
+    store.save(session)
+
+    main(["--cwd", str(project), "list"])
+
+    out = capsys.readouterr().out
+    assert session.session_id in out
+    assert "来自全局 cwd" in out
 
 
 def test_cli_rejects_unknown_subcommand_even_with_global_options(tmp_path: Path) -> None:

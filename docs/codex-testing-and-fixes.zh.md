@@ -1247,10 +1247,151 @@
 - symlink 本身应从日志目录移除，避免重复污染后续清理。
 - 真实日志目录仍应正常删除。
 
+### 63. 单个会话日志清理会遗留断开的符号链接
+
+#### 现象
+
+- `SessionStore.delete_logs_for_session()` 先用 `Path.exists()` 判断日志入口是否存在。
+- 断开的 symlink 在 `exists()` 下返回 false，即使入口本身仍在日志目录中，也会被直接跳过。
+- 结果是单个会话清理返回 0 且遗留可疑日志入口，后续排查和清理语义不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中调整单个日志入口存在性判断。
+- 对“目标不存在但入口本身是 symlink”的情况继续进入 `_remove_log_entry()`，只删除链接本身。
+- 非 symlink 的缺失路径仍返回 0，保持原有幂等行为。
+
+#### 回归点
+
+- `delete_logs_for_session()` 遇到断开的 symlink 时应返回 1。
+- 断开的 symlink 本身应被删除。
+- 缺失的普通日志目录仍应返回 0。
+
+### 64. `python -m manus_mini` 入口不可用
+
+#### 现象
+
+- 实际执行 `python -m manus_mini --help` 时，Python 报 `No module named manus_mini.__main__`。
+- 对开发、调试和未安装 console script 的场景不友好。
+
+#### 修复
+
+- 新增 [src/manus_mini/__main__.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/__main__.py)，复用 `manus_mini.cli:main`。
+- 保持 `manus-mini` console script 和 `python -m manus_mini` 使用同一 CLI 入口。
+
+#### 回归点
+
+- 包必须暴露 `manus_mini.__main__`。
+- `__main__.main` 必须指向现有 CLI `main`。
+
+### 65. 子命令会覆盖命令前的全局 `--cwd`
+
+#### 现象
+
+- 实际使用 `manus-mini --cwd <project> list` 时，子命令 parser 的 `cwd=None` 会覆盖全局 `--cwd`。
+- 结果会列出当前目录的会话，而不是用户指定项目的会话。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中将全局 `--cwd` 与子命令 `--cwd` 使用不同 `dest`。
+- 主流程按 `subcommand_cwd or global_cwd or Path.cwd()` 解析工作目录。
+
+#### 回归点
+
+- `manus-mini --cwd <project> list` 必须读取 `<project>` 的会话。
+- 原有 `manus-mini list --cwd <project>` 仍保持兼容。
+
+### 66. 会话读取会跟随 symlink 读取外部 JSON
+
+#### 现象
+
+- `SessionStore.load()` 只校验 `session_id`，随后直接读取 sessions 目录下的 JSON 文件。
+- 如果会话文件是 symlink，运行时会跟随链接读取外部文件，破坏会话存储边界。
+
+#### 修复
+
+- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中拒绝读取 symlink 会话文件。
+- `list_sessions()` 复用 summary 解析时也跳过 symlink 会话文件。
+
+#### 回归点
+
+- `load()` 遇到 symlink 会话文件必须报损坏会话错误。
+- 会话列表不得因为 symlink 指向外部 JSON 而展示外部内容。
+
+### 67. 会话保存会覆盖 symlink 指向的外部文件
+
+#### 现象
+
+- `SessionStore.save()` 直接对目标路径 `write_text()`。
+- 如果 sessions 目录中已有同名 symlink，会写入链接目标，可能覆盖工作区外文件。
+
+#### 修复
+
+- 保存前检查目标会话路径是否为 symlink。
+- 命中 symlink 时拒绝保存并报告损坏会话路径，不写入外部目标。
+
+#### 回归点
+
+- 保存同名 symlink 会话文件时必须失败。
+- symlink 指向的外部文件内容不得被修改。
+
+### 68. 删除断开的会话 symlink 会误报不存在并遗留入口
+
+#### 现象
+
+- `SessionStore.delete()` 先用 `Path.exists()` 判断会话文件。
+- 断开的 symlink 在 `exists()` 下返回 false，导致 `remove` 误报不存在并留下 sessions 目录污染。
+
+#### 修复
+
+- 删除会话时先识别 symlink。
+- symlink 会话入口只删除链接本身，返回已删除；普通缺失路径仍返回未找到。
+
+#### 回归点
+
+- 删除断开的会话 symlink 必须返回成功。
+- 链接本身必须从 sessions 目录移除。
+
+### 69. 旧项目存储迁移会复制 symlink 指向的外部会话文件
+
+#### 现象
+
+- legacy `.manus-mini/sessions/*.json` 迁移使用 `is_file()` 判断源文件。
+- `Path.is_file()` 会跟随 symlink，导致迁移把外部 JSON 内容复制进当前项目会话存储。
+
+#### 修复
+
+- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 的 legacy 迁移中显式跳过 symlink。
+- 只迁移真实 legacy 会话 JSON 文件。
+
+#### 回归点
+
+- legacy sessions 目录中的 symlink JSON 不得被迁移。
+- 真实 legacy 会话文件仍应正常迁移。
+
+### 70. 事件日志写入会跟随 symlink 日志目录
+
+#### 现象
+
+- `EventLogger.record()` 和 `record_summary()` 会对 `logs/<session_id>` 执行 `mkdir()` 后写入日志文件。
+- 如果该 session 日志目录是 symlink，会把事件日志写到外部目录。
+
+#### 修复
+
+- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中增加日志目录 symlink 检查。
+- 写入 node/pipeline/summary 前先拒绝 symlink 日志目录。
+
+#### 回归点
+
+- symlink 日志目录下不得写入 `node.jsonl`。
+- symlink 日志目录下不得写入 `summary.jsonl`。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
+  - `python -m manus_mini` 复用 CLI 入口
   - 顶层 `--cwd` 兼容
+  - 子命令保留命令前的全局 `--cwd`
   - 旧写法子命令参数兼容
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
@@ -1266,6 +1407,7 @@
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
   - 事件日志和 summary 日志必须拒绝非法 `session_id` 路径穿越
+  - 事件日志和 summary 日志不得写入 symlink 日志目录
 - [tests/test_memory.py](/Users/liyong/Desktop/ai-manus/tests/test_memory.py)
   - 长期记忆 content 中的敏感值不得写入
   - 长期记忆 tags 和 source_message_ids 中的敏感值不得写入
@@ -1279,8 +1421,13 @@
   - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
 - [tests/test_session_store.py](/Users/liyong/Desktop/ai-manus/tests/test_session_store.py)
   - `session_id` 不得包含路径穿越片段
+  - 读取会话时拒绝 symlink 会话文件
+  - 保存会话时拒绝覆盖 symlink 指向的外部文件
+  - 删除会话时会移除断开的 symlink 会话入口
   - 日志清理不得通过非法 `session_id` 越过 logs 目录
   - 批量日志清理不得跟随 symlink 删除外部目录
+  - 单个会话日志清理会删除断开的 symlink 本身
+  - legacy 会话迁移会跳过 symlink JSON 文件
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - 文件工具越界路径必须返回 `PATH_OUT_OF_WORKSPACE`，不得直接抛异常
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
@@ -1346,12 +1493,13 @@ pytest -q
 
 结果：
 
-- `427 passed`
+- `435 passed`
 - `ruff check src tests evals`：通过
-- `mypy`：29 个源码文件无错误
-- 分支覆盖率：84.11%（门禁 80%）
+- `mypy`：30 个源码文件无错误
+- 分支覆盖率：84.13%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
+- `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 

@@ -133,6 +133,23 @@ def test_event_logger_rejects_session_id_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "outside").exists()
 
 
+def test_event_logger_refuses_symlinked_session_log_dir(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    outside_dir = tmp_path / "outside-logs"
+    outside_dir.mkdir()
+    (logs_dir / "session-1").symlink_to(outside_dir, target_is_directory=True)
+    logger = EventLogger(logs_dir, enabled=True)
+
+    with pytest.raises(OSError, match="symlink"):
+        logger.record("session-1", "run-1", {"type": "context_budget"})
+    with pytest.raises(OSError, match="symlink"):
+        logger.record_summary("session-1", "run-1", "input", "result", "done")
+
+    assert not (outside_dir / "node.jsonl").exists()
+    assert not (outside_dir / "summary.jsonl").exists()
+
+
 def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
     logger = EventLogger(tmp_path / "logs")
     path = logger.record("session-1", "run-1", {"type": "context_budget", "estimated_tokens": 10})
