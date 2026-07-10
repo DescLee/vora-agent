@@ -1130,6 +1130,26 @@
 - tags 中包含 `CLIENT_SECRET` 时不得写入长期记忆。
 - source_message_ids 中包含 `GH_TOKEN` 时不得写入长期记忆。
 
+### 57. 结构化敏感字段值未按字段名脱敏
+
+#### 现象
+
+- `redact_sensitive_value()` 递归处理 dict 时只检查 value 字符串本身。
+- 真实日志和工具参数常见结构是 `{"api_key": "plain-secret-value"}` 或 `{"CLIENT_SECRET": "..."}`。
+- 这类 value 没有 `api_key=...` 前缀时，原始密钥会绕过统一脱敏层，继续进入日志、确认预览或导出数据。
+
+#### 修复
+
+- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中增加敏感字段名识别。
+- 对 `api_key`、`access_token`、`refresh_token`、`password`、`secret` 以及 `_token`、`_secret` 等组合式字段名的值直接替换为 `[REDACTED]`。
+- 保留 `token_count` 等非敏感统计字段，避免过度脱敏影响排障。
+
+#### 回归点
+
+- `{"api_key": "plain-secret-value"}` 必须按字段名脱敏。
+- 嵌套的 `CLIENT_SECRET` 字段必须按字段名脱敏。
+- `token_count` 等统计字段不得被误脱敏。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1152,6 +1172,7 @@
   - `Authorization: Bearer ...` 必须脱敏 token 值
   - URL query 中的 `access_token` 必须脱敏参数值
   - 常见环境变量式凭证名必须脱敏值
+  - 结构化 payload 中敏感字段名对应的值必须脱敏
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
   - `/save-context` 导出的 `session.json` 和 `context.md` 必须脱敏敏感内容
@@ -1223,7 +1244,7 @@ pytest -q
 
 结果：
 
-- `421 passed`
+- `422 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.91%（门禁 80%）
@@ -1278,6 +1299,7 @@ pytest -q
 - 工具 preview summary/args 不会展示 URL query secret 或 shell 命令中的敏感值
 - Shell LLM 风险判定请求不会发送命令里的原始敏感值
 - 长期记忆安全入口不会通过 tags/source_message_ids 落盘敏感值
+- 结构化 payload 中 `api_key` / `CLIENT_SECRET` 字段值会脱敏，`token_count` 不会被误脱敏
 
 ## 后续建议
 

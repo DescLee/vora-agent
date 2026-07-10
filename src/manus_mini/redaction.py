@@ -31,7 +31,10 @@ def redact_sensitive_value(value: Any) -> Any:
     if isinstance(value, str):
         return redact_sensitive_text(value)
     if isinstance(value, dict):
-        return {key: redact_sensitive_value(item) for key, item in value.items()}
+        return {
+            key: _redact_sensitive_key_value(item) if _is_sensitive_key(str(key)) else redact_sensitive_value(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [redact_sensitive_value(item) for item in value]
     return value
@@ -49,3 +52,28 @@ def _redact_match(match: re.Match[str]) -> str:
         key = match.group(1)
         return f"{key}=[REDACTED]"
     return "[REDACTED]"
+
+
+def _redact_sensitive_key_value(value: Any) -> Any:
+    if isinstance(value, str):
+        redacted = redact_sensitive_text(value)
+        return redacted if redacted != value else "[REDACTED]"
+    return "[REDACTED]"
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    sensitive_keys = {
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "token",
+        "password",
+        "secret",
+    }
+    return (
+        normalized in sensitive_keys
+        or normalized.endswith(("_api_key", "_token", "_password", "_secret"))
+        or "secret_access_key" in normalized
+    )
