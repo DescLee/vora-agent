@@ -92,12 +92,32 @@ def test_event_logger_redacts_sensitive_values(tmp_path: Path) -> None:
     raw = path.read_text(encoding="utf-8")
     row = json.loads(raw.strip())
 
-    assert "sk-live-secret" in raw
-    assert "abc123" in raw
-    assert "secret-token" in raw
-    assert row["message"] == "LLM_API_KEY=sk-live-secret"
-    assert row["nested"]["password"] == "password=abc123"
-    assert row["nested"]["items"][0] == "token=secret-token"
+    assert "sk-live-secret" not in raw
+    assert "abc123" not in raw
+    assert "secret-token" not in raw
+    assert row["message"] == "LLM_API_KEY=[REDACTED]"
+    assert row["nested"]["password"] == "password=[REDACTED]"
+    assert row["nested"]["items"][0] == "token=[REDACTED]"
+
+
+def test_event_logger_redacts_summary_values(tmp_path: Path) -> None:
+    logger = EventLogger(tmp_path / "logs", enabled=True)
+
+    path = logger.record_summary(
+        "session-1",
+        "run-1",
+        "请记住 token=secret-token",
+        "结果包含 password=abc123",
+        "done",
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    row = json.loads(raw.strip())
+
+    assert "secret-token" not in raw
+    assert "abc123" not in raw
+    assert row["user_input"] == "请记住 token=[REDACTED]"
+    assert row["result"] == "结果包含 password=[REDACTED]"
 
 
 def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:

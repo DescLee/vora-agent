@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
+
 
 MAX_LOG_MESSAGE_CONTENT_CHARS = 1200
 MAX_REFLECTION_OBSERVATIONS = 12
@@ -114,7 +116,7 @@ class EventLogger:
             return node_path
         session_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(UTC).isoformat()
-        compacted_event = compact_event(event)
+        compacted_event = redact_sensitive_value(compact_event(event))
         payload = {
             "ts": ts,
             "session_id": session_id,
@@ -148,9 +150,9 @@ class EventLogger:
             "session_id": session_id,
             "run_id": run_id,
             "final_node_id": self._last_node_ids.get((session_id, run_id)),
-            "user_input": user_input,
+            "user_input": redact_sensitive_text(user_input),
             "status": status,
-            "result": result,
+            "result": redact_sensitive_text(result),
         }
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")

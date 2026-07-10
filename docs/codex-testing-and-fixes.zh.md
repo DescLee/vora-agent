@@ -848,6 +848,26 @@
 - `run_temp_script` 执行 `. .env.test` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
 - 未确认前，shell 输出不得包含密钥内容。
 
+### 43. 事件日志和 summary 日志会落盘敏感内容
+
+#### 现象
+
+- TUI 和报告渲染路径已经做了敏感内容脱敏，但 `EventLogger` 落盘前只做压缩，不做脱敏。
+- 真实测试中，`logger.record(..., {"result": {"content": "LLM_API_KEY=secret"}})` 会把原始密钥写入 `node.jsonl`。
+- `record_summary()` 也会把用户输入和最终结果原样写入 `summary.jsonl`。
+
+#### 修复
+
+- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中引入统一敏感内容脱敏。
+- `record()` 在 `compact_event()` 后对事件 payload 递归执行 `redact_sensitive_value()`。
+- `record_summary()` 对 `user_input` 和 `result` 执行 `redact_sensitive_text()` 后再写盘。
+
+#### 回归点
+
+- `node.jsonl` 不得包含 `sk-live-secret`、`abc123`、`secret-token` 等原始敏感值。
+- `summary.jsonl` 不得包含用户输入或最终结果里的原始 token/password。
+- 脱敏后的日志仍保留字段结构，便于排查问题。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -860,6 +880,8 @@
   - LLM 指数退避和 `Retry-After`
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
   - 用户目录不可写时路径回退
+  - 事件日志落盘前必须递归脱敏敏感字段
+  - summary 日志落盘前必须脱敏用户输入和最终结果
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
@@ -918,9 +940,9 @@ pytest -q
 
 结果：
 
-- `397 passed`
+- `398 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.56%（门禁 80%）
+- 分支覆盖率：83.73%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -957,6 +979,7 @@ pytest -q
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
+- `EventLogger` 写入事件日志和 summary 日志前会脱敏敏感内容
 
 ## 后续建议
 
