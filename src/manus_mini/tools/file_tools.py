@@ -60,7 +60,7 @@ NOISE_DIR_NAMES = {
     "vendor",
     "venv",
 }
-PROTECTED_FILE_NAMES = {".env", ".env.local", ".env.production", ".env.development"}
+SAFE_ENV_TEMPLATE_FILE_NAMES = {".env.example"}
 
 
 class ListFilesTool(BaseTool):
@@ -757,7 +757,7 @@ def _is_protected_write_path(relative_path: Path) -> bool:
     parts = relative_path.parts
     if not parts:
         return True
-    if relative_path.name in PROTECTED_FILE_NAMES:
+    if relative_path.name.startswith(".env") and relative_path.name not in SAFE_ENV_TEMPLATE_FILE_NAMES:
         return True
     return any(part.startswith(".") for part in parts[:-1])
 

@@ -229,14 +229,46 @@ def test_write_file_rejects_sensitive_or_hidden_targets(tmp_path: Path) -> None:
     tool = WriteFileTool()
 
     env_result = tool.run(workspace=tmp_path, path=".env", content="LLM_API_KEY=x", confirmed=True)
+    env_test_result = tool.run(workspace=tmp_path, path=".env.test", content="LLM_API_KEY=x", confirmed=True)
+    env_example_result = tool.run(workspace=tmp_path, path=".env.example", content="LLM_API_KEY=", confirmed=True)
     hidden_dir_result = tool.run(workspace=tmp_path, path=".secret/value.txt", content="x", confirmed=True)
 
     assert env_result.ok is False
     assert env_result.error_code == "PROTECTED_PATH"
+    assert env_test_result.ok is False
+    assert env_test_result.error_code == "PROTECTED_PATH"
+    assert env_example_result.ok is True
     assert hidden_dir_result.ok is False
     assert hidden_dir_result.error_code == "PROTECTED_PATH"
     assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / ".env.test").exists()
+    assert (tmp_path / ".env.example").read_text(encoding="utf-8") == "LLM_API_KEY="
     assert not (tmp_path / ".secret" / "value.txt").exists()
+
+
+def test_append_file_rejects_env_variant_targets(tmp_path: Path) -> None:
+    result = AppendFileTool().run(workspace=tmp_path, path=".env.test", content="LLM_API_KEY=x", confirmed=True)
+
+    assert result.ok is False
+    assert result.error_code == "PROTECTED_PATH"
+    assert not (tmp_path / ".env.test").exists()
+
+
+def test_replace_in_file_rejects_env_variant_targets(tmp_path: Path) -> None:
+    target = tmp_path / ".env.test"
+    target.write_text("LLM_API_KEY=old\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path=".env.test",
+        old_text="old",
+        new_text="new",
+        confirmed=True,
+    )
+
+    assert result.ok is False
+    assert result.error_code == "PROTECTED_PATH"
+    assert target.read_text(encoding="utf-8") == "LLM_API_KEY=old\n"
 
 
 def test_write_file_rejects_oversized_content(tmp_path: Path) -> None:

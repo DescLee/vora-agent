@@ -675,6 +675,28 @@
 - `run_bash` 执行 `Path('note.md').open('w').write(...)` 时，必须先进入确认流。
 - 未确认前，目标文件不得被创建或改写。
 
+### 35. `.env.test` 等环境变量文件变体可被文件工具直接写入
+
+#### 现象
+
+- 安全文档中的生产化权限模型建议将 `.env*` 作为 deny pattern。
+- 旧实现只保护 `.env`、`.env.local`、`.env.production`、`.env.development` 等少数精确文件名。
+- 真实测试中，`write_file`、`append_file`、`replace_in_file` 都能直接修改 `.env.test`。
+- `.env.test` 在真实项目中常用于测试密钥或本地服务凭据，允许 Agent 写入会扩大敏感配置泄露和误改风险。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中收紧保护规则。
+- 默认保护所有以 `.env` 开头的文件名。
+- 保留 `.env.example` 作为模板文件例外，方便项目继续维护安全的配置示例。
+
+#### 回归点
+
+- `write_file` 写 `.env.test` 必须返回 `PROTECTED_PATH`。
+- `append_file` 追加 `.env.test` 必须返回 `PROTECTED_PATH`。
+- `replace_in_file` 修改 `.env.test` 必须返回 `PROTECTED_PATH`，且原内容保持不变。
+- `.env.example` 仍允许作为模板文件写入。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -689,6 +711,9 @@
   - 用户目录不可写时路径回退
 - [tests/test_session.py](/Users/liyong/Desktop/ai-manus/tests/test_session.py)
   - 待确认状态下普通消息不能绕过确认流
+- [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
+  - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
+  - `.env.example` 仍允许作为模板文件写入
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - fallback 高价值回答
   - 空结果保护
@@ -734,9 +759,9 @@ pytest -q
 
 结果：
 
-- `379 passed`
+- `381 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83%（门禁 80%）
+- 分支覆盖率：83.55%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -761,6 +786,8 @@ pytest -q
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写工作区文件时会先等待确认
 - `run_bash` 通过 `touch` / `Path(...).touch()` 写生产代码时也不能绕过“先测试再改代码”的门禁
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
+- `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
+- `.env.example` 仍可作为安全模板文件写入
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
