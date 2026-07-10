@@ -2710,6 +2710,39 @@ def test_runtime_fallback_answers_interview_operation_questions(tmp_path: Path, 
         assert term in result.messages[-1].content
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("这个项目怎么配置模型？", [".env", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"]),
+        ("运行日志和产物保存在哪里？", [".manus-mini", "sessions", "logs", "outputs"]),
+        ("上下文压缩是怎么做的？", ["50%", "70%", "90%", "CompressionSnapshot", "tool call"]),
+        ("长期记忆是怎么工作的？", ["SQLite", "关键词检索", "敏感信息", "project_memory_path"]),
+        ("如果搜索失败怎么办？", ["未获取到有效搜索结果", "页面内容读取失败", "证据不足"]),
+        ("怎么查看历史会话？", ["manus-mini list", "manus-mini resume", "session_id"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_engineering_questions(
+    tmp_path: Path,
+    prompt: str,
+    expected_terms: list[str],
+) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002

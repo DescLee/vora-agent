@@ -1900,6 +1900,58 @@
 - CLI 测试覆盖无子命令启动 TUI，并继续拒绝 `manus-mini tui`。
 - TUI 欢迎页测试覆盖首屏信息不推荐 `manus-mini tui`，并展示 `Enter`、`Ctrl+J`、`Tab`、`Ctrl+C` 等核心操作。
 
+### 98. 模型配置追问在 LLM 不可用时缺少可讲答案
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "这个项目怎么配置模型？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试官追问模型接入方式时，看不到 `.env`、环境变量、OpenAI-compatible endpoint、API key 和模型名这些关键工程点。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加模型配置类直接规则兜底。
+- 回答说明配置读取顺序：环境变量、当前目录 `.env`、`~/.manus-mini/.env`、源码根目录 `.env`。
+- 回答明确 `LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，并提到超时和重试配置。
+
+#### 回归点
+
+- 模型不可用时，模型配置追问不得展示 `兜底原因`。
+- 回答必须包含 `.env` 和核心 LLM 配置项。
+
+### 99. 日志和产物位置追问在 LLM 不可用时缺少可讲答案
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "运行日志和产物保存在哪里？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 这会让面试展示缺少可观测性说明，无法快速说明 session、logs、outputs 的落点。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加运行产物位置类直接规则兜底。
+- 回答说明本地状态在 `.manus-mini`，历史会话在 `sessions`，结构化运行记录在 `logs`，报告和上下文快照在 `outputs`。
+
+#### 回归点
+
+- 模型不可用时，日志和产物位置追问不得展示 `兜底原因`。
+- 回答必须包含 `.manus-mini`、`sessions`、`logs`、`outputs`。
+
+### 100. 上下文压缩追问在 LLM 不可用时缺少工程细节
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini run "上下文压缩是怎么做的？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 面试时这类问题需要讲清阈值、快照和 tool call 完整性，而不是只说“会压缩”。
+
+#### 修复
+
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加上下文压缩类直接规则兜底。
+- 回答说明 50% / 70% / 90% 分层压缩、`CompressionSnapshot` 记录，以及 assistant/tool call/result 成组完整性校验。
+
+#### 回归点
+
+- 模型不可用时，上下文压缩追问不得展示 `兜底原因`。
+- 回答必须包含 `50%`、`70%`、`90%`、`CompressionSnapshot` 和 `tool call`。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
