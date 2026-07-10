@@ -932,6 +932,30 @@
 - `delete_logs_for_session("../sessions")` 不得删除 sessions 目录。
 - CLI `resume/remove ../...` 必须返回友好错误。
 
+### 47. `fetch_webpage` 可访问本机、内网和云元数据地址
+
+#### 现象
+
+- `fetch_webpage` 只校验 URL 必须以 `http://` 或 `https://` 开头。
+- 真实测试中，`http://127.0.0.1:8000/admin`、`http://localhost:8000/admin` 和 `http://169.254.169.254/latest/meta-data/` 会进入真实请求路径。
+- 域名如果解析到 `10.0.0.5` 这类私网地址，也会被当成普通网页抓取成功。
+- 这会让一个标记为 safe/read-only 的工具具备 SSRF、本机服务探测或云元数据读取风险。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/search_tools.py) 中，抓取前解析 URL host。
+- 对解析出的 IP 地址执行保护判断，拒绝 private、loopback、link-local、multicast、reserved、unspecified 地址。
+- 对 DNS 解析失败的 URL 直接拒绝，避免把不可判定目标交给 `requests.get()`。
+- 被拒绝时返回 `PROTECTED_URL`，便于上层识别为安全拦截而不是普通网络失败。
+
+#### 回归点
+
+- `fetch_webpage("http://127.0.0.1:...")` 必须返回 `PROTECTED_URL`。
+- `fetch_webpage("http://localhost:...")` 必须返回 `PROTECTED_URL`。
+- `fetch_webpage("http://169.254.169.254/...")` 必须返回 `PROTECTED_URL`。
+- 域名解析到私网地址时，不得调用真实抓取逻辑。
+- 正常公网地址仍可抓取并保留 HTML 清洗行为。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -961,6 +985,7 @@
   - `.env.example` 仍允许作为模板文件写入
   - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
   - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
+  - `fetch_webpage` 必须拒绝本机、内网、link-local 和解析到私网的 URL
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - fallback 高价值回答
   - 空结果保护
@@ -1012,10 +1037,10 @@ pytest -q
 
 结果：
 
-- `405 passed`
+- `407 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.83%（门禁 80%）
+- 分支覆盖率：83.85%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1057,6 +1082,7 @@ pytest -q
 - `/save-context` 导出的 `session.json` 和 `context.md` 会脱敏敏感内容
 - `Authorization: Bearer ...` 和 URL query secret 参数会脱敏敏感值
 - `session_id` 包含路径片段时会被拒绝，不会越过 sessions/logs 目录
+- `fetch_webpage` 会拒绝本机、内网、link-local 和解析到受保护地址的 URL
 
 ## 后续建议
 

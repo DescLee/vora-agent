@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import re
+import socket
 import warnings
 from contextlib import redirect_stderr
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from duckduckgo_search import DDGS
@@ -160,6 +163,14 @@ class FetchWebpageTool(BaseTool):
                 summary="Invalid URL: must start with http:// or https://",
                 error_code="INVALID_TOOL_PARAMS",
             )
+        protected_reason = _protected_fetch_url_reason(url)
+        if protected_reason is not None:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"protected URL: {protected_reason}",
+                error_code="PROTECTED_URL",
+            )
         max_chars = int(kwargs.get("max_chars", 8000))
         max_chars = max(1000, min(max_chars, 50000))
 
@@ -202,6 +213,40 @@ def _strip_html_tags(html: str) -> str:
     text = re.sub(r"&gt;", ">", text)
     text = re.sub(r"&[a-zA-Z]+;", " ", text)
     return text
+
+
+def _protected_fetch_url_reason(url: str) -> str | None:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return "missing host"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addresses = set()
+        for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+            sockaddr = info[4]
+            if sockaddr and isinstance(sockaddr[0], str):
+                addresses.add(sockaddr[0])
+    except socket.gaierror as exc:
+        return f"host resolution failed: {exc}"
+    for address in addresses:
+        if _is_protected_address(address):
+            return f"{host} resolves to protected address {address}"
+    return None
+
+
+def _is_protected_address(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    return any(
+        (
+            ip.is_private,
+            ip.is_loopback,
+            ip.is_link_local,
+            ip.is_multicast,
+            ip.is_reserved,
+            ip.is_unspecified,
+        )
+    )
 
 
 def _format_warning_records(records) -> list[str]:

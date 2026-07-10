@@ -619,8 +619,50 @@ def test_fetch_webpage_validates_url() -> None:
     assert "http" in result.summary
 
 
+def test_fetch_webpage_rejects_private_network_literal_urls() -> None:
+    for url in (
+        "http://127.0.0.1:8000/admin",
+        "http://localhost:8000/admin",
+        "http://169.254.169.254/latest/meta-data/",
+    ):
+        result = FetchWebpageTool().run(url=url)
+
+        assert result.ok is False
+        assert result.error_code == "PROTECTED_URL"
+        assert "protected URL" in result.summary
+
+
+def test_fetch_webpage_rejects_hosts_that_resolve_to_private_addresses(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+    import socket
+
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202
+        assert host == "internal.example"
+        assert port == 443
+        assert type == search_tools.socket.SOCK_STREAM
+        return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("10.0.0.5", port))]
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+        text = "<html><body>internal secret</body></html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(search_tools.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    result = FetchWebpageTool().run(url="https://internal.example/secret")
+
+    assert result.ok is False
+    assert result.error_code == "PROTECTED_URL"
+    assert "protected URL" in result.summary
+
+
 def test_fetch_webpage_strips_html(monkeypatch) -> None:
     from manus_mini.tools import search_tools
+    import socket
 
     class FakeResponse:
         headers = {"content-type": "text/html"}
@@ -635,6 +677,11 @@ def test_fetch_webpage_strips_html(monkeypatch) -> None:
         assert "User-Agent" in headers
         return FakeResponse()
 
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202
+        return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(search_tools.requests, "get", fake_get)
 
     result = FetchWebpageTool().run(url="https://example.com", max_chars=1000)
