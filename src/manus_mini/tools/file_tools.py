@@ -99,7 +99,10 @@ class ListFilesTool(BaseTool):
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path", ".")
         limit = _positive_int(kwargs.get("limit"), DEFAULT_LIST_LIMIT)
-        root = resolve_workspace_path(workspace, path)
+        try:
+            root = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         if not root.exists():
             return ToolResult(tool_name=self.name, ok=False, summary="workspace not found", error_code="FILE_NOT_FOUND")
 
@@ -189,7 +192,10 @@ class ReadFileTool(BaseTool):
                 summary="missing required argument: path",
                 error_code="INVALID_TOOL_PARAMS",
             )
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         if not target.exists():
             return ToolResult(tool_name=self.name, ok=False, summary="file not found", error_code="FILE_NOT_FOUND")
         if not target.is_file():
@@ -280,7 +286,10 @@ class ReadFileTool(BaseTool):
         path = kwargs.get("path")
         if not path:
             return []
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError:
+            return []
         return [_display_path(target, workspace.expanduser().resolve())]
 
 
@@ -399,6 +408,21 @@ def _display_path(path: Path, workspace_root: Path) -> str:
         return resolved.as_posix()
 
 
+class _ToolPathError(Exception):
+    def __init__(self, result: ToolResult) -> None:
+        super().__init__(result.summary)
+        self.result = result
+
+
+def _resolve_tool_path(tool_name: str, workspace: Path, path: str | Path) -> Path:
+    try:
+        return resolve_workspace_path(workspace, path)
+    except PermissionError as error:
+        code = str(error) or "PERMISSION_DENIED"
+        summary = "path outside workspace" if code == "PATH_OUT_OF_WORKSPACE" else code
+        raise _ToolPathError(ToolResult(tool_name=tool_name, ok=False, summary=summary, error_code=code)) from error
+
+
 class WriteFileTool(BaseTool):
     name = "write_file"
     description = "Write a file inside the workspace."
@@ -458,7 +482,10 @@ class WriteFileTool(BaseTool):
         if not confirmed:
             raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
 
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         workspace_root = workspace.expanduser().resolve()
         relative_path = _display_path(target, workspace_root)
         previous_preview = _preview_existing_text(target)
@@ -506,7 +533,10 @@ class WriteFileTool(BaseTool):
         path = kwargs.get("path")
         if not path:
             return []
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError:
+            return []
         return [_display_path(target, workspace.expanduser().resolve())]
 
 
@@ -568,7 +598,10 @@ class ReplaceInFileTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: old_text", error_code="INVALID_TOOL_PARAMS")
         if new_text is None:
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: new_text", error_code="INVALID_TOOL_PARAMS")
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         workspace_root = workspace.expanduser().resolve()
         relative_path = _display_path(target, workspace_root)
         if _is_protected_write_path(Path(relative_path)):
@@ -661,7 +694,10 @@ class ReplaceInFileTool(BaseTool):
         path = kwargs.get("path")
         if not path:
             return []
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError:
+            return []
         return [_display_path(target, workspace.expanduser().resolve())]
 
 
@@ -705,7 +741,10 @@ class AppendFileTool(BaseTool):
         if not bool(kwargs.get("confirmed", False)):
             raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
 
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         workspace_root = workspace.expanduser().resolve()
         relative_path = _display_path(target, workspace_root)
         previous_preview = _preview_existing_text(target)
@@ -754,7 +793,10 @@ class MakeDirectoryTool(BaseTool):
         path = kwargs.get("path")
         if not path:
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
-        target = resolve_workspace_path(workspace, path)
+        try:
+            target = _resolve_tool_path(self.name, workspace, path)
+        except _ToolPathError as error:
+            return error.result
         target.mkdir(parents=True, exist_ok=True)
         workspace_root = workspace.expanduser().resolve()
         relative_path = _display_path(target, workspace_root)

@@ -956,6 +956,28 @@
 - 域名解析到私网地址时，不得调用真实抓取逻辑。
 - 正常公网地址仍可抓取并保留 HTML 清洗行为。
 
+### 48. 文件工具越界路径会抛异常而不是返回结构化错误
+
+#### 现象
+
+- `resolve_workspace_path()` 会在路径越过工作区时抛出 `PermissionError("PATH_OUT_OF_WORKSPACE")`。
+- 真实测试中，直接调用 `ReadFileTool().run(path="../outside.txt")` 会抛异常，而不是返回 `ToolResult`。
+- `write_file`、`replace_in_file`、`append_file`、`make_directory` 的越界路径也存在同类问题。
+- 这会让直接工具调用和上层执行器得到不一致的错误形态，降低 Agent 对路径错误的可恢复性和可观测性。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中新增文件工具路径解析包装。
+- 文件工具 `run()` 入口捕获路径越界，并返回 `ToolResult(error_code="PATH_OUT_OF_WORKSPACE")`。
+- `resource_keys()` 遇到越界路径时返回空资源键，避免调度资源分析阶段抛异常。
+- 保留底层 `resolve_workspace_path()` 的原始语义，避免影响已有调用方。
+
+#### 回归点
+
+- `read_file("../outside.txt")` 不得抛异常，必须返回 `PATH_OUT_OF_WORKSPACE`。
+- `write_file`、`replace_in_file`、`append_file`、`make_directory` 的越界路径必须返回结构化错误。
+- 正常工作区内文件读写行为保持不变。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -981,6 +1003,7 @@
   - `session_id` 不得包含路径穿越片段
   - 日志清理不得通过非法 `session_id` 越过 logs 目录
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
+  - 文件工具越界路径必须返回 `PATH_OUT_OF_WORKSPACE`，不得直接抛异常
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
   - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
@@ -1037,10 +1060,10 @@ pytest -q
 
 结果：
 
-- `407 passed`
+- `408 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.85%（门禁 80%）
+- 分支覆盖率：83.81%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1083,6 +1106,7 @@ pytest -q
 - `Authorization: Bearer ...` 和 URL query secret 参数会脱敏敏感值
 - `session_id` 包含路径片段时会被拒绝，不会越过 sessions/logs 目录
 - `fetch_webpage` 会拒绝本机、内网、link-local 和解析到受保护地址的 URL
+- 文件工具越界路径会返回结构化 `PATH_OUT_OF_WORKSPACE` 错误
 
 ## 后续建议
 

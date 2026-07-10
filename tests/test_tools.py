@@ -20,10 +20,23 @@ def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
 
-    tool = ReadFileTool()
+    result = ReadFileTool().run(workspace=tmp_path, path="../outside.txt")
 
-    with pytest.raises(PermissionError):
-        tool.run(workspace=tmp_path, path="../outside.txt")
+    assert result.ok is False
+    assert result.error_code == "PATH_OUT_OF_WORKSPACE"
+    assert "workspace" in result.summary
+
+
+def test_file_write_tools_return_structured_error_for_workspace_escape(tmp_path: Path) -> None:
+    results = [
+        WriteFileTool().run(workspace=tmp_path, path="../outside.txt", content="x", confirmed=True),
+        ReplaceInFileTool().run(workspace=tmp_path, path="../outside.txt", old_text="x", new_text="y"),
+        AppendFileTool().run(workspace=tmp_path, path="../outside.txt", content="x", confirmed=True),
+        MakeDirectoryTool().run(workspace=tmp_path, path="../outside-dir"),
+    ]
+
+    assert [result.error_code for result in results] == ["PATH_OUT_OF_WORKSPACE"] * 4
+    assert all(result.ok is False for result in results)
 
 
 def test_resolve_workspace_path_allows_system_tmp(tmp_path: Path) -> None:

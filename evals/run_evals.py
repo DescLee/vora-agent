@@ -154,12 +154,9 @@ def eval_scheduler_batches_read_only_tools() -> None:
 def eval_path_escape_is_rejected() -> None:
     with tempfile.TemporaryDirectory() as directory:
         cwd = Path(directory)
-        try:
-            ReadFileTool().run(workspace=cwd, path="../outside.txt")
-        except PermissionError as error:
-            assert "PATH_OUT_OF_WORKSPACE" in str(error)
-        else:
-            raise AssertionError("path escape should be rejected")
+        result = ReadFileTool().run(workspace=cwd, path="../outside.txt")
+        assert result.ok is False
+        assert result.error_code == "PATH_OUT_OF_WORKSPACE"
 
 
 def eval_write_requires_confirmation() -> None:
