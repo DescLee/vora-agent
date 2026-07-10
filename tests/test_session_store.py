@@ -146,6 +146,52 @@ def test_session_store_load_rejects_symlinked_session_file(monkeypatch, tmp_path
         raise AssertionError("expected CorruptSessionError")
 
 
+def test_session_store_list_skips_symlinked_session_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("正常会话"))
+    store.save(session)
+    outside = tmp_path / "outside-session.json"
+    outside.write_text(SessionState.create(cwd=tmp_path).model_dump_json(indent=2), encoding="utf-8")
+    (store.sessions_dir / "session-link.json").symlink_to(outside)
+
+    summaries = store.list_sessions()
+
+    assert [summary.session_id for summary in summaries] == [session.session_id]
+
+
+def test_session_store_list_skips_session_file_with_mismatched_payload_id(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    valid = SessionState.create(cwd=tmp_path)
+    store.save(valid)
+    forged = SessionState.create(cwd=tmp_path)
+    forged.session_id = "session-forged"
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "session-visible.json").write_text(forged.model_dump_json(indent=2), encoding="utf-8")
+
+    summaries = store.list_sessions()
+
+    assert [summary.session_id for summary in summaries] == [valid.session_id]
+
+
+def test_session_store_load_rejects_session_file_with_mismatched_payload_id(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    forged = SessionState.create(cwd=tmp_path)
+    forged.session_id = "session-forged"
+    store.sessions_dir.mkdir(parents=True, exist_ok=True)
+    (store.sessions_dir / "session-visible.json").write_text(forged.model_dump_json(indent=2), encoding="utf-8")
+
+    try:
+        store.load("session-visible")
+    except CorruptSessionError as error:
+        assert "session_id mismatch" in str(error)
+    else:
+        raise AssertionError("expected CorruptSessionError")
+
+
 def test_session_store_save_refuses_existing_symlinked_session_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)

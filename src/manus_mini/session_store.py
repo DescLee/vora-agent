@@ -71,8 +71,9 @@ class SessionStore:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             session = SessionState.model_validate(migrate_session_data(data))
+            _validate_loaded_session_id(session, expected_session_id=session_id)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            raise CorruptSessionError(f"session is unreadable or corrupt: {session_id}") from exc
+            raise CorruptSessionError(f"session is unreadable or corrupt: {session_id} ({exc})") from exc
         session.cwd = self.cwd
         if session.active_task is not None:
             session.active_task.cwd = self.cwd
@@ -86,7 +87,7 @@ class SessionStore:
         for path in self.sessions_dir.glob("*.json"):
             try:
                 summaries.append(self._summary(path))
-            except (OSError, json.JSONDecodeError, ValueError):
+            except (OSError, json.JSONDecodeError, ValueError, CorruptSessionError):
                 continue
         return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
@@ -165,6 +166,7 @@ class SessionStore:
             raise CorruptSessionError(f"session path is a symlink: {path.stem}")
         data = json.loads(path.read_text(encoding="utf-8"))
         session = SessionState.model_validate(migrate_session_data(data))
+        _validate_loaded_session_id(session, expected_session_id=path.stem)
         last_user_message = ""
         for message in reversed(session.messages):
             if message.role == "user":
@@ -189,6 +191,12 @@ def validate_session_id(session_id: str) -> None:
         raise ValueError(f"invalid session_id: {session_id}")
     if "/" in session_id or "\\" in session_id:
         raise ValueError(f"invalid session_id: {session_id}")
+
+
+def _validate_loaded_session_id(session: SessionState, expected_session_id: str) -> None:
+    validate_session_id(session.session_id)
+    if session.session_id != expected_session_id:
+        raise ValueError(f"session_id mismatch: expected {expected_session_id}, got {session.session_id}")
 
 
 def _remove_log_entry(path: Path) -> int:

@@ -408,6 +408,24 @@ def test_run_bash_rsync_sensitive_file_requires_confirmation(tmp_path: Path) -> 
     assert not (tmp_path / "leaked.txt").exists()
 
 
+def test_run_bash_zip_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    preview = RunBashTool().preview(workspace=tmp_path, command="zip leaked.zip .env")
+
+    assert preview.requires_confirmation is True
+    assert "sensitive workspace files" in preview.summary
+
+
+def test_run_bash_gzip_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    preview = RunBashTool().preview(workspace=tmp_path, command="gzip .env")
+
+    assert preview.requires_confirmation is True
+    assert "sensitive workspace files" in preview.summary
+
+
 def test_run_bash_base64_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 

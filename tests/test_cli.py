@@ -228,6 +228,22 @@ def test_cli_rejects_unknown_subcommand_even_with_global_options(tmp_path: Path)
         main(["--cwd", str(tmp_path), "unknown"])
 
 
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--max-steps", "0"),
+        ("--max-react", "-1"),
+        ("--max-reflect", "0"),
+        ("--max-tool-retries", "-1"),
+    ],
+)
+def test_cli_rejects_non_positive_loop_limit_options(option: str, value: str, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as error:
+        main([option, value, "list", "--cwd", str(tmp_path)])
+
+    assert error.value.code == 2
+
+
 def test_cli_clear_requires_confirmation_before_deleting_sessions(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)

@@ -59,7 +59,7 @@ SENSITIVE_READ_COMMANDS = {
     "wc",
     "xxd",
 }
-SENSITIVE_FILE_TRANSFER_COMMANDS = {"cp", "install", "mv", "rsync", "tar"}
+SENSITIVE_FILE_TRANSFER_COMMANDS = {"bzip2", "cp", "gzip", "install", "mv", "rsync", "tar", "xz", "zip"}
 NESTED_SHELL_COMMANDS = {"bash", "sh", "zsh"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:

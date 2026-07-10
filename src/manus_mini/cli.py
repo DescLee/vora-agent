@@ -17,10 +17,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="manus-mini")
     parser.add_argument("--cwd", dest="global_cwd", type=Path, default=Path.cwd())
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--max-steps", type=int, default=3)
-    parser.add_argument("--max-react", type=int, default=99)
-    parser.add_argument("--max-reflect", type=int, default=3)
-    parser.add_argument("--max-tool-retries", type=int, default=3)
+    parser.add_argument("--max-steps", type=_positive_cli_int, default=3)
+    parser.add_argument("--max-react", type=_positive_cli_int, default=99)
+    parser.add_argument("--max-reflect", type=_positive_cli_int, default=3)
+    parser.add_argument("--max-tool-retries", type=_positive_cli_int, default=3)
     subparsers = parser.add_subparsers(dest="command")
 
     list_parser = subparsers.add_parser("list", help="list saved sessions")
@@ -41,10 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser = subparsers.add_parser("tui", help="start the interactive TUI")
     tui_parser.add_argument("--cwd", dest="subcommand_cwd", type=Path)
     tui_parser.add_argument("--dry-run", action="store_true")
-    tui_parser.add_argument("--max-steps", type=int)
-    tui_parser.add_argument("--max-react", type=int)
-    tui_parser.add_argument("--max-reflect", type=int)
-    tui_parser.add_argument("--max-tool-retries", type=int)
+    tui_parser.add_argument("--max-steps", type=_positive_cli_int)
+    tui_parser.add_argument("--max-react", type=_positive_cli_int)
+    tui_parser.add_argument("--max-reflect", type=_positive_cli_int)
+    tui_parser.add_argument("--max-tool-retries", type=_positive_cli_int)
     return parser
 
 
@@ -215,6 +215,16 @@ def _run_tui(
 
 def _option_was_provided(argv: list[str], name: str) -> bool:
     return any(item == name or item.startswith(f"{name}=") for item in argv)
+
+
+def _positive_cli_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def _format_last_user_message(message: str) -> str:
