@@ -2113,7 +2113,7 @@ pytest -q
 - `546 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.27%（门禁 80%）
+- 分支覆盖率：85.22%（门禁 80%）
 - Agent eval：12/12 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助

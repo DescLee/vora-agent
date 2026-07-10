@@ -820,5 +820,5 @@ python -m build
 - `mypy`：30 个源码文件无错误
 - `python evals/run_evals.py`：12/12 通过
 - `python -m manus_mini doctor --cwd /private/tmp/manus-mini-doctor-check`：通过，输出本地存储和 LLM 配置诊断
-- `pytest --cov=manus_mini --cov-report=term-missing`：85.17%（门禁 80%）
+- `pytest --cov=manus_mini --cov-report=term-missing`：85.22%（门禁 80%）
 - `python -m build`：沙箱内因 DNS/PyPI 访问失败，使用外部权限重跑后通过，生成 sdist 和 wheel
