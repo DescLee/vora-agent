@@ -1058,6 +1058,24 @@
 - 搜索 query 中的 `access_token` 不应以原值出现在工具 summary/data。
 - 网页抓取结果中的 URL query secret 不应以原值出现在 summary 或 `data.url`。
 
+### 53. 待确认 diff 和 replace trace diff 会展示敏感值
+
+#### 现象
+
+- 文件写入类工具在执行前会由 executor 生成待确认 diff。
+- `replace_in_file` 即使已确认，也会在 trace 中生成非阻塞 diff 预览。
+- 这些 diff 不走工具结果脱敏路径，写入普通配置文件时，`CLIENT_SECRET=...` 这类内容会原样出现在 `pending_confirmation.diff_preview` 或 trace event 中。
+
+#### 修复
+
+- 在 [src/manus_mini/executor.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/executor.py) 的 diff 生成边界复用 `redact_sensitive_text`。
+- 真实写入/替换仍使用原始内容；只对待确认展示和 trace 预览内容脱敏。
+
+#### 回归点
+
+- `write_file` 的待确认 diff 不应展示原始 `CLIENT_SECRET` 值。
+- `replace_in_file` 的 trace diff 不应展示替换前或替换后的原始 secret 值。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1093,6 +1111,7 @@
   - `web_search` / `fetch_webpage` 返回 URL 或 query 前必须脱敏 query secret
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - 越界写入/替换不得通过确认 diff 或 trace diff 泄露工作区外文件内容
+  - 待确认 diff 和 replace trace diff 不得展示敏感值
   - fallback 高价值回答
   - 空结果保护
   - 行研问答默认不落文件
@@ -1144,7 +1163,7 @@ pytest -q
 
 结果：
 
-- `415 passed`
+- `417 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.84%（门禁 80%）
@@ -1195,6 +1214,7 @@ pytest -q
 - `run_bash` / `run_temp_script` 返回工具结果前会脱敏 stdout/stderr 中的敏感值
 - `AWS_SECRET_ACCESS_KEY`、`CLIENT_SECRET`、`GH_TOKEN` 等组合式凭证名会脱敏值
 - `web_search` / `fetch_webpage` 不会在 URL 或 query 输出中泄露 query secret
+- 待确认 diff 和 replace trace diff 不会展示 `CLIENT_SECRET` 等敏感值
 
 ## 后续建议
 

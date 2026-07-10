@@ -2124,6 +2124,27 @@ def test_executor_confirmation_diff_preview_does_not_read_outside_workspace(tmp_
     assert not any("OUTSIDE_SECRET" in str(event.data.get("diff_preview") or "") for event in task.trace_events)
 
 
+def test_executor_confirmation_diff_preview_redacts_sensitive_values(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="write config", cwd=tmp_path)
+    call = ToolCall(
+        id="call-write-config",
+        name="write_file",
+        args={
+            "workspace": tmp_path,
+            "path": "config.txt",
+            "content": "CLIENT_SECRET=plain-secret\n",
+        },
+    )
+
+    result = Executor(ToolRegistry()).execute(call, session, task)
+
+    assert result.error_code == "WRITE_REQUIRES_CONFIRMATION"
+    assert session.pending_confirmation is not None
+    assert "plain-secret" not in session.pending_confirmation.diff_preview
+    assert "CLIENT_SECRET=[REDACTED]" in session.pending_confirmation.diff_preview
+
+
 def test_executor_replace_diff_trace_does_not_read_outside_workspace(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-secret.txt"
     outside.write_text("OUTSIDE_SECRET", encoding="utf-8")
@@ -2145,6 +2166,31 @@ def test_executor_replace_diff_trace_does_not_read_outside_workspace(tmp_path: P
 
     assert result.error_code == "PATH_OUT_OF_WORKSPACE"
     assert not any("OUTSIDE_SECRET" in str(event.data.get("diff_preview") or "") for event in task.trace_events)
+
+
+def test_executor_replace_diff_trace_redacts_sensitive_values(tmp_path: Path) -> None:
+    (tmp_path / "config.txt").write_text("CLIENT_SECRET=old-secret\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="replace config", cwd=tmp_path)
+    call = ToolCall(
+        id="call-replace-config",
+        name="replace_in_file",
+        args={
+            "workspace": tmp_path,
+            "path": "config.txt",
+            "old_text": "CLIENT_SECRET=old-secret",
+            "new_text": "CLIENT_SECRET=new-secret",
+            "confirmed": True,
+        },
+    )
+
+    result = Executor(ToolRegistry()).execute(call, session, task)
+
+    assert result.ok is True
+    diff_previews = [str(event.data.get("diff_preview") or "") for event in task.trace_events]
+    assert diff_previews
+    assert all("old-secret" not in diff and "new-secret" not in diff for diff in diff_previews)
+    assert any("CLIENT_SECRET=[REDACTED]" in diff for diff in diff_previews)
 
 
 def test_reflection_loop_keeps_best_result_when_round_budget_is_zero(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from difflib import unified_diff
 from pathlib import Path, PurePosixPath
 
 from manus_mini.models import PendingConfirmation, SessionState, TaskState, TraceEvent, ToolCall
+from manus_mini.redaction import redact_sensitive_text
 from manus_mini.tools.base import ToolPreview, ToolResult, resolve_workspace_path
 from manus_mini.tools.file_tools import NOISE_DIR_NAMES
 from manus_mini.tools.registry import ToolRegistry
@@ -250,6 +251,7 @@ class Executor:
         )
         if not diff:
             diff = f"--- a/{path}\n+++ b/{path}\n"
+        diff = redact_sensitive_text(diff)
         if len(diff) <= MAX_DIFF_PREVIEW_CHARS:
             return diff
         truncated = diff[:MAX_DIFF_PREVIEW_CHARS]
