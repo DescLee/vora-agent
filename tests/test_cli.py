@@ -219,7 +219,7 @@ def test_cli_resume_prints_friendly_error_when_terminal_is_unavailable(tmp_path:
 
     out = capsys.readouterr().out
     assert error.value.code == 1
-    assert "Error: interactive TUI requires a terminal." in out
+    assert "Error: interactive terminal UI requires a terminal." in out
 
 
 def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -233,48 +233,29 @@ def test_cli_remove_invalid_session_id_prints_friendly_error(tmp_path: Path, cap
     assert "Error: invalid session id '../sessions'." in out
 
 
-def test_cli_tui_defaults_to_ninety_nine_react_iterations(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    seen = {}
-
-    def fake_run(self):  # noqa: ANN001
-        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
-
-    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
-
-    main(["tui", "--cwd", str(tmp_path)])
-
-    assert seen["max_react_iterations"] == 99
-
-
-def test_cli_accepts_global_cwd_without_explicit_tui_subcommand(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    seen = {}
-
-    def fake_run(self):  # noqa: ANN001
-        seen["cwd"] = self.manager.current.cwd
-        seen["max_react_iterations"] = self.manager.runtime.default_limits.max_react_iterations
-
-    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fake_run)
-
-    main(["--cwd", str(tmp_path)])
-
-    assert seen["cwd"] == tmp_path
-    assert seen["max_react_iterations"] == 99
-
-
-def test_cli_tui_prints_friendly_error_when_terminal_is_unavailable(tmp_path: Path, capsys, monkeypatch) -> None:
-    def raise_terminal_error(self):  # noqa: ANN001
-        raise OSError(22, "Invalid argument")
-
-    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", raise_terminal_error)
-
+def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit) as error:
         main(["tui", "--cwd", str(tmp_path)])
 
+    err = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "invalid choice" in err
+    assert "tui" in err
+
+
+def test_cli_without_command_prints_help_instead_of_opening_tui(capsys, monkeypatch) -> None:
+    def fail_run(self):  # noqa: ANN001
+        raise AssertionError("PromptTui must not start when no subcommand is provided")
+
+    monkeypatch.setattr("manus_mini.prompt_tui.PromptTui.run", fail_run)
+
+    main([])
+
     out = capsys.readouterr().out
-    assert error.value.code == 1
-    assert "Error: interactive TUI requires a terminal." in out
+    assert "usage: manus-mini" in out
+    assert "list" in out
+    assert "resume" in out
+    assert "tui" not in out
 
 
 def test_cli_subcommands_preserve_global_cwd_before_command(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -304,7 +285,7 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
 
     out = capsys.readouterr().out
     assert error.value.code == 0
-    assert "Self-managed coding agent TUI" in out
+    assert "Self-managed coding agent runtime" in out
     assert "working directory" in out
     assert "preview tool execution without side effects" in out
     assert "engineering loop limit" in out
@@ -313,22 +294,7 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert "tool retry limit" in out
     assert "(default: 3)" in out
     assert "(default: 99)" in out
-
-
-def test_cli_tui_help_describes_options_and_defaults(capsys) -> None:
-    with pytest.raises(SystemExit) as error:
-        main(["tui", "--help"])
-
-    out = capsys.readouterr().out
-    assert error.value.code == 0
-    assert "start the interactive TUI" in out
-    assert "working directory" in out
-    assert "preview tool execution without side effects" in out
-    assert "engineering loop limit" in out
-    assert "ReAct iteration limit" in out
-    assert "reflection loop limit" in out
-    assert "tool retry limit" in out
-    assert "(default: None)" not in out
+    assert "tui" not in out
 
 
 def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:

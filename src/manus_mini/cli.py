@@ -16,7 +16,7 @@ MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="manus-mini",
-        description="Self-managed coding agent TUI with resumable sessions, guarded tools, and local project storage.",
+        description="Self-managed coding agent runtime with resumable sessions, guarded tools, and local project storage.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     _add_runtime_options(parser, include_defaults=True, cwd_dest="global_cwd")
@@ -41,14 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
     clear_parser = subparsers.add_parser("clear", help="clear all saved sessions")
     _add_cwd_option(clear_parser, dest="subcommand_cwd", default=None)
     clear_parser.add_argument("--force", "-f", action="store_true", help="skip confirmation prompt")
-
-    tui_parser = subparsers.add_parser(
-        "tui",
-        help="start the interactive TUI",
-        description="start the interactive TUI",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    _add_runtime_options(tui_parser, include_defaults=False, cwd_dest="subcommand_cwd")
     return parser
 
 
@@ -139,15 +131,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "clear":
         _run_clear(cwd, args.force)
         return
-    if args.command == "tui" or args.command is None:
-        _run_tui(
-            cwd=cwd,
-            dry_run=dry_run,
-            max_steps=max_steps,
-            max_react=max_react,
-            max_reflect=max_reflect,
-            max_tool_retries=max_tool_retries,
-        )
+    if args.command is None:
+        parser.print_help()
         return
 
     parser.print_help()
@@ -266,27 +251,9 @@ def _run_clear(cwd: Path, force: bool) -> None:
     print(f"All {count} saved session(s) have been cleared (also cleaned {logs_deleted} log dir(s)).")
 
 
-def _run_tui(
-    cwd: Path,
-    dry_run: bool,
-    max_steps: int,
-    max_react: int,
-    max_reflect: int,
-    max_tool_retries: int,
-) -> None:
-    limits = LoopLimits(
-        max_engineering_steps=max_steps,
-        max_react_iterations=max_react,
-        max_reflection_rounds=max_reflect,
-        max_tool_retries=max_tool_retries,
-    )
-    _ensure_interactive_terminal()
-    _run_prompt_tui(PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)))
-
-
 def _ensure_interactive_terminal() -> None:
     if not sys.stdin.isatty():
-        print("Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
+        print("Error: interactive terminal UI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
         raise SystemExit(1)
 
 
@@ -295,7 +262,7 @@ def _run_prompt_tui(tui: PromptTui) -> None:
         tui.run()
     except OSError as exc:
         if getattr(exc, "errno", None) == 22:
-            print("Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
+            print("Error: interactive terminal UI requires a terminal. Use 'manus-mini --help' for non-interactive commands.")
             raise SystemExit(1) from None
         raise
 

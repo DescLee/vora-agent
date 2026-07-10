@@ -5,7 +5,7 @@
 ## 测试范围
 
 - CLI 启动链路
-- TUI 启动前参数解析
+- `resume` 交互启动前参数解析
 - LLM 工具调用结果收口
 - 用户目录不可写时的项目存储路径
 - 模型不可用时的规则兜底
@@ -23,13 +23,12 @@
 #### 修复
 
 - 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中增加顶层全局参数兼容。
-- 同时保留 `manus-mini tui --cwd .` 和 `manus-mini list --cwd .` 这类原有子命令写法。
-- 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中将显式启动命令改为 `manus-mini tui --cwd .`，并保留兼容示例。
+- 同时保留 `manus-mini list --cwd .` 这类原有子命令写法。
+- 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中将显式启动命令改为当前仍支持的 `list` / `resume` 入口。
 
 #### 回归点
 
 - `manus-mini --cwd .`
-- `manus-mini tui --cwd .`
 - `manus-mini list --cwd .`
 
 ### 2. 模型可能将原始工具调用 DSL 直接暴露给用户
@@ -1674,12 +1673,12 @@
 #### 现象
 
 - 亲自执行 `python -m manus_mini resume <session-id> --max-react 1 --cwd ...` 时，旧实现报 `unrecognized arguments`。
-- 但 `tui` 子命令支持后置运行参数，且用户自然会把恢复会话的参数写在 session id 后面。
+- 但交互入口支持后置运行参数，且用户自然会把恢复会话的参数写在 session id 后面。
 - 这会让面试演示中的“恢复会话并覆盖本轮限制”显得不一致。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中给 `resume` 子命令注册和 `tui` 一致的运行参数。
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中给 `resume` 子命令注册交互运行参数。
 - 支持 `--dry-run`、`--max-steps`、`--max-react`、`--max-reflect`、`--max-tool-retries` 在 `resume <session-id>` 后传入。
 
 #### 回归点
@@ -1687,11 +1686,11 @@
 - `manus-mini resume <session-id> --max-react 1 --cwd ...` 必须能通过解析。
 - 后置 runtime 参数必须真正覆盖本次恢复运行的 limits。
 
-### 88. 非终端环境启动 TUI 会泄露 prompt_toolkit 栈
+### 88. 非终端环境启动交互界面会泄露 prompt_toolkit 栈
 
 #### 现象
 
-- 在非终端环境执行 `python -m manus_mini tui --cwd ...` 或 `resume` 进入 TUI 时，旧实现会抛出 prompt_toolkit / asyncio traceback。
+- 在非终端环境进入交互界面时，旧实现会抛出 prompt_toolkit / asyncio traceback。
 - 这类框架栈对用户没有帮助，也会明显影响命令行工具的专业度。
 
 #### 修复
@@ -1703,8 +1702,29 @@
 
 #### 回归点
 
-- 非终端执行 `tui` 或 `resume` 不得输出框架 traceback。
-- 提示信息必须明确说明交互 TUI 需要 terminal。
+- 非终端执行 `resume` 不得输出框架 traceback。
+- 提示信息必须明确说明交互 terminal UI 需要 terminal。
+
+### 89. `manus-mini tui` 子命令不再使用但仍暴露在 CLI 和文档中
+
+#### 现象
+
+- 用户明确说明 `manus-mini tui` 不会再使用。
+- 旧 CLI 仍注册该子命令，无参运行也会尝试进入交互界面。
+- README 和规则兜底回答仍会推荐旧启动命令，容易让面试演示路径和实际使用方式不一致。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中删除直接启动交互界面的子命令和默认无参启动路径。
+- 无参执行现在只打印帮助，不再启动交互界面。
+- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中将启动兜底回答改为 `list` / `resume`。
+- 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中删除旧启动命令示例。
+
+#### 回归点
+
+- 旧子命令必须被 argparse 拒绝。
+- 无参执行必须只展示帮助，不得启动 `PromptTui`。
+- 启动说明和 README 不得继续推荐旧子命令。
 
 ## 本轮新增/调整测试
 
@@ -1726,10 +1746,10 @@
   - `list` 有会话时展示会话目录、总数、表头和恢复命令
   - `list` 展示最近用户消息前必须脱敏并截断预览
   - `list` 遇到损坏会话文件时仍能列出正常会话
-  - `tui` 在非终端环境输出友好错误
+  - 旧交互启动子命令被拒绝
+  - 无参运行只打印帮助，不再打开交互界面
   - `clear` stdin 缺失时按取消处理，不删除会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
-  - `tui --help` 展示可覆盖的运行参数，且不输出 `(default: None)` 噪音
   - `list/clear --help` 展示 `--cwd` 和 `--force` 等子命令参数用途
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
@@ -1848,10 +1868,10 @@ pytest -q
 
 结果：
 
-- `481 passed`
+- `479 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.29%（门禁 80%）
+- 分支覆盖率：84.26%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
@@ -1912,7 +1932,10 @@ pytest -q
 - 批量日志清理会删除 symlink 本身但不会跟随删除外部目录
 - `manus-mini clear` 在 stdin 不可读时会取消操作，不再输出 traceback
 - `manus-mini resume <session-id> --max-react 1 --cwd ...` 不再被 argparse 拒绝
-- `manus-mini tui` / `resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
+- `manus-mini resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
+- 旧交互启动子命令已被拒绝，无参执行只打印帮助
+- `python -m manus_mini --help` 不再展示旧交互启动子命令
+- 规则兜底的启动说明不再推荐旧交互启动子命令
 
 ## 后续建议
 
@@ -1920,4 +1943,4 @@ pytest -q
 
 1. 项目简介类回答进一步压缩长度，减少 README 复述感。
 2. 为规则兜底增加更多高频模板，如“查看历史会话”“恢复会话”“当前项目边界”。
-3. 在 TUI 欢迎区增加启动前自检摘要，例如配置来源、存储目录和模型连通性状态。
+3. 在 `resume` 交互界面欢迎区增加启动前自检摘要，例如配置来源、存储目录和模型连通性状态。

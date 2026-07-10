@@ -684,16 +684,15 @@ class ReActLoop:
     def _direct_fallback_answer(self, focus: str) -> str:
         normalized = focus.strip().lower()
         if any(keyword in normalized for keyword in IDENTITY_GOAL_KEYWORDS):
-            return "我是 manus-mini，本地 TUI Agent Runtime，主要用来分析项目、调用工具和协助完成代码与文档任务。"
+            return "我是 manus-mini，本地 Agent Runtime，主要用来分析项目、调用工具和协助完成代码与文档任务。"
         if any(keyword in normalized for keyword in STARTUP_GOAL_KEYWORDS):
             return "\n".join(
                 [
                     "可以先按这个顺序启动：",
                     "1. 安装依赖：`pip install -e \".[dev]\"`",
                     "2. 配置 `.env` 里的 `LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`",
-                    "3. 启动：`manus-mini tui --cwd .`",
-                    "4. 查看历史会话：`manus-mini list`",
-                    "5. 恢复会话：`manus-mini resume <session_id>`",
+                    "3. 查看历史会话：`manus-mini list --cwd .`",
+                    "4. 恢复会话：`manus-mini resume <session-id> --cwd .`",
                 ]
             )
         if any(keyword in normalized for keyword in UNAVAILABLE_GOAL_KEYWORDS):

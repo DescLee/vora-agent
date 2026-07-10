@@ -2,7 +2,7 @@
 
 面试演示版 Agent Runtime
 
-`manus-mini` 是一个面向面试展示的本地 TUI Agent Runtime。项目重点不是复刻完整 Manus 产品，而是展示一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架。
+`manus-mini` 是一个面向面试展示的本地 Agent Runtime。项目重点不是复刻完整 Manus 产品，而是展示一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架。
 
 ## 项目定位
 
@@ -14,13 +14,13 @@
 - 上下文工程：工具调用成组完整性校验、50/70/90 分层压缩、LLM 语义压缩 + 规则回退、token 预算与压缩日志。
 - 质量门禁：代码类任务在 Reflection 阶段生成并执行真实 pytest 验收 case。
 - 可观测性：结构化事件日志、运行摘要、Markdown 产物。
-- 可测试性：核心 Agent 流程、工具协议、安全边界、TUI 展示均有自动化测试。
+- 可测试性：核心 Agent 流程、工具协议、安全边界、交互展示均有自动化测试。
 
 ## 当前已实现
 
 | 能力 | 状态 | 说明 |
 |---|---:|---|
-| TUI 入口 | 已实现 | 使用 `prompt_toolkit`，支持连续输入、状态展示、确认面板。 |
+| 交互恢复界面 | 已实现 | 通过 `resume` 进入历史会话，支持连续输入、状态展示、确认面板。 |
 | OpenAI-compatible LLM | 已实现 | 通过 `/chat/completions` 接入，支持 function/tool calls。 |
 | ReAct 工具循环 | 已实现 | 模型请求工具、执行工具、回填 observation，直到生成结果。 |
 | Reflection 质量门禁 | 已实现 | 非代码任务先直接放过；代码任务会运行临时 pytest gate。 |
@@ -65,16 +65,14 @@ LLM_RETRY_BACKOFF_SECONDS=0.25
 ## 运行
 
 ```bash
-manus-mini tui --cwd .
+manus-mini list --cwd .
 ```
 
 常用参数：
 
 ```bash
-manus-mini --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
-manus-mini tui --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 manus-mini list
-manus-mini resume <session_id>
+manus-mini resume <session_id> --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 ```
 
 ## 验证

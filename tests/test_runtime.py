@@ -2610,7 +2610,9 @@ def test_runtime_falls_back_when_model_returns_raw_tool_call_markup(tmp_path: Pa
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
-    assert "manus-mini tui --cwd ." in result.messages[-1].content
+    assert "manus-mini list --cwd ." in result.messages[-1].content
+    assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
+    assert "manus-mini tui" not in result.messages[-1].content
     assert "<｜｜DSML｜｜tool_calls>" not in result.messages[-1].content
 
 
@@ -2645,7 +2647,9 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     assert result.active_task is not None
     assert result.active_task.status == "done"
     assert "pip install -e" in result.messages[-1].content
-    assert "manus-mini tui --cwd ." in result.messages[-1].content
+    assert "manus-mini list --cwd ." in result.messages[-1].content
+    assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
+    assert "manus-mini tui" not in result.messages[-1].content
 
 
 def test_runtime_replaces_empty_final_answer_with_fallback(tmp_path: Path) -> None:
