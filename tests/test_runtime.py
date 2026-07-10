@@ -2743,6 +2743,40 @@ def test_runtime_fallback_answers_interview_engineering_questions(
         assert term in result.messages[-1].content
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("dry-run 是怎么工作的？", ["--dry-run", "不落盘", "确认预览"]),
+        ("命令执行怎么控制风险？", ["run_bash", "run_temp_script", "命令风险", "确认"]),
+        ("工具并行调度是怎么做的？", ["ToolScheduler", "只读工具", "并行", "写入工具"]),
+        ("Reflection 质量门禁怎么设计的？", ["Reflection", "pytest gate", "accept", "replan"]),
+        ("eval 是怎么跑的？", ["python evals/run_evals.py", "9", "Reflection", "安全边界"]),
+        ("这个项目的架构怎么讲？", ["Runtime", "Planner", "ReAct", "ToolScheduler", "Reflection"]),
+        ("怎么打包发布？", ["python -m build", "sdist", "wheel", "pyproject.toml"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_runtime_mechanics_questions(
+    tmp_path: Path,
+    prompt: str,
+    expected_terms: list[str],
+) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
