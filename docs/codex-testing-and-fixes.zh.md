@@ -1627,6 +1627,30 @@
 - 错误信息必须写入消息和 task result。
 - 异常状态必须被保存，供后续 resume 排查。
 
+### 85. `manus-mini list` 有会话时输出为裸 TSV，演示和排障可读性差
+
+#### 现象
+
+- 亲自执行 `python -m manus_mini list --cwd /Users/liyong/Desktop/ai-manus` 时，输出只有无表头 TSV 行。
+- 用户无法直接看出每列含义、会话总数、会话存储目录，也没有下一步如何恢复会话的提示。
+- 这类问题不影响核心执行，但会明显拉低面试/demo 时的工程成熟度和可诊断性。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中优化 `list` 输出。
+- 有会话时固定展示：
+  - `Session directory`
+  - `Saved sessions` 总数
+  - `SESSION ID / UPDATED / MESSAGES / LAST USER MESSAGE` 表头
+  - 默认恢复最新会话的 `manus-mini resume ... --cwd ...` 示例命令
+- 保留最近用户消息的脱敏和截断逻辑，避免为了可读性回退安全边界。
+
+#### 回归点
+
+- `manus-mini list` 有会话时必须展示目录、总数、表头和恢复命令。
+- 最近用户消息仍必须先脱敏并截断。
+- 空会话时仍保持简洁提示，不输出无意义表头。
+
 ## 本轮新增/调整测试
 
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
@@ -1642,6 +1666,7 @@
   - `resume` 未传 limits 时保留已保存 active task limits
   - `resume` 指向损坏会话文件时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
+  - `list` 有会话时展示会话目录、总数、表头和恢复命令
   - `list` 展示最近用户消息前必须脱敏并截断预览
   - `list` 遇到损坏会话文件时仍能列出正常会话
   - `--help` 展示项目说明、参数用途和默认值，便于首次运行诊断
@@ -1767,7 +1792,7 @@ pytest -q
 - `477 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.28%（门禁 80%）
+- 分支覆盖率：84.29%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助

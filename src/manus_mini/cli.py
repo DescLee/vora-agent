@@ -151,15 +151,24 @@ def main(argv: list[str] | None = None) -> None:
 def _run_list(cwd: Path) -> None:
     store = SessionStore(cwd)
     sessions = store.list_sessions()
+    print(f"Session directory: {store.sessions_dir}")
     if not sessions:
         print("No saved sessions.")
-        print(f"Session directory: {store.sessions_dir}")
         return
+
+    print(f"Saved sessions: {len(sessions)}")
+    print()
+    print(f"{'SESSION ID':<22} {'UPDATED':<19} {'MESSAGES':>8}  LAST USER MESSAGE")
+    print(f"{'-' * 22} {'-' * 19} {'-' * 8}  {'-' * 40}")
     for summary in sessions:
         print(
-            f"{summary.session_id}\t{summary.updated_at:%Y-%m-%d %H:%M:%S}\t"
-            f"{summary.message_count}\t{_format_last_user_message(summary.last_user_message)}"
+            f"{summary.session_id:<22} "
+            f"{summary.updated_at:%Y-%m-%d %H:%M:%S} "
+            f"{summary.message_count:>8}  "
+            f"{_format_last_user_message(summary.last_user_message)}"
         )
+    print()
+    print(f"Resume with: manus-mini resume {sessions[0].session_id} --cwd {cwd}")
 
 
 def _run_resume(

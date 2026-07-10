@@ -8,7 +8,7 @@ from manus_mini.models import LoopLimits, Message, SessionState, TaskState
 from manus_mini.session_store import SessionStore
 
 
-def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_cli_list_prints_readable_session_table_without_opening_tui(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
     session = SessionState.create(cwd=tmp_path)
@@ -19,8 +19,15 @@ def test_cli_list_prints_saved_sessions_without_opening_tui(tmp_path: Path, caps
     main(["list", "--cwd", str(tmp_path)])
 
     out = capsys.readouterr().out
+    assert f"Session directory: {store.sessions_dir}" in out
+    assert "Saved sessions: 1" in out
+    assert "SESSION ID" in out
+    assert "UPDATED" in out
+    assert "MESSAGES" in out
+    assert "LAST USER MESSAGE" in out
     assert session.session_id in out
     assert "上一轮问题" in out
+    assert f"Resume with: manus-mini resume {session.session_id} --cwd {tmp_path}" in out
 
 
 def test_package_exposes_python_module_entrypoint() -> None:
@@ -37,6 +44,7 @@ def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, mo
     out = capsys.readouterr().out
     assert "No saved sessions." in out
     assert str(SessionStore(tmp_path).sessions_dir) in out
+    assert "Saved sessions:" not in out
 
 
 def test_cli_list_redacts_and_truncates_last_user_message(tmp_path: Path, capsys, monkeypatch) -> None:
