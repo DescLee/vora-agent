@@ -5,7 +5,11 @@ from pathlib import Path
 
 from manus_mini.models import LoopLimits
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
+from manus_mini.redaction import redact_sensitive_text
 from manus_mini.session_store import SessionStore
+
+
+MAX_LIST_MESSAGE_PREVIEW_CHARS = 120
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,7 +93,7 @@ def _run_list(cwd: Path) -> None:
     for summary in sessions:
         print(
             f"{summary.session_id}\t{summary.updated_at:%Y-%m-%d %H:%M:%S}\t"
-            f"{summary.message_count}\t{summary.last_user_message}"
+            f"{summary.message_count}\t{_format_last_user_message(summary.last_user_message)}"
         )
 
 
@@ -171,3 +175,10 @@ def _run_tui(
         max_tool_retries=max_tool_retries,
     )
     PromptTui(options=PromptTuiOptions(cwd=cwd, limits=limits, dry_run=dry_run)).run()
+
+
+def _format_last_user_message(message: str) -> str:
+    preview = redact_sensitive_text(message).replace("\r", " ").replace("\n", " ")
+    if len(preview) <= MAX_LIST_MESSAGE_PREVIEW_CHARS:
+        return preview
+    return preview[: MAX_LIST_MESSAGE_PREVIEW_CHARS - 3].rstrip() + "..."

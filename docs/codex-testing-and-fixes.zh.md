@@ -1150,6 +1150,25 @@
 - 嵌套的 `CLIENT_SECRET` 字段必须按字段名脱敏。
 - `token_count` 等统计字段不得被误脱敏。
 
+### 58. 会话列表会暴露完整最近用户消息
+
+#### 现象
+
+- `manus-mini list` 直接打印 `SessionSummary.last_user_message`。
+- 如果最近用户消息很长，列表会被整段内容撑开，影响查找会话。
+- 如果消息中包含 `token=...` 等敏感值，列表命令会在终端里原样展示。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为列表展示增加统一格式化。
+- 最近用户消息展示前先执行敏感信息脱敏，再折叠换行并截断到固定预览长度。
+- 只调整 CLI 展示层，不修改会话持久化数据。
+
+#### 回归点
+
+- `manus-mini list` 不得输出最近用户消息中的原始 token。
+- 超长最近用户消息不得完整刷屏，应以省略号截断展示。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -1158,6 +1177,7 @@
   - `clear` 必须先确认再删除会话
   - `resume` 缺失会话时输出友好错误
   - `resume/remove` 遇到非法 `session_id` 时输出友好错误
+  - `list` 展示最近用户消息前必须脱敏并截断预览
 - [tests/test_llm.py](/Users/liyong/Desktop/ai-manus/tests/test_llm.py)
   - 原始工具调用 DSL 收口
   - LLM 指数退避和 `Retry-After`
@@ -1244,10 +1264,10 @@ pytest -q
 
 结果：
 
-- `422 passed`
+- `423 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.91%（门禁 80%）
+- 分支覆盖率：83.93%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 
@@ -1300,6 +1320,7 @@ pytest -q
 - Shell LLM 风险判定请求不会发送命令里的原始敏感值
 - 长期记忆安全入口不会通过 tags/source_message_ids 落盘敏感值
 - 结构化 payload 中 `api_key` / `CLIENT_SECRET` 字段值会脱敏，`token_count` 不会被误脱敏
+- `manus-mini list` 展示最近用户消息前会脱敏并截断长文本
 
 ## 后续建议
 

@@ -32,6 +32,23 @@ def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, mo
     assert str(SessionStore(tmp_path).sessions_dir) in out
 
 
+def test_cli_list_redacts_and_truncates_last_user_message(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    long_tail = "x" * 200
+    session.messages.append(Message.user(f"请处理 token=secret-token {long_tail}"))
+    store.save(session)
+
+    main(["list", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "secret-token" not in out
+    assert "token=[REDACTED]" in out
+    assert long_tail not in out
+    assert "..." in out
+
+
 def test_cli_resume_loads_session_and_skips_tui_open(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     store = SessionStore(tmp_path)
