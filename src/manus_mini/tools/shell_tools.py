@@ -38,6 +38,7 @@ WORKSPACE_MUTATION_COMMAND_PATTERNS = (
     r"(^|[;&|]\s*)printf\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
     r"(^|[;&|]\s*)echo\b[^|;&]*(>>|>\s*)[A-Za-z0-9_.\-/]+",
 )
+SENSITIVE_READ_COMMANDS = {"awk", "cat", "egrep", "fgrep", "grep", "head", "less", "more", "sed", "tail"}
 COMMAND_RISK_SYSTEM_PROMPT = """You classify shell command risk before execution.
 Return only compact JSON with:
 - risk_level: "high" or "low"
@@ -396,6 +397,12 @@ def analyze_command_risk(
 
 
 def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
+    if _reads_sensitive_workspace_file(command_text):
+        return CommandRisk(
+            True,
+            summary="command reads sensitive workspace files",
+            source="local_heuristic",
+        )
     if _touches_workspace_file(command_text):
         return CommandRisk(
             True,
@@ -410,6 +417,33 @@ def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
                 source="local_heuristic",
             )
     return CommandRisk(False, source="local_heuristic")
+
+
+def _reads_sensitive_workspace_file(command_text: str) -> bool:
+    for segment in re.split(r"[;&|\n]+", command_text):
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        command_name = Path(tokens[0]).name
+        if command_name not in SENSITIVE_READ_COMMANDS:
+            continue
+        if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
+            return True
+    return False
+
+
+def _is_sensitive_shell_path(token: str) -> bool:
+    if token.startswith("-"):
+        return False
+    name = Path(token).name
+    if name == ".env.example":
+        return False
+    if name.startswith(".env"):
+        return True
+    return Path(token).suffix.lower() in {".key", ".pem"}
 
 
 def _touches_workspace_file(command_text: str) -> bool:

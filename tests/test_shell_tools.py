@@ -153,6 +153,26 @@ def test_run_bash_pathlib_open_write_requires_confirmation(tmp_path: Path) -> No
     assert not (tmp_path / "note.md").exists()
 
 
+def test_run_bash_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="cat .env")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
+
+
+def test_run_bash_grep_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / "private.pem").write_text("secret pem", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="grep secret private.pem")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "secret pem" not in result.content
+
+
 def test_run_temp_script_rejects_dangerous_content(tmp_path: Path) -> None:
     result = RunTempScriptTool().run(workspace=tmp_path, content="rm -rf /\n")
 
@@ -171,6 +191,16 @@ def test_run_temp_script_uses_llm_risk_judgement_for_confirmation(tmp_path: Path
     assert preview.summary == "llm says high risk"
     assert result.ok is False
     assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+
+
+def test_run_temp_script_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
+
+    result = RunTempScriptTool().run(workspace=tmp_path, content="head -n 1 .env.test\n")
+
+    assert result.ok is False
+    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert "LLM_API_KEY" not in result.content
 
 
 def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:

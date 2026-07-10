@@ -720,6 +720,27 @@
 - `read_file` 读取 `*.pem` 必须返回 `PROTECTED_PATH`。
 - `.env.example` 仍允许列出和读取。
 
+### 37. `run_bash` / `run_temp_script` 可通过常见读取命令泄露敏感文件
+
+#### 现象
+
+- `list_files` / `read_file` 已经保护敏感文件，但 shell 工具仍可绕过。
+- 真实测试中，`cat .env`、`grep secret private.pem`、`head -n 1 .env.test` 会直接把密钥内容输出给模型。
+- 这会绕过文件工具的 `PROTECTED_PATH` 保护，让敏感内容进入上下文、日志或最终回答。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加本地敏感读取启发式。
+- 对 `cat`、`head`、`tail`、`grep`、`sed`、`awk`、`less`、`more` 等常见读取命令，只要目标包含 `.env*`、`*.pem`、`*.key`，就先进入确认流。
+- `.env.example` 仍作为安全模板例外。
+
+#### 回归点
+
+- `run_bash` 执行 `cat .env` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_bash` 执行 `grep ... private.pem` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- `run_temp_script` 执行 `head -n 1 .env.test` 必须返回 `COMMAND_REQUIRES_CONFIRMATION`。
+- 未确认前，shell 输出不得包含密钥内容。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -767,6 +788,7 @@
   - shell 超时终止整个子进程组
   - shell 响应 Executor 协作式取消信号
   - `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写入必须先进入确认流
+  - `cat` / `grep` / `head` 等常见 shell 读取命令读取敏感文件时必须先进入确认流
 - [tests/test_evals.py](/Users/liyong/Desktop/ai-manus/tests/test_evals.py)
   - 声明式 eval 与 runner 一一对应
   - JSON/Markdown 报告生成
@@ -784,7 +806,7 @@ pytest -q
 
 结果：
 
-- `383 passed`
+- `386 passed`
 - `mypy`：29 个源码文件无错误
 - 分支覆盖率：83.58%（门禁 80%）
 - Agent eval：9/9 通过
@@ -815,6 +837,7 @@ pytest -q
 - `.env.example` 仍可作为安全模板文件写入
 - `list_files` 不会列出 `.env*`、`*.pem`、`*.key` 等敏感文件
 - `read_file` 直接读取敏感配置或密钥文件时会返回 `PROTECTED_PATH`
+- `run_bash` / `run_temp_script` 常见读取命令读取敏感文件时会先等待确认
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文
