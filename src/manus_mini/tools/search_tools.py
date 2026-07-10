@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import io
+import html
 import ipaddress
 import re
 import socket
 import warnings
 from contextlib import redirect_stderr
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from duckduckgo_search import DDGS
@@ -59,8 +60,14 @@ class WebSearchTool(BaseTool):
                 error_code="INVALID_TOOL_PARAMS",
             )
         safe_query = redact_sensitive_text(query)
-        max_results = int(kwargs.get("max_results", 5))
-        max_results = max(1, min(max_results, 20))
+        max_results = _bounded_int(kwargs.get("max_results", 5), default=5, minimum=1, maximum=20)
+        if max_results is None:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="invalid max_results: must be an integer",
+                error_code="INVALID_TOOL_PARAMS",
+            )
 
         warning_records = []
         stderr_buffer = io.StringIO()
@@ -158,11 +165,36 @@ class FetchWebpageTool(BaseTool):
                 summary="missing required argument: url",
                 error_code="INVALID_TOOL_PARAMS",
             )
-        if not url.startswith(("http://", "https://")):
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"}:
             return ToolResult(
                 tool_name=self.name,
                 ok=False,
                 summary="Invalid URL: must start with http:// or https://",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+        if not parsed.hostname:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="Invalid URL: missing host",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+        try:
+            parsed.port
+        except ValueError as exc:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"Invalid URL port: {exc}",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+        max_chars = _bounded_int(kwargs.get("max_chars", 8000), default=8000, minimum=1000, maximum=50000)
+        if max_chars is None:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="invalid max_chars: must be an integer",
                 error_code="INVALID_TOOL_PARAMS",
             )
         protected_reason = _protected_fetch_url_reason(url)
@@ -173,20 +205,23 @@ class FetchWebpageTool(BaseTool):
                 summary=f"protected URL: {protected_reason}",
                 error_code="PROTECTED_URL",
             )
-        max_chars = int(kwargs.get("max_chars", 8000))
-        max_chars = max(1000, min(max_chars, 50000))
         safe_url = redact_sensitive_text(url)
 
         try:
-            resp = requests.get(url, timeout=15, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; ManusMini/1.0; +https://github.com/manus-mini)",
-            })
+            resp = _fetch_with_protected_redirects(url)
             resp.raise_for_status()
             text = _strip_html_tags(resp.text)
             text = re.sub(r"\s+", " ", text).strip()
             if len(text) > max_chars:
                 text = text[:max_chars] + "\n\n[... content truncated ...]"
             content_type = resp.headers.get("content-type", "")
+        except ProtectedFetchUrlError as exc:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=redact_sensitive_text(f"protected URL: {exc}"),
+                error_code="PROTECTED_URL",
+            )
         except requests.RequestException as exc:
             return ToolResult(
                 tool_name=self.name,
@@ -204,18 +239,37 @@ class FetchWebpageTool(BaseTool):
         )
 
 
-def _strip_html_tags(html: str) -> str:
+def _fetch_with_protected_redirects(url: str, *, max_redirects: int = 5) -> requests.Response:
+    current_url = url
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; ManusMini/1.0; +https://github.com/manus-mini)",
+    }
+    for _ in range(max_redirects + 1):
+        resp = requests.get(current_url, timeout=15, headers=headers, allow_redirects=False)
+        if not getattr(resp, "is_redirect", False):
+            return resp
+        location = resp.headers.get("location") or resp.headers.get("Location")
+        if not location:
+            return resp
+        next_url = urljoin(current_url, location)
+        protected_reason = _protected_fetch_url_reason(next_url)
+        if protected_reason is not None:
+            raise ProtectedFetchUrlError(f"redirect target blocked: {protected_reason}")
+        current_url = next_url
+    raise requests.TooManyRedirects(f"exceeded {max_redirects} redirects")
+
+
+class ProtectedFetchUrlError(requests.RequestException):
+    pass
+
+
+def _strip_html_tags(html_content: str) -> str:
     """Strip HTML tags and extract readable text."""
-    text = re.sub(r"<head[^>]*>.*?</head>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<head[^>]*>.*?</head>", "", html_content, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"&[a-zA-Z]+;", " ", text)
-    return text
+    return html.unescape(text)
 
 
 def _protected_fetch_url_reason(url: str) -> str | None:
@@ -223,7 +277,10 @@ def _protected_fetch_url_reason(url: str) -> str | None:
     host = parsed.hostname
     if not host:
         return "missing host"
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    except ValueError as exc:
+        return f"invalid port: {exc}"
     try:
         addresses = set()
         for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
@@ -278,6 +335,14 @@ def _web_search_data(
     if captured_stderr:
         data["stderr"] = captured_stderr
     return data
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(minimum, min(parsed, maximum))
 
 
 def _truncate(text: str, max_len: int) -> str:

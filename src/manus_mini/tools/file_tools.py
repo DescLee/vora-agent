@@ -110,7 +110,11 @@ class ListFilesTool(BaseTool):
         gitignore_rules = load_gitignore_rules(workspace_root)
 
         if root.is_file():
-            if is_gitignored(root, workspace_root, gitignore_rules) or _is_sensitive_file_path(_display_path(root, workspace_root)):
+            if (
+                not _is_path_within(root, workspace_root)
+                or is_gitignored(root, workspace_root, gitignore_rules)
+                or _is_sensitive_file_path(_display_path(root, workspace_root))
+            ):
                 files = []
             else:
                 files = [root]
@@ -119,6 +123,7 @@ class ListFilesTool(BaseTool):
                 item
                 for item in sorted(root.rglob("*"))
                 if item.is_file()
+                and _is_path_within(item, workspace_root)
                 and not _is_noise_path(item, root)
                 and not is_gitignored(item, workspace_root, gitignore_rules)
                 and not _is_sensitive_file_path(_display_path(item, workspace_root))
@@ -360,7 +365,10 @@ def load_gitignore_rules(workspace: Path) -> list[GitignoreRule]:
 def is_gitignored(path: Path, workspace: Path, rules: list[GitignoreRule]) -> bool:
     if not rules:
         return False
-    relative = path.resolve().relative_to(workspace.resolve()).as_posix()
+    try:
+        relative = path.resolve().relative_to(workspace.resolve()).as_posix()
+    except ValueError:
+        return True
     ignored = False
     for rule in rules:
         if _matches_gitignore_rule(relative, rule):
@@ -406,6 +414,14 @@ def _display_path(path: Path, workspace_root: Path) -> str:
         return resolved.relative_to(workspace_root).as_posix()
     except ValueError:
         return resolved.as_posix()
+
+
+def _is_path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 class _ToolPathError(Exception):
@@ -806,9 +822,11 @@ class MakeDirectoryTool(BaseTool):
             target = _resolve_tool_path(self.name, workspace, path)
         except _ToolPathError as error:
             return error.result
-        target.mkdir(parents=True, exist_ok=True)
         workspace_root = workspace.expanduser().resolve()
         relative_path = _display_path(target, workspace_root)
+        if _is_protected_write_path(Path(relative_path)):
+            return ToolResult(tool_name=self.name, ok=False, summary=f"protected directory target: {relative_path}", error_code="PROTECTED_PATH")
+        target.mkdir(parents=True, exist_ok=True)
         return ToolResult(tool_name=self.name, ok=True, summary=f"created directory {path}", written_path=relative_path)
 
 

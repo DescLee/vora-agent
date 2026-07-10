@@ -188,6 +188,31 @@ def test_list_files_skips_sensitive_files_without_gitignore(tmp_path: Path) -> N
     assert result.paths == [".env.example", "README.md"]
 
 
+def test_list_files_skips_symlink_to_file_outside_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-visible.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (tmp_path / "inside.txt").write_text("inside", encoding="utf-8")
+    (tmp_path / "outside-link.txt").symlink_to(outside)
+
+    result = ListFilesTool().run(workspace=tmp_path)
+
+    assert result.ok is True
+    assert result.paths == ["inside.txt"]
+
+
+def test_list_files_skips_symlink_to_directory_outside_workspace(tmp_path: Path) -> None:
+    outside_dir = tmp_path.parent / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("outside", encoding="utf-8")
+    (tmp_path / "inside.txt").write_text("inside", encoding="utf-8")
+    (tmp_path / "outside-dir-link").symlink_to(outside_dir, target_is_directory=True)
+
+    result = ListFilesTool().run(workspace=tmp_path)
+
+    assert result.ok is True
+    assert result.paths == ["inside.txt"]
+
+
 def test_read_file_rejects_binary_files(tmp_path: Path) -> None:
     (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02\x03")
 
@@ -572,6 +597,14 @@ def test_web_search_validates_query() -> None:
     assert "query" in result.summary
 
 
+def test_web_search_rejects_invalid_max_results() -> None:
+    result = WebSearchTool().run(query="manus", max_results="many")
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "max_results" in result.summary
+
+
 def test_web_search_formats_results(monkeypatch) -> None:
     from manus_mini.tools import search_tools
 
@@ -696,6 +729,53 @@ def test_fetch_webpage_validates_url() -> None:
     assert "http" in result.summary
 
 
+def test_fetch_webpage_accepts_uppercase_http_scheme(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+    import socket
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Hello</body></html>"
+        url = "HTTP://example.com"
+        is_redirect = False
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout, headers, allow_redirects):  # noqa: ANN001, ANN201
+        assert url == "HTTP://example.com"
+        assert allow_redirects is False
+        return FakeResponse()
+
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202, ARG002
+        return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(search_tools.requests, "get", fake_get)
+
+    result = FetchWebpageTool().run(url="HTTP://example.com")
+
+    assert result.ok is True
+    assert "Hello" in result.content
+
+
+def test_fetch_webpage_rejects_invalid_max_chars() -> None:
+    result = FetchWebpageTool().run(url="https://example.com", max_chars="lots")
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "max_chars" in result.summary
+
+
+def test_fetch_webpage_rejects_invalid_port_without_crashing() -> None:
+    result = FetchWebpageTool().run(url="https://example.com:notaport")
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "port" in result.summary
+
+
 def test_fetch_webpage_preview_redacts_secret_values_in_url() -> None:
     preview = FetchWebpageTool().preview(url="https://example.com/callback?access_token=plain-secret&ok=1")
 
@@ -757,10 +837,11 @@ def test_fetch_webpage_strips_html(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url, timeout, headers):  # noqa: ANN001, ANN201
+    def fake_get(url, timeout, headers, allow_redirects):  # noqa: ANN001, ANN201
         assert url == "https://example.com"
         assert timeout == 15
         assert "User-Agent" in headers
+        assert allow_redirects is False
         return FakeResponse()
 
     def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202
@@ -779,6 +860,70 @@ def test_fetch_webpage_strips_html(monkeypatch) -> None:
     assert result.data["content_type"] == "text/html"
 
 
+def test_fetch_webpage_decodes_numeric_html_entities(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+    import socket
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+        text = "<html><body><p>&#20320;&#22909; &copy;</p></body></html>"
+        url = "https://example.com"
+        is_redirect = False
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout, headers, allow_redirects):  # noqa: ANN001, ANN201, ARG002
+        return FakeResponse()
+
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202, ARG002
+        return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(search_tools.requests, "get", fake_get)
+
+    result = FetchWebpageTool().run(url="https://example.com", max_chars=1000)
+
+    assert result.ok is True
+    assert "你好 ©" in result.content
+
+
+def test_fetch_webpage_rejects_redirect_to_private_network(monkeypatch) -> None:
+    from manus_mini.tools import search_tools
+    import socket
+
+    class RedirectResponse:
+        headers = {"location": "http://127.0.0.1/admin"}
+        text = ""
+        url = "https://example.com"
+        is_redirect = True
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout, headers, allow_redirects):  # noqa: ANN001, ANN201, ARG002
+        assert allow_redirects is False
+        return RedirectResponse()
+
+    def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202, ARG002
+        if host == "example.com":
+            return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+        if host == "127.0.0.1":
+            return [(search_tools.socket.AF_INET, search_tools.socket.SOCK_STREAM, 0, "", ("127.0.0.1", port))]
+        raise AssertionError(host)
+
+    monkeypatch.setattr(search_tools, "socket", socket, raising=False)
+    monkeypatch.setattr(search_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(search_tools.requests, "get", fake_get)
+
+    result = FetchWebpageTool().run(url="https://example.com")
+
+    assert result.ok is False
+    assert result.error_code == "PROTECTED_URL"
+    assert "redirect" in result.summary
+
+
 def test_fetch_webpage_redacts_secret_values_in_url_outputs(monkeypatch) -> None:
     from manus_mini.tools import search_tools
     import socket
@@ -790,7 +935,8 @@ def test_fetch_webpage_redacts_secret_values_in_url_outputs(monkeypatch) -> None
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url, timeout, headers):  # noqa: ANN001, ANN201, ARG002
+    def fake_get(url, timeout, headers, allow_redirects):  # noqa: ANN001, ANN201, ARG002
+        assert allow_redirects is False
         return FakeResponse()
 
     def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202, ARG002
@@ -827,3 +973,11 @@ def test_make_directory_creates_nested_directory(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert (tmp_path / "a" / "b" / "c").is_dir()
+
+
+def test_make_directory_rejects_hidden_directories(tmp_path: Path) -> None:
+    result = MakeDirectoryTool().run(workspace=tmp_path, path=".secret/cache")
+
+    assert result.ok is False
+    assert result.error_code == "PROTECTED_PATH"
+    assert not (tmp_path / ".secret").exists()

@@ -1679,8 +1679,15 @@
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
   - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
+  - `list_files` 遇到指向工作区外的 symlink 文件或目录时跳过，不展示外部路径也不崩溃
   - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
+  - `make_directory` 拒绝创建隐藏目录，避免绕过隐藏路径写入保护
   - `fetch_webpage` 必须拒绝本机、内网、link-local 和解析到私网的 URL
+  - `fetch_webpage` 必须拒绝重定向到本机、内网、link-local 和解析到私网的 URL
+  - `fetch_webpage` 对大小写 HTTP/HTTPS scheme 兼容处理
+  - `fetch_webpage` 非整数 `max_chars` 和非法端口必须返回结构化 `INVALID_TOOL_PARAMS`
+  - `fetch_webpage` 正确解码数字 HTML entity 和常见命名 entity
+  - `web_search` 非整数 `max_results` 必须返回结构化 `INVALID_TOOL_PARAMS`
   - `web_search` / `fetch_webpage` 返回 URL 或 query 前必须脱敏 query secret
   - `fetch_webpage` preview 返回前必须脱敏 URL query secret
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
@@ -1754,10 +1761,10 @@ pytest -q
 
 结果：
 
-- `465 passed`
+- `474 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
-- 分支覆盖率：84.31%（门禁 80%）
+- 分支覆盖率：84.28%（门禁 80%）
 - Agent eval：9/9 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
