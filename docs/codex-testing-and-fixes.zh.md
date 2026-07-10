@@ -697,6 +697,29 @@
 - `replace_in_file` 修改 `.env.test` 必须返回 `PROTECTED_PATH`，且原内容保持不变。
 - `.env.example` 仍允许作为模板文件写入。
 
+### 36. `list_files` / `read_file` 会暴露敏感配置文件
+
+#### 现象
+
+- 写入路径已经保护 `.env*`，但真实测试发现读路径仍会暴露敏感文件。
+- 没有 `.gitignore` 时，`list_files` 会列出 `.env`、`.env.test`、`private.pem`、`service.key`。
+- `read_file` 可直接读取 `.env.test` 和 `private.pem` 内容。
+- 这和安全文档中 `.env*`、`*.pem`、`*.key` 作为 deny pattern 的目标不一致，也会让模型把密钥内容带入上下文、日志或最终回答。
+
+#### 修复
+
+- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中新增统一敏感文件判断。
+- `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`。
+- `read_file` 直接读取敏感文件时返回 `PROTECTED_PATH`。
+- `.env.example` 仍作为安全模板例外，可被列出和读取。
+
+#### 回归点
+
+- `list_files` 无 `.gitignore` 时也不能列出 `.env`、`.env.test`、`*.pem`、`*.key`。
+- `read_file` 读取 `.env.test` 必须返回 `PROTECTED_PATH`。
+- `read_file` 读取 `*.pem` 必须返回 `PROTECTED_PATH`。
+- `.env.example` 仍允许列出和读取。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -714,6 +737,8 @@
 - [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
   - `.env.test` 等环境变量文件变体必须被所有文件写入工具拒绝
   - `.env.example` 仍允许作为模板文件写入
+  - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`
+  - `read_file` 直接读取敏感配置或密钥文件时返回 `PROTECTED_PATH`
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - fallback 高价值回答
   - 空结果保护
@@ -759,9 +784,9 @@ pytest -q
 
 结果：
 
-- `381 passed`
+- `383 passed`
 - `mypy`：29 个源码文件无错误
-- 分支覆盖率：83.55%（门禁 80%）
+- 分支覆盖率：83.58%（门禁 80%）
 - Agent eval：9/9 通过
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
@@ -788,6 +813,8 @@ pytest -q
 - `run_bash` 通过 `Path(...).write_bytes(...)` 和 `Path(...).open('w')` 写工作区文件时会先等待确认
 - `write_file` / `append_file` / `replace_in_file` 不能写入 `.env.test` 等环境变量文件变体
 - `.env.example` 仍可作为安全模板文件写入
+- `list_files` 不会列出 `.env*`、`*.pem`、`*.key` 等敏感文件
+- `read_file` 直接读取敏感配置或密钥文件时会返回 `PROTECTED_PATH`
 - 复合 shell 命令中后续生产代码写入也不能绕过“先测试再改代码”的门禁
 - TUI 会直接展示英文 reasoning，并对过长内容执行截断
 - 取消或失败任务的结果不会作为 `已有产物` 污染下一轮上下文

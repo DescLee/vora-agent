@@ -107,7 +107,10 @@ class ListFilesTool(BaseTool):
         gitignore_rules = load_gitignore_rules(workspace_root)
 
         if root.is_file():
-            files = [root] if not is_gitignored(root, workspace_root, gitignore_rules) else []
+            if is_gitignored(root, workspace_root, gitignore_rules) or _is_sensitive_file_path(_display_path(root, workspace_root)):
+                files = []
+            else:
+                files = [root]
         else:
             files = [
                 item
@@ -115,6 +118,7 @@ class ListFilesTool(BaseTool):
                 if item.is_file()
                 and not _is_noise_path(item, root)
                 and not is_gitignored(item, workspace_root, gitignore_rules)
+                and not _is_sensitive_file_path(_display_path(item, workspace_root))
             ]
 
         paths = [_display_path(item, workspace_root) for item in files]
@@ -190,6 +194,10 @@ class ReadFileTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary="file not found", error_code="FILE_NOT_FOUND")
         if not target.is_file():
             return ToolResult(tool_name=self.name, ok=False, summary="not a file", error_code="INVALID_TOOL_PARAMS")
+        workspace_root = workspace.expanduser().resolve()
+        relative_path = _display_path(target, workspace_root)
+        if _is_sensitive_file_path(relative_path):
+            return ToolResult(tool_name=self.name, ok=False, summary=f"protected read target: {relative_path}", error_code="PROTECTED_PATH")
         max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_READ_BYTES)
         size = target.stat().st_size
         has_start_index = "start_index" in kwargs
@@ -757,9 +765,17 @@ def _is_protected_write_path(relative_path: Path) -> bool:
     parts = relative_path.parts
     if not parts:
         return True
-    if relative_path.name.startswith(".env") and relative_path.name not in SAFE_ENV_TEMPLATE_FILE_NAMES:
+    if _is_sensitive_file_path(relative_path):
         return True
     return any(part.startswith(".") for part in parts[:-1])
+
+
+def _is_sensitive_file_path(path: str | Path) -> bool:
+    candidate = Path(path)
+    name = candidate.name
+    if name.startswith(".env") and name not in SAFE_ENV_TEMPLATE_FILE_NAMES:
+        return True
+    return candidate.suffix.lower() in {".pem", ".key"}
 
 
 def _atomic_write_bytes(target: Path, content: bytes) -> None:

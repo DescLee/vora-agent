@@ -148,6 +148,20 @@ def test_list_files_skips_common_build_and_dependency_outputs_without_gitignore(
     assert result.paths == ["src/main.py"]
 
 
+def test_list_files_skips_sensitive_files_without_gitignore(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
+    (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
+    (tmp_path / ".env.example").write_text("LLM_API_KEY=", encoding="utf-8")
+    (tmp_path / "private.pem").write_text("pem", encoding="utf-8")
+    (tmp_path / "service.key").write_text("key", encoding="utf-8")
+    (tmp_path / "README.md").write_text("readme", encoding="utf-8")
+
+    result = ListFilesTool().run(workspace=tmp_path)
+
+    assert result.ok is True
+    assert result.paths == [".env.example", "README.md"]
+
+
 def test_read_file_rejects_binary_files(tmp_path: Path) -> None:
     (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02\x03")
 
@@ -155,6 +169,23 @@ def test_read_file_rejects_binary_files(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.error_code == "BINARY_FILE_UNSUPPORTED"
+
+
+def test_read_file_rejects_sensitive_files(tmp_path: Path) -> None:
+    (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
+    (tmp_path / ".env.example").write_text("LLM_API_KEY=", encoding="utf-8")
+    (tmp_path / "private.pem").write_text("pem", encoding="utf-8")
+
+    env_result = ReadFileTool().run(workspace=tmp_path, path=".env.test")
+    pem_result = ReadFileTool().run(workspace=tmp_path, path="private.pem")
+    example_result = ReadFileTool().run(workspace=tmp_path, path=".env.example")
+
+    assert env_result.ok is False
+    assert env_result.error_code == "PROTECTED_PATH"
+    assert pem_result.ok is False
+    assert pem_result.error_code == "PROTECTED_PATH"
+    assert example_result.ok is True
+    assert example_result.content == "LLM_API_KEY="
 
 
 def test_read_file_rejects_oversized_files(tmp_path: Path) -> None:
