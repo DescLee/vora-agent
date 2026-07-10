@@ -71,6 +71,11 @@ UNAVAILABLE_GOAL_KEYWORDS = ("模型不可用", "llm 不可用", "llm不可用",
 CAPABILITY_GOAL_KEYWORDS = ("核心能力", "主要能力", "功能亮点", "项目亮点")
 SECURITY_GOAL_KEYWORDS = ("怎么保证安全", "安全", "安全边界", "权限")
 TESTING_GOAL_KEYWORDS = ("测试怎么跑", "怎么测试", "如何测试", "验证怎么跑", "质量门禁")
+FILE_EDIT_GOAL_KEYWORDS = ("怎么修改文件", "如何修改文件", "改文件", "修改文件")
+WRITE_CONFIRMATION_GOAL_KEYWORDS = ("写入确认", "确认写入", "人工确认", "确认流")
+WORKSPACE_BOUNDARY_GOAL_KEYWORDS = ("工作区外", "越界", "workspace 外", "cwd 外")
+CODE_QUALITY_GOAL_KEYWORDS = ("改代码", "改完是对的", "代码修改", "代码质量")
+RESUME_SESSION_GOAL_KEYWORDS = ("恢复刚才", "恢复会话", "继续修改", "继续会话")
 REPORT_GOAL_KEYWORDS = ("行研", "研究", "调研", "摘要", "总结", "报告")
 EXPLICIT_WRITE_INTENT_KEYWORDS = (
     "保存到",
@@ -719,6 +724,25 @@ class ReActLoop:
             return (
                 "建议按这个顺序验证：`pytest -q`、`ruff check src tests evals`、`mypy`、"
                 "`python evals/run_evals.py`、`pytest --cov=manus_mini --cov-report=term-missing`、`python -m build`。"
+            )
+        if any(keyword in compact_focus for keyword in FILE_EDIT_GOAL_KEYWORDS):
+            return (
+                "修改文件通常是先用 `read_file` 看上下文，再用 `replace_in_file` 做局部替换；"
+                "涉及写入时会进入写入确认，确认后才真正落盘。"
+            )
+        if any(keyword in compact_focus for keyword in WRITE_CONFIRMATION_GOAL_KEYWORDS):
+            return "写入确认会展示 diff 和目标路径，用户输入确认才执行；输入取消或其它内容会拒绝本次写入。"
+        if any(keyword in compact_focus for keyword in WORKSPACE_BOUNDARY_GOAL_KEYWORDS):
+            return "不能修改工作区外的文件。文件工具会校验路径边界，越界访问会返回 `PATH_OUT_OF_WORKSPACE`。"
+        if any(keyword in compact_focus for keyword in CODE_QUALITY_GOAL_KEYWORDS):
+            return (
+                "代码修改会强调先测试再改代码；Reflection 会检查测试证据，必要时运行 pytest gate，"
+                "没有验证证据的代码结果不会直接通过。"
+            )
+        if any(keyword in compact_focus for keyword in RESUME_SESSION_GOAL_KEYWORDS):
+            return (
+                "先用 `manus-mini list --cwd .` 找到 `session_id`，再执行 "
+                "`manus-mini resume <session_id> --cwd .` 继续同一个会话。"
             )
         if _goal_mentions_current_project(compact_focus) and any(
             keyword in compact_focus for keyword in OVERVIEW_GOAL_KEYWORDS

@@ -2682,6 +2682,34 @@ def test_runtime_fallback_answers_interview_project_questions(tmp_path: Path, pr
         assert term in result.messages[-1].content
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_terms"),
+    [
+        ("怎么修改文件？", ["read_file", "replace_in_file", "写入确认"]),
+        ("写入确认是怎么做的？", ["diff", "确认", "取消"]),
+        ("能不能修改工作区外的文件？", ["不能", "工作区", "PATH_OUT_OF_WORKSPACE"]),
+        ("如果要改代码，怎么保证改完是对的？", ["测试", "Reflection", "pytest"]),
+        ("怎么恢复刚才的会话继续修改？", ["manus-mini list", "manus-mini resume", "session_id"]),
+    ],
+)
+def test_runtime_fallback_answers_interview_operation_questions(tmp_path: Path, prompt: str, expected_terms: list[str]) -> None:
+    class BrokenLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            raise ValueError("network unavailable")
+
+    session = SessionState.create(cwd=tmp_path)
+    runtime = AgentRuntime(llm=ScriptedLLM())
+    runtime.react_loop.llm = BrokenLLM()
+
+    result = runtime.on_user_message(prompt, session)
+
+    assert result.active_task is not None
+    assert result.active_task.status == "done"
+    assert "兜底原因" not in result.messages[-1].content
+    for term in expected_terms:
+        assert term in result.messages[-1].content
+
+
 def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path: Path) -> None:
     class BrokenLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
