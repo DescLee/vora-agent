@@ -2110,13 +2110,14 @@ pytest -q
 
 结果：
 
-- `545 passed`
+- `546 passed`
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - 分支覆盖率：84.27%（门禁 80%）
 - Agent eval：12/12 通过
 - `python -m build`：通过，生成 sdist 和 wheel
 - `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
+- `python -m manus_mini doctor --cwd /private/tmp/manus-mini-doctor-check`：通过，能展示本地存储和 LLM 配置诊断
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -2176,6 +2177,7 @@ pytest -q
 - `manus-mini clear` 在 stdin 不可读时会取消操作，不再输出 traceback
 - `manus-mini resume <session-id> --max-react 1 --cwd ...` 不再被 argparse 拒绝
 - `manus-mini resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
+- `manus-mini doctor --cwd ...` 能展示项目隔离存储、会话数量和 LLM 配置状态，且不泄露 API key 原文
 - 旧交互启动子命令已被拒绝，无参执行只打印帮助
 - `python -m manus_mini --help` 不再展示旧交互启动子命令
 - 规则兜底的启动说明不再推荐旧交互启动子命令

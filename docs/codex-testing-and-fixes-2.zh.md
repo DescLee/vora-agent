@@ -759,8 +759,32 @@
 - `python evals/run_evals.py` 必须返回 12/12 通过。
 - markdown 报告中应同时展示用例明细和分类统计。
 
+### 145. 面试演示前缺少本地自检入口
+
+#### 现象
+
+- 演示前需要确认当前工作目录、项目隔离存储路径、会话目录、日志目录、memory DB 和 LLM 配置是否就绪。
+- 旧流程只能分别看 README、`.env`、`list` 输出和运行时错误，现场排障路径分散。
+
+#### 修复
+
+- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中新增 `manus-mini doctor --cwd .`。
+- 该命令只检查本地配置和存储路径，不主动请求 LLM API，避免自检依赖网络或模型服务。
+- 输出包括项目存储目录、sessions/logs/outputs/memory 路径、已保存会话数、LLM provider/base URL/API key 是否配置、模型名和下一步命令。
+- 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中补充启动自检能力和运行示例。
+
+#### 回归点
+
+- `manus-mini doctor --cwd <目录>` 应能输出本地诊断信息。
+- `doctor` 不应泄露 `LLM_API_KEY` 原始值。
+- 顶层 help 和 `doctor --help` 应展示自检入口与“不调用 LLM API”的边界。
+
 ## 本轮新增/调整测试
 
+- [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
+  - 增加 `test_cli_doctor_prints_local_setup_without_leaking_api_key`，覆盖本地自检输出、会话数量和 API key 不泄露。
+  - 更新 `test_cli_rejects_removed_tui_subcommand`、`test_cli_help_describes_global_options_and_defaults` 和 `test_cli_subcommand_help_describes_cwd_and_force_options`，确认新增 `doctor` 子命令和 help 文案。
+  - 复用 `test_cli_without_command_opens_tui` 和 `test_cli_help_does_not_expose_tui_as_command_or_concept`，确认 `manus-mini` 默认进入 TUI 且 `manus-mini tui` 不被重新暴露。
 - [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
   - 增加 `test_runtime_fallback_answers_interview_engineering_questions`，覆盖模型配置、日志产物、上下文压缩、长期记忆、搜索失败和历史会话查看六类面试高频追问。
   - 增加 `test_runtime_fallback_answers_interview_runtime_mechanics_questions`，覆盖 dry-run、命令风险、工具调度、Reflection、eval、架构讲法和打包发布七类面试高频追问。
@@ -775,10 +799,6 @@
   - 增加 `test_readme_positions_project_as_agent_runtime_not_interview_project`，确认 README 把项目定位为本地 Agent Runtime，而不是面试项目。
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 扩展 `test_format_welcome_explains_limits_and_controls`，覆盖默认 TUI 入口、历史会话查看、写入确认和项目隔离存储位置。
-- [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
-  - 更新 `test_cli_help_describes_global_options_and_defaults`，确认根帮助展示默认交互入口。
-  - 复用 `test_cli_without_command_opens_tui`、`test_cli_rejects_removed_tui_subcommand` 和 `test_cli_help_does_not_expose_tui_as_command_or_concept`，确认 `manus-mini` 默认进入 TUI 且 `manus-mini tui` 不被重新暴露。
-
 ## 验证结果
 
 本轮修复完成后，已执行：
@@ -788,15 +808,17 @@ pytest -q
 ruff check src tests evals
 mypy
 python evals/run_evals.py
+python -m manus_mini doctor --cwd /private/tmp/manus-mini-doctor-check
 pytest --cov=manus_mini --cov-report=term-missing
 python -m build
 ```
 
 结果：
 
-- `pytest -q`：545 passed
+- `pytest -q`：546 passed
 - `ruff check src tests evals`：通过
 - `mypy`：30 个源码文件无错误
 - `python evals/run_evals.py`：12/12 通过
+- `python -m manus_mini doctor --cwd /private/tmp/manus-mini-doctor-check`：通过，输出本地存储和 LLM 配置诊断
 - `pytest --cov=manus_mini --cov-report=term-missing`：85.17%（门禁 80%）
 - `python -m build`：沙箱内因 DNS/PyPI 访问失败，使用外部权限重跑后通过，生成 sdist 和 wheel

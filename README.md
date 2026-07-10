@@ -30,6 +30,7 @@
 | 长期记忆 | 已实现 | SQLite 存储，敏感信息过滤，关键词检索。 |
 | 会话持久化 | 已实现 | list/resume/delete/clear，支持中断后修复 tool message。 |
 | 上下文压缩 | 已实现 | 用户消息后和 LLM 返回后同步压缩；按 50/70/90 阈值压缩工具输出、摘要历史、强制截断；压缩时保持 assistant/tool exchange 成组完整。 |
+| 启动自检 | 已实现 | `manus-mini doctor` 可检查本地存储路径、会话数量和 LLM 配置完整性。 |
 | eval 雏形 | 已实现 | `evals/run_evals.py` 可验证关键 Agent 行为。 |
 
 ## 当前边界
@@ -66,6 +67,7 @@ LLM_RETRY_BACKOFF_SECONDS=0.25
 
 ```bash
 manus-mini
+manus-mini doctor --cwd .
 manus-mini run "总结一下当前项目" --cwd .
 ```
 
@@ -73,6 +75,7 @@ manus-mini run "总结一下当前项目" --cwd .
 
 ```bash
 manus-mini --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
+manus-mini doctor --cwd .
 manus-mini run "总结一下当前项目" --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run
 manus-mini list
 manus-mini resume <session_id> --cwd . --max-steps 3 --max-react 99 --max-reflect 3 --dry-run

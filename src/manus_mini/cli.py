@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+from manus_mini.config import AppConfig
+from manus_mini.logging import project_logs_dir, project_memory_path, project_outputs_dir, project_storage_dir
 from manus_mini.models import LoopLimits, SessionState
 from manus_mini.prompt_tui import PromptTui, PromptTuiOptions
 from manus_mini.redaction import redact_sensitive_text
@@ -35,6 +37,12 @@ CLEAR_HELP_EPILOG = "\n".join(
         "Example: manus-mini clear --cwd .",
     ]
 )
+DOCTOR_HELP_EPILOG = "\n".join(
+    [
+        "This does not call the LLM API; it only checks local configuration and storage.",
+        "Example: manus-mini doctor --cwd .",
+    ]
+)
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -61,6 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser("list", help="list saved sessions")
     _add_cwd_option(list_parser, dest="subcommand_cwd", default=None)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="check local setup and storage paths",
+        description="check local setup and storage paths",
+        epilog=DOCTOR_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
+    )
+    _add_cwd_option(doctor_parser, dest="subcommand_cwd", default=None)
 
     run_parser = subparsers.add_parser(
         "run",
@@ -167,6 +184,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "list":
         _run_list(cwd)
         return
+    if args.command == "doctor":
+        _run_doctor(cwd)
+        return
     if args.command == "run":
         _run_once(
             cwd=cwd,
@@ -240,6 +260,46 @@ def _run_list(cwd: Path) -> None:
     print(f"Resume with: manus-mini resume {sessions[0].session_id} --cwd {cwd}")
     print(f"Remove with: manus-mini remove {sessions[0].session_id} --cwd {cwd}")
     print(f"Clear all with: manus-mini clear --cwd {cwd}")
+
+
+def _run_doctor(cwd: Path) -> None:
+    config = AppConfig.from_env(cwd / ".env")
+    store = SessionStore(cwd)
+    storage_dir = project_storage_dir(cwd)
+    logs_dir = project_logs_dir(cwd)
+    outputs_dir = project_outputs_dir(cwd)
+    memory_path = project_memory_path(cwd)
+    sessions = store.list_sessions()
+    llm_ready = (
+        config.llm_provider == "openai-compatible"
+        and bool(config.llm_base_url)
+        and bool(config.llm_api_key)
+    )
+
+    print("Manus Mini Doctor")
+    print(f"CWD: {cwd}")
+    print()
+    print("Storage")
+    print(f"- Project storage: {storage_dir}")
+    print(f"- Sessions: {store.sessions_dir} ({len(sessions)} saved)")
+    print(f"- Logs: {logs_dir}")
+    print(f"- Outputs: {outputs_dir}")
+    print(f"- Memory DB: {memory_path}")
+    print()
+    print("LLM Config")
+    print(f"- Status: {'ready' if llm_ready else 'incomplete'}")
+    print(f"- Provider: {config.llm_provider or '[missing]'}")
+    print(f"- Base URL: {config.llm_base_url or '[missing]'}")
+    print(f"- API key: {'configured' if config.llm_api_key else '[missing]'}")
+    print(f"- Model: {config.llm_model}")
+    print(f"- Config source: {config.llm_config_source or '[not found]'}")
+    print()
+    print("Next")
+    if not llm_ready:
+        print("- Configure LLM_PROVIDER=openai-compatible, LLM_BASE_URL, LLM_API_KEY and LLM_MODEL.")
+    print(f'- Run a task: manus-mini run "总结一下当前项目" --cwd {cwd}')
+    print(f"- Open interactive mode: manus-mini --cwd {cwd}")
+    print(f"- List sessions: manus-mini list --cwd {cwd}")
 
 
 def _run_once(

@@ -51,6 +51,38 @@ def test_cli_list_prints_session_directory_when_empty(tmp_path: Path, capsys, mo
     assert f"Example: manus-mini run \"总结一下当前项目\" --cwd {tmp_path}" in out
 
 
+def test_cli_doctor_prints_local_setup_without_leaking_api_key(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "LLM_PROVIDER=openai-compatible",
+                "LLM_BASE_URL=http://localhost:1234/v1",
+                "LLM_API_KEY=secret-doctor-key",
+                "LLM_MODEL=demo-model",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = SessionStore(tmp_path)
+    session = SessionState.create(cwd=tmp_path)
+    store.save(session)
+
+    main(["doctor", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "Manus Mini Doctor" in out
+    assert f"CWD: {tmp_path}" in out
+    assert str(store.sessions_dir) in out
+    assert "(1 saved)" in out
+    assert "Status: ready" in out
+    assert "Base URL: http://localhost:1234/v1" in out
+    assert "API key: configured" in out
+    assert "secret-doctor-key" not in out
+    assert "Model: demo-model" in out
+    assert f'manus-mini run "总结一下当前项目" --cwd {tmp_path}' in out
+
+
 def test_cli_run_creates_session_prints_result_and_resume_command(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     seen = {}
@@ -295,7 +327,7 @@ def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert error.value.code == 2
     assert "invalid choice" in err
-    assert "{list,run,resume,remove,clear}" in err
+    assert "{list,doctor,run,resume,remove,clear}" in err
 
 
 def test_cli_without_command_opens_tui(tmp_path: Path, monkeypatch) -> None:
@@ -348,6 +380,7 @@ def test_cli_help_describes_global_options_and_defaults(capsys) -> None:
     assert error.value.code == 0
     assert "Self-managed coding agent runtime" in out
     assert "working directory" in out
+    assert "doctor" in out
     assert "run" in out
     assert "preview tool execution without side effects" in out
     assert "engineering loop limit" in out
@@ -385,6 +418,13 @@ def test_cli_subcommand_help_describes_cwd_and_force_options(capsys) -> None:
     assert clear_error.value.code == 0
     assert "working directory" in clear_out
     assert "skip confirmation prompt" in clear_out
+
+    with pytest.raises(SystemExit) as doctor_error:
+        main(["doctor", "--help"])
+    doctor_out = capsys.readouterr().out
+    assert doctor_error.value.code == 0
+    assert "check local setup and storage paths" in doctor_out
+    assert "does not call the LLM API" in doctor_out
 
 
 def test_cli_remove_help_describes_session_id_and_risk(capsys) -> None:
