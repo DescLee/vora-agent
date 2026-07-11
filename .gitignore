@@ -32,7 +32,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# TUI / local app runtime
+# Vora local runtime
+.vora/
 runs/
 outputs/
 .manus/

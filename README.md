@@ -2,7 +2,7 @@
 
 本地 Agent Runtime
 
-`vora` 是一个本地 Agent Runtime。项目重点不是复刻任何现有 Agent 产品，而是实现一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架；它可以作为候选人在面试中讲解 Agent 工程能力的项目。
+`vora` 是一个本地 Agent Runtime。项目重点不是复刻任何现有 Agent 产品，而是实现一个可运行、可测试、可观察、带安全边界的 Agent 工程骨架；它可以用于面试或技术评审中讲解 Agent 工程能力，但项目本身定位仍是本地 Agent Runtime。
 
 ## 项目定位
 

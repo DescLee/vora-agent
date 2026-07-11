@@ -96,10 +96,10 @@ python evals/run_evals.py: 7 passed
 | 压缩摘要进入 TUI | P2 | 已完成 | 压缩摘要会以系统消息回写到对话区。 |
 | 手动保存上下文快照 | P2 | 已完成 | `/save-context` 会在项目根目录写入带时间戳的 `context-*` 快照目录。 |
 | 指令帮助 | P3 | 已完成 | `/help` 会输出 TUI 指令和 CLI 指令清单。 |
-| 执行日志 `events.jsonl` | P2 | 已完成 | 已记录计划、反思、工具批次、超时和上下文信息。 |
+| 执行日志 JSONL | P2 | 已完成 | 已在项目隔离存储的 `logs/<session_id>/` 下记录计划、反思、工具批次、超时和上下文信息。 |
 | 对话 list/resume | P1 | 已完成 | `vora list` 可列出会话，`vora resume <session_id>` 可恢复上下文。 |
-| `runs/<run_id>/summary.md` | P2 | 已完成 | Reporter 已写入 `runs/<run_id>/summary.md`。 |
-| Markdown 产物输出 | P3 | 已完成 | 每轮会写 `outputs/<timestamp>-<run_id>.md`。 |
+| 运行摘要 | P2 | 已完成 | Reporter 和 EventLogger 会在项目隔离存储下写入运行摘要与结构化日志。 |
+| Markdown 产物输出 | P3 | 已完成 | 每轮会写入项目隔离存储下的 `outputs/<timestamp>-<run_id>.md`。 |
 | 多轮基于当前产物修改 | P1 | 已完成 | 已保留会话历史、产物回写和当前产物上下文注入，可连续基于上一轮结果修改。 |
 | 三类任务 demo | P1 | 已完成 | 已有研究、写入、自动化三类端到端测试路径。 |
 | 连续两轮修改上一轮产物 demo | P1 | 已完成 | 已有连续两轮写入修改的演示测试。 |
