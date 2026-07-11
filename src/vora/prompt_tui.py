@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from vora.config import AppConfig
+from vora.executor import _detach_threads_from_python_shutdown
 from vora.logging import project_memory_path
 from vora.models import AgentError, LoopLimits, Message, PendingConfirmation, SessionState, TaskState
 from vora.memory import MemoryManager
@@ -65,6 +67,10 @@ SHIFT_ENTER_SEQUENCES = (
     "\x1b[27;2;13~",
     "\x1b[13;2u",
 )
+AGENT_THREAD_NAME_PREFIX = "vora-agent"
+RESUME_HISTORY_MESSAGE_LIMIT = 8
+RESUME_HISTORY_PREVIEW_CHARS = 180
+RESUME_RESULT_PREVIEW_CHARS = 900
 
 
 def install_shift_enter_mapping() -> None:
@@ -73,6 +79,13 @@ def install_shift_enter_mapping() -> None:
 
     for sequence in SHIFT_ENTER_SEQUENCES:
         ANSI_SEQUENCES[sequence] = Keys.ControlJ
+
+
+def _short_resume_text(content: str, limit: int) -> str:
+    compact = " ".join(line.strip() for line in content.splitlines() if line.strip())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
 
 
 class ScrollPositionBuffer:
@@ -274,6 +287,8 @@ class PromptTui:
         self.confirmation_in_progress = False
         self.confirmation_scroll_batch_size = 5
         self.confirmation_render_signature: tuple[str, str, str, str, bool] | None = None
+        self._agent_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=AGENT_THREAD_NAME_PREFIX)
+        self._agent_executor_shutdown = False
         initial_output = (
             self.format_history()
             if self.completed_transcript_blocks
@@ -318,15 +333,64 @@ class PromptTui:
         )
 
     def _initial_completed_transcript_blocks(self, initial_session: SessionState | None) -> list[str]:
-        if initial_session is None or not initial_session.messages:
+        if initial_session is None or (not initial_session.messages and initial_session.active_task is None):
             return []
         return [self._format_resume_history(initial_session)]
 
     def _format_resume_history(self, session: SessionState) -> str:
-        blocks = [format_section("历史消息", format_messages(session, omit_last_agent=True))]
+        active_task_is_terminal = session.active_task is not None and session.active_task.status in {"done", "failed"}
+        blocks = []
         if session.active_task is not None:
-            blocks.append(format_transcript(session, show_process=False))
+            if active_task_is_terminal:
+                blocks.append(self._format_resume_task_summary(session))
+            else:
+                blocks.append(format_transcript(session, show_process=True))
+        blocks.append(format_section("历史概览", self._format_resume_message_overview(session, omit_last_agent=active_task_is_terminal)))
         return "\n\n".join(block for block in blocks if block)
+
+    def _format_resume_task_summary(self, session: SessionState) -> str:
+        task = session.active_task
+        if task is None:
+            return ""
+        lines = [
+            f"- Run ID: {task.run_id}",
+            f"- 状态：{format_phase_label(task)}",
+            f"- 执行步数：{task.step_count}",
+            f"- 工具观察：{len(task.observations)} 条",
+        ]
+        result = (task.result or "").strip()
+        if not result and task.errors:
+            result = "\n".join(f"- {error.code}: {error.message}" for error in task.errors)
+        body = render_markdown_result(_short_resume_text(result, limit=RESUME_RESULT_PREVIEW_CHARS) or "暂无结果正文。")
+        return format_section("最近任务", "\n".join([*lines, "", "结果摘要", body]))
+
+    def _format_resume_message_overview(self, session: SessionState, omit_last_agent: bool = False) -> str:
+        messages = [
+            message
+            for message in session.messages
+            if message.role == "user" and _short_resume_text(message.content, limit=RESUME_HISTORY_PREVIEW_CHARS)
+        ]
+        if not messages:
+            messages = [
+                message
+                for message in session.messages
+                if message.role == "agent" and _short_resume_text(message.content, limit=RESUME_HISTORY_PREVIEW_CHARS)
+            ]
+            if omit_last_agent and messages and messages[-1].role == "agent":
+                messages = messages[:-1]
+        if not messages:
+            return "暂无历史消息。"
+
+        hidden_count = max(0, len(messages) - RESUME_HISTORY_MESSAGE_LIMIT)
+        visible_messages = messages[-RESUME_HISTORY_MESSAGE_LIMIT:]
+        lines = []
+        if hidden_count:
+            lines.append(f"- 已折叠较早 {hidden_count} 条历史问题。")
+        for message in visible_messages:
+            label = {"user": "你", "agent": "Agent"}.get(message.role, message.role)
+            preview = _short_resume_text(message.content, limit=RESUME_HISTORY_PREVIEW_CHARS)
+            lines.append(f"- {label}：{preview or '[空消息]'}")
+        return "\n".join(lines)
 
     def _build_app(self) -> Application:
         install_shift_enter_mapping()
@@ -361,7 +425,7 @@ class PromptTui:
 
         @key_bindings.add("c-c")
         def _exit(event) -> None:
-            event.app.exit()
+            self.request_exit(event.app)
 
         @key_bindings.add("tab")
         def _toggle_focus(event) -> None:
@@ -402,9 +466,9 @@ class PromptTui:
 
         main_body = HSplit(
             [
-                Frame(self.output, title="对话记录"),
+                self.output,
                 self.status,
-                Frame(self.input, title="输入区"),
+                self.input,
             ],
             padding=1,
         )
@@ -427,7 +491,7 @@ class PromptTui:
                 "frame.border": "#6ea8a1",
                 "frame.label": "#f3f0e8",
                 "panel": "bg:#172026 #d7dedb",
-                "process": "bg:#172026 #8fa19c",
+                "process": "bg:#172026 #74827e",
                 "process.reasoning": "bg:#172026 #d7dedb",
                 "process.diff": "bg:#172026 #d7dedb",
                 "process.diff.header": "bg:#172026 #8fa19c",
@@ -696,7 +760,7 @@ class PromptTui:
 
     async def run_agent_turn(self, content: str, confirmation_turn: bool = False) -> None:
         try:
-            session = await asyncio.to_thread(self.manager.handle_user_message, content, False)
+            session = await self._run_manager_message(content)
             await self.stream_session(session)
         except (KeyboardInterrupt, asyncio.CancelledError):
             self.handle_interrupted_execution()
@@ -710,6 +774,13 @@ class PromptTui:
                 self.refresh_confirmation_panel()
                 self.status.text = format_status(self.manager.current, is_running=self.is_running)
                 self.app.invalidate()
+
+    async def _run_manager_message(self, content: str) -> SessionState:
+        loop = asyncio.get_running_loop()
+        if self._agent_executor_shutdown:
+            self._agent_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=AGENT_THREAD_NAME_PREFIX)
+            self._agent_executor_shutdown = False
+        return await loop.run_in_executor(self._agent_executor, self.manager.handle_user_message, content, False)
 
     def insert_input_newline(self) -> None:
         text, cursor = insert_newline(self.input.text, self.input.buffer.cursor_position)
@@ -793,7 +864,26 @@ class PromptTui:
         except KeyboardInterrupt:
             self.handle_interrupted_execution()
         finally:
+            self.shutdown_background_execution(detach=True)
             self.manager.runtime.react_loop.executor.shutdown(detach=True)
+
+    def request_exit(self, app: Application | None = None) -> None:
+        if self.is_running or self.manager.current.active_task is not None:
+            self.handle_interrupted_execution()
+        else:
+            self.shutdown_background_execution(detach=True)
+            self.manager.runtime.react_loop.executor.shutdown(detach=True)
+        target_app = app or self.app
+        target_app.exit()
+
+    def shutdown_background_execution(self, detach: bool = False) -> None:
+        if self._agent_executor_shutdown:
+            return
+        threads = list(getattr(self._agent_executor, "_threads", ()))
+        self._agent_executor.shutdown(wait=False, cancel_futures=True)
+        if detach:
+            _detach_threads_from_python_shutdown(threads)
+        self._agent_executor_shutdown = True
 
     def handle_interrupted_execution(self) -> None:
         self.manager._mark_current_interrupted()
@@ -801,5 +891,6 @@ class PromptTui:
         self.is_running = False
         self.is_streaming_artifact = False
         self.status.text = format_status(self.manager.current, is_running=False)
+        self.shutdown_background_execution(detach=True)
         self.manager.runtime.react_loop.executor.shutdown(detach=True)
         self.app.invalidate()

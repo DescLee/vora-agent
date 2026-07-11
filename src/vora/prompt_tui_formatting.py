@@ -34,6 +34,7 @@ def _is_internal_system_message(message: Message) -> bool:
 
 SECTION_SEPARATOR = "────────────────────────────────────────"
 USER_MESSAGE_BORDER = "────────────────────────────────────────"
+PENDING_PROCESS_TEXT = "────────────────────────────────────────\n• 正在分析请求..."
 
 
 def format_message_block(message: Message) -> str:
@@ -103,12 +104,10 @@ def format_process(
     if visible_trace_count is not None:
         trace_events = trace_events[: max(0, visible_trace_count)]
 
-    sections = [
-        format_task_overview(task),
-        format_plan(task),
-        format_reflection_activity(trace_events, limit=None if full_history else 5),
-        format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5),
-    ]
+    process = format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5)
+    if process == "工具活动\n- 暂无工具调用。" and not task.result and task.status not in {"done", "failed"}:
+        process = PENDING_PROCESS_TEXT
+    sections = [process]
     return "\n\n".join(section for section in sections if section)
 
 
@@ -137,8 +136,6 @@ def format_plan(task: TaskState) -> str:
         "failed": "失败",
     }
     lines = ["执行计划"]
-    if task.plan_reasoning_content:
-        lines.append(f"  规划理由: {format_llm_reasoning_summary(task.plan_reasoning_content)}")
     running_seen = False
     for index, step in enumerate(task.plan, start=1):
         status = step.status
@@ -224,7 +221,8 @@ def format_llm_tool_round(llm_event: TraceEvent, following_events: list[TraceEve
     lines = []
     reasoning = format_llm_reasoning_summary(llm_event.data.get("reasoning_content"))
     if reasoning:
-        lines.append(f"- 推理: {reasoning}")
+        lines.append("────────────────────────────────────────")
+        lines.append(f"• {reasoning}")
 
     tool_calls = [call for call in llm_event.data.get("tool_calls", []) or [] if isinstance(call, dict)]
     if tool_calls:
@@ -333,18 +331,19 @@ def format_tool_batch_lines(
         prefix = prefixes.get(tool_call_id, f"{iteration}.{call_index}" if iteration else str(call_index))
         event = event_by_call_id.get(tool_call_id)
         diff_preview = str(event.data.get("diff_preview") or "").strip() if event is not None else ""
-        result = "等待"
+        status = "等待"
+        summary = ""
         if event is not None:
             status = format_tool_return_status(event.data)
             summary = redact_sensitive_text(str(event.data.get("summary") or event.message))
-            result = f"{status}，{summary}" if summary else status
         else:
             observation = observation_by_call.get(tool_call_id)
             if observation is not None:
                 status = "成功" if observation.ok else "失败"
-                result = f"{status}，{redact_sensitive_text(observation.summary)}"
-        line = f"- {prefix} {name}({tool_call_id}) | 参数: {args or '-'} | 结果: {result}"
-        lines.append(line)
+                summary = redact_sensitive_text(observation.summary)
+        lines.append(f"● {format_ran_tool_label(prefix, name, tool_call_id, call.get('args', {}))}")
+        lines.append(f"  参数: {args or '-'}")
+        lines.append(f"  工具结果: {_format_tool_result_text(status, summary)}")
         if diff_preview:
             lines.append("  变更预览:")
             lines.extend(f"  {line}" for line in diff_preview.splitlines())
@@ -363,7 +362,13 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
             tool_call_id = call.get("id", "unknown")
             name = call.get("name", "unknown")
             args = format_inline_args(call.get("args", {}))
-            tool_call_lines.append(f"- {name}({tool_call_id}) {args}".rstrip())
+            tool_call_lines.extend(
+                [
+                    f"● {format_ran_tool_label(None, str(name), str(tool_call_id), call.get('args', {}))}",
+                    f"  参数: {args or '-'}",
+                    "  工具结果: 等待",
+                ]
+            )
 
     tool_calls = [
         call
@@ -386,8 +391,13 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
         status = format_tool_return_status(event.data)
         summary = event.data.get("summary") or event.message
         args = format_inline_args(event.data.get("args", {}))
-        line = f"- {tool_name}({tool_call_id}) | 参数: {args or '-'} | 结果: {status}，{redact_sensitive_text(str(summary))}"
-        tool_return_lines.append(line)
+        tool_return_lines.extend(
+            [
+                f"● {format_ran_tool_label(None, str(tool_name), str(tool_call_id), event.data.get('args', {}))}",
+                f"  参数: {args or '-'}",
+                f"  工具结果: {_format_tool_result_text(status, redact_sensitive_text(str(summary)))}",
+            ]
+        )
 
     if not tool_return_lines:
         tool_return_lines.extend(format_observation_return_lines(task.observations))
@@ -410,9 +420,29 @@ def format_observation_return_lines(observations: list[Observation]) -> list[str
         status = "成功" if observation.ok else "失败"
         summary = redact_sensitive_text(observation.summary)
         tool_call_id = observation.tool_call_id or "unknown"
-        line = f"- unknown({tool_call_id}) | 参数: - | 结果: {status}，{summary}"
-        lines.append(line)
+        lines.extend(
+            [
+                f"● Ran unknown({tool_call_id})",
+                "  参数: -",
+                f"  工具结果: {_format_tool_result_text(status, summary)}",
+            ]
+        )
     return lines
+
+
+def _format_tool_result_text(status: str, summary: str = "") -> str:
+    if not summary:
+        return status
+    return f"{status}，{summary}"
+
+
+def format_ran_tool_label(prefix: object, name: str, tool_call_id: str, args: object) -> str:
+    call_ref = f"{prefix} " if prefix else ""
+    if name in {"run_bash", "run_temp_script"} and isinstance(args, dict):
+        command = str(args.get("command") or args.get("content") or "").strip()
+        if command:
+            return f"Ran {call_ref}{_short_text(command, limit=96)}"
+    return f"Ran {call_ref}{name}({tool_call_id})"
 
 
 def format_tool_return_status(data: dict) -> str:
@@ -506,18 +536,7 @@ def format_artifact(session: SessionState, result_override: str | None = None) -
         return "当前产物会显示在这里"
     task = session.active_task
     result = result_override if result_override is not None else task.result
-    result = render_markdown_result(result or "生成中...")
-    return "\n".join(
-        [
-            "完成摘要",
-            f"- 状态：{task.status}",
-            f"- 执行步数：{task.step_count}",
-            f"- 工具观察：{len(task.observations)} 条",
-            "",
-            "结果正文",
-            result,
-        ]
-    )
+    return render_markdown_result(result or "生成中...")
 
 
 def render_markdown_result(markdown_text: str) -> str:
@@ -573,6 +592,7 @@ def format_welcome(
     llm_configured: bool | None = None,
     llm_config_source: str | None = None,
 ) -> str:
+    _ = limits
     llm_lines: list[str] = ["模型配置"]
     if llm_configured:
         llm_lines.append(f"- 当前模型：{llm_model or '未指定'}")
@@ -593,37 +613,9 @@ def format_welcome(
             "",
             "直接输入任务开始连续对话。Agent 会读取项目、调用工具、生成报告或在确认后写入文件。",
             "",
-            "常用入口",
-            "- 默认 TUI 入口：vora --cwd .",
-            "- 一次性任务：vora run \"总结一下当前项目\" --cwd .",
-            "- 查看历史会话：vora list --cwd .",
-            "- 恢复会话：vora resume <session_id> --cwd .",
-            "- MCP 配置：vora mcp list --cwd .",
-            "- Skills 管理：vora skills list --cwd .",
-            "- 注意：不需要额外 TUI 子命令，直接执行 `vora` 就会进入当前界面。",
-            "",
-            "执行与安全",
-            "- 会读取项目文件、调用工具、展示执行过程和最终产物。",
-            "- 写入文件前会展示 diff 并等待确认；dry-run 模式只预览不落盘。",
-            "- 会话、日志和产物默认保存在 ~/.vora/projects/<project_key>。",
-            "",
             *llm_lines,
             "",
-            "运行限制",
-            f"- 工程循环上限：{limits.max_engineering_steps} 轮",
-            f"- ReAct 循环上限：{limits.max_react_iterations} 轮",
-            f"- Reflection 循环上限：{limits.max_reflection_rounds} 轮",
-            f"- 工具重试上限：{limits.max_tool_retries} 次",
-            f"- 工具执行时间：{format_tool_timeout_limit(limits.max_tool_timeout_seconds)}",
-            "",
-            "常用操作",
-            "- Enter：发送",
-            "- Ctrl+J：换行",
-            "- Tab：切换输入区和输出区",
-            "- Ctrl+C：退出",
-            "- `/compact`：压缩上下文",
-            "- `/save-context`：保存当前上下文快照",
-            "- `/help`：查看全部指令",
+            "输入 `/help` 查看常用入口、快捷键、运行限制和安全说明。",
         ]
     )
 
@@ -906,12 +898,15 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
     in_process_diff = False
     in_reasoning = False
 
-    for line in text.splitlines(keepends=True):
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         bare_line = line.rstrip("\n")
         if bare_line == SECTION_SEPARATOR:
-            pending_section_title = True
-            in_process_diff = False
-            in_reasoning = False
+            next_title = lines[index + 1].rstrip("\n") if index + 1 < len(lines) else ""
+            if _is_output_section_title(next_title):
+                pending_section_title = True
+                in_process_diff = False
+                in_reasoning = False
         elif pending_section_title:
             current_section = bare_line
             pending_section_title = False
@@ -920,7 +915,7 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
         style = "class:process" if current_section == "执行过程" else ""
         if current_section == "执行过程":
             stripped_line = bare_line.strip()
-            if stripped_line.startswith("- 推理:"):
+            if stripped_line.startswith("- 推理:") or stripped_line.startswith("• "):
                 style = "class:process.reasoning"
                 in_reasoning = True
             elif in_reasoning and stripped_line and not _is_process_control_line(stripped_line):
@@ -962,6 +957,7 @@ def _is_process_control_line(line: str) -> bool:
     return line.startswith(
         (
             "- ",
+            "● ",
             "LLM 回合",
             "工具调度",
             "步骤概览",
@@ -969,6 +965,18 @@ def _is_process_control_line(line: str) -> bool:
             "反思校验",
         )
     )
+
+
+def _is_output_section_title(line: str) -> bool:
+    return line in {
+        "会话信息",
+        "用户问题",
+        "执行过程",
+        "最终产物",
+        "最近任务",
+        "历史概览",
+        "历史消息",
+    }
 
 
 def _looks_like_standalone_process_text(text: str) -> bool:

@@ -111,31 +111,33 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
 
     assert "Vora TUI" in welcome
     assert "直接输入任务开始连续对话" in welcome
-    assert "默认 TUI 入口：vora --cwd ." in welcome
-    assert "一次性任务：vora run" in welcome
-    assert "查看历史会话：vora list --cwd ." in welcome
-    assert "恢复会话：vora resume <session_id>" in welcome
-    assert "MCP 配置：vora mcp list --cwd ." in welcome
-    assert "Skills 管理：vora skills list --cwd ." in welcome
-    assert "写入文件前会展示 diff 并等待确认" in welcome
-    assert "~/.vora/projects/<project_key>" in welcome
     assert "当前模型：deepseek-v4-flash" in welcome
     assert f"配置来源：{env_path}" in welcome
-    assert "运行限制" in welcome
-    assert "工程循环上限：3 轮" in welcome
-    assert "ReAct 循环上限：99 轮" in welcome
-    assert "Reflection 循环上限：3 轮" in welcome
-    assert "工具执行时间：不限制" in welcome
+    assert "输入 `/help` 查看常用入口" in welcome
+    assert "\n常用入口\n" not in welcome
+    assert "默认 TUI 入口：vora --cwd ." not in welcome
+    assert "一次性任务：vora run" not in welcome
+    assert "查看历史会话：vora list --cwd ." not in welcome
+    assert "恢复会话：vora resume <session_id>" not in welcome
+    assert "MCP 配置：vora mcp list --cwd ." not in welcome
+    assert "Skills 管理：vora skills list --cwd ." not in welcome
+    assert "写入文件前会展示 diff 并等待确认" not in welcome
+    assert "~/.vora/projects/<project_key>" not in welcome
+    assert "\n运行限制\n" not in welcome
+    assert "工程循环上限：3 轮" not in welcome
+    assert "ReAct 循环上限：99 轮" not in welcome
+    assert "Reflection 循环上限：3 轮" not in welcome
+    assert "工具执行时间：不限制" not in welcome
     assert "工具超时上限" not in welcome
     assert "单轮运行超时" not in welcome
-    assert "压缩上下文" in welcome
-    assert "/compact" in welcome
-    assert "/save-context" in welcome
+    assert "压缩上下文" not in welcome
+    assert "/compact" not in welcome
+    assert "/save-context" not in welcome
     assert "/help" in welcome
-    assert "Enter：发送" in welcome
-    assert "Ctrl+J：换行" in welcome
-    assert "Tab：切换输入区和输出区" in welcome
-    assert "Ctrl+C：退出" in welcome
+    assert "Enter：发送" not in welcome
+    assert "Ctrl+J：换行" not in welcome
+    assert "Tab：切换输入区和输出区" not in welcome
+    assert "Ctrl+C：退出" not in welcome
     assert "vora tui" not in welcome
 
 
@@ -192,8 +194,11 @@ def test_format_artifact_renders_active_task_result(tmp_path: Path) -> None:
     session.active_task = task
 
     artifact = format_artifact(session)
-    assert "完成摘要" in artifact
-    assert "结果正文" in artifact
+    assert "完成摘要" not in artifact
+    assert "结果正文" not in artifact
+    assert "状态：" not in artifact
+    assert "执行步数" not in artifact
+    assert "工具观察" not in artifact
     assert "报告正文" in artifact
 
 
@@ -241,11 +246,12 @@ def test_output_fragments_style_process_section_with_dim_text() -> None:
 def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> None:
     fragments = style_output_fragments(
         "执行过程\n"
-        "- 推理: 需要读取项目文件。\n"
-        "- 1.1 调用 read_file(call-read) path: README.md\n"
+        "────────────────────────────────────────\n"
+        "• 需要读取项目文件。\n"
+        "● Ran 1.1 read_file(call-read)\n"
     )
 
-    reasoning_fragment = next(fragment for fragment in fragments if "推理:" in fragment[1])
+    reasoning_fragment = next(fragment for fragment in fragments if "需要读取项目文件" in fragment[1])
 
     assert reasoning_fragment[0] == "class:process.reasoning"
 
@@ -253,13 +259,14 @@ def test_output_fragments_styles_reasoning_line_brighter_than_process_text() -> 
 def test_output_fragments_styles_wrapped_reasoning_continuation_lines() -> None:
     fragments = style_output_fragments(
         "执行过程\n"
-        "- 推理: 第一行推理内容\n"
+        "────────────────────────────────────────\n"
+        "• 第一行推理内容\n"
         "第二行推理内容\n"
-        "- 1.1 调用 read_file(call-read) path: README.md\n"
+        "● Ran 1.1 read_file(call-read)\n"
     )
 
     continuation_fragment = next(fragment for fragment in fragments if "第二行推理内容" in fragment[1])
-    tool_fragment = next(fragment for fragment in fragments if "调用 read_file" in fragment[1])
+    tool_fragment = next(fragment for fragment in fragments if "Ran" in fragment[1])
 
     assert continuation_fragment[0] == "class:process.reasoning"
     assert tool_fragment[0] == "class:process"
@@ -321,9 +328,20 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
     assert "工具活动" in process
     assert "read_file(unknown)" in process
     assert "参数: -" in process
-    assert "结果: 已返回" in process
+    assert "工具结果: 已返回" in process
     assert "Tool read_file finished: failed" in process
     assert "最近过程（折叠）" not in process
+
+
+def test_format_process_shows_immediate_thinking_state_before_first_trace(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.active_task = TaskState.create(goal="看下北京天气", cwd=tmp_path)
+
+    process = format_process(session)
+
+    assert "• 正在分析请求" in process
+    assert "工具活动" not in process
+    assert "暂无工具调用" not in process
 
 
 def test_format_context_usage_counts_current_session_messages(tmp_path: Path) -> None:
@@ -430,17 +448,19 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
 
     process = format_process(session)
 
-    assert "步骤概览" in process
-    assert "第 2 步" in process
-    assert "执行计划" in process
-    assert "[已完成] 扫描工作目录并识别项目结构" in process
-    assert "[进行中] 读取关键文档" in process
-    assert "动作" in process
+    assert "步骤概览" not in process
+    assert "第 2 步" not in process
+    assert "执行计划" not in process
+    assert "[已完成] 扫描工作目录并识别项目结构" not in process
+    assert "[进行中] 读取关键文档" not in process
+    assert "动作" not in process
     assert "LLM 回合" not in process
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 已返回，read README.md" in process
+    assert "● Ran 1.1 read_file(call-read)" in process
+    assert "参数: path: README.md" in process
+    assert "工具结果: 已返回，read README.md" in process
     assert "# demo project" not in process
     assert "最近过程（折叠）" not in process
 
@@ -484,10 +504,12 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
     assert "我需要先确认 README 内容。" not in process
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
-    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
+    assert "● Ran 1.1 read_file(call-read)" in process
+    assert "参数: path: README.md" in process
+    assert "工具结果: 成功，read README.md" in process
 
 
-def test_format_process_merges_tool_call_args_and_result_in_one_line(tmp_path: Path) -> None:
+def test_format_process_groups_tool_call_args_and_result(tmp_path: Path) -> None:
     from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -519,12 +541,14 @@ def test_format_process_merges_tool_call_args_and_result_in_one_line(tmp_path: P
 
     process = format_process(session)
 
-    assert "- 1.1 read_file(call-read) | 参数: path: README.md | query: Vora | 结果: 成功，found 2 match(es)" in process
+    assert "● Ran 1.1 read_file(call-read)" in process
+    assert "参数: path: README.md | query: Vora" in process
+    assert "工具结果: 成功，found 2 match(es)" in process
     assert "调用 read_file(call-read)" not in process
     assert "read_file(call-read) 成功:" not in process
 
 
-def test_format_process_keeps_diff_preview_under_merged_tool_line(tmp_path: Path) -> None:
+def test_format_process_keeps_diff_preview_under_tool_result(tmp_path: Path) -> None:
     from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -557,7 +581,9 @@ def test_format_process_keeps_diff_preview_under_merged_tool_line(tmp_path: Path
 
     process = format_process(session)
 
-    assert "1.1 write_file(call-write) | 参数: path: src/app.py | 结果: 失败，waiting for confirmation" in process
+    assert "● Ran 1.1 write_file(call-write)" in process
+    assert "参数: path: src/app.py" in process
+    assert "工具结果: 失败，waiting for confirmation" in process
     assert "变更预览:" in process
     assert "--- a/src/app.py" in process
     assert "+new" in process
@@ -583,8 +609,13 @@ def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
 
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
-    assert "- 推理: 需要先读取 README 和 package.json 判断项目类型。" in process
-    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 等待" in process
+    assert "• 需要先读取 README 和 package.json 判断项目类型。" in process
+    assert "• 推理内容" not in process
+    assert "────────────────────────────────────────" in process
+    assert "需要先读取 README 和 package.json 判断项目类型。" in process
+    assert "● Ran 1.1 read_file(call-read)" in process
+    assert "参数: path: README.md" in process
+    assert "工具结果: 等待" in process
 
 
 def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path: Path) -> None:
@@ -651,8 +682,12 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "10.1 list_files(call-list) | 参数: path: . | 结果: 等待" in process
-    assert "10.2 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
+    assert "● Ran 10.1 list_files(call-list)" in process
+    assert "参数: path: ." in process
+    assert "工具结果: 等待" in process
+    assert "● Ran 10.2 read_file(call-read)" in process
+    assert "参数: path: README.md" in process
+    assert "工具结果: 成功，read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
@@ -715,9 +750,15 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
     assert "共 2 个批次" not in process
     assert "第 1 批" not in process
     assert "第 2 批" not in process
-    assert "10.1 list_files(call-list) | 参数: path: . | 结果: 成功，found 3 files" in process
-    assert "10.2 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
-    assert "10.3 read_file(call-docs) | 参数: path: docs/design.md | 结果: 成功，read docs/design.md" in process
+    assert "● Ran 10.1 list_files(call-list)" in process
+    assert "参数: path: ." in process
+    assert "工具结果: 成功，found 3 files" in process
+    assert "● Ran 10.2 read_file(call-read)" in process
+    assert "参数: path: README.md" in process
+    assert "工具结果: 成功，read README.md" in process
+    assert "● Ran 10.3 read_file(call-docs)" in process
+    assert "参数: path: docs/design.md" in process
+    assert "工具结果: 成功，read docs/design.md" in process
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
@@ -766,8 +807,9 @@ def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) 
 
     process = format_process(session)
 
-    assert "read_file(call-read) | 参数:" in process
-    assert "结果: 已返回" in process
+    assert "● Ran read_file(call-read)" in process
+    assert "参数: -" in process
+    assert "工具结果: 已返回" in process
     assert "read_file(call-read) 失败" not in process
     assert "x" * 260 not in process
     assert "返回预览" not in process
@@ -870,11 +912,11 @@ def test_format_process_shows_reflection_decisions_and_reasons(tmp_path: Path) -
 
     process = format_process(session, full_history=True)
 
-    assert "反思校验" in process
-    assert "local_update" in process
-    assert "未通过" in process
-    assert "缺少测试输出，需要补充 pytest 运行结果。" in process
-    assert "仍未看到测试结果，不能接受当前草稿。" in process
+    assert "反思校验" not in process
+    assert "local_update" not in process
+    assert "未通过" not in process
+    assert "缺少测试输出，需要补充 pytest 运行结果。" not in process
+    assert "仍未看到测试结果，不能接受当前草稿。" not in process
     assert "代码修改已完成，测试已通过。" not in process
 
 
@@ -895,8 +937,28 @@ def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> N
 
     process = format_process(session)
 
-    assert "阶段：调用工具" in process
-    assert "动作：准备调用工具 read_file(call-read)" in process
+    assert "阶段：调用工具" not in process
+    assert "动作：准备调用工具 read_file(call-read)" not in process
+    assert "● Ran 1 read_file(call-read)" in process
+
+
+def test_format_process_hides_internal_plan_details(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结 diff", cwd=tmp_path)
+    task.plan_reasoning_content = "这里是一大段规划理由，包含很多过程性解释，不应该展示在 TUI 执行计划里。"
+    task.plan = [
+        PlanStep(description="执行 git diff 查看工作区变更", intent="automation", status="done"),
+        PlanStep(description="汇总所有 diff", intent="report", status="done"),
+    ]
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "执行计划" not in process
+    assert "规划理由" not in process
+    assert "过程性解释" not in process
+    assert "[已完成] 执行 git diff 查看工作区变更" not in process
+    assert "[已完成] 汇总所有 diff" not in process
 
 
 def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp_path: Path) -> None:
@@ -914,13 +976,15 @@ def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp
 
     process = format_process(session)
 
-    assert "unknown(call-read) | 参数: - | 结果: 成功，read README.md" in process
+    assert "● Ran unknown(call-read)" in process
+    assert "参数: -" in process
+    assert "工具结果: 成功，read README.md" in process
     assert "call-read" in process
     assert "read README.md" in process
     assert "# demo project" not in process
 
 
-def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path) -> None:
+def test_format_process_hides_react_events_from_tui_transcript(tmp_path: Path) -> None:
     from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
@@ -937,7 +1001,7 @@ def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path
 
     process = format_process(session)
 
-    assert "event 11" in process
+    assert "event 11" not in process
     assert "最近过程（折叠）" not in process
     assert "已折叠" not in process
 
@@ -982,8 +1046,8 @@ def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
     assert "总结项目" in transcript
     assert "对话记录" not in transcript
     assert "执行过程" in transcript
-    assert "步骤概览" in transcript
-    assert "Tool list_files finished: ok" in transcript
+    assert "步骤概览" not in transcript
+    assert "Tool list_files finished: ok" not in transcript
     assert "产物" not in transcript
 
 
@@ -1450,7 +1514,7 @@ def test_format_status_does_not_say_running_after_done_or_failed(tmp_path: Path)
     assert "正在执行" not in failed_status
 
 
-def test_format_artifact_adds_completion_summary(tmp_path: Path) -> None:
+def test_format_artifact_hides_completion_summary(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
     task.step_count = 2
@@ -1459,10 +1523,10 @@ def test_format_artifact_adds_completion_summary(tmp_path: Path) -> None:
 
     artifact = format_artifact(session)
 
-    assert artifact.startswith("完成摘要\n")
-    assert "状态：planning" in artifact
-    assert "执行步数：2" in artifact
-    assert "报告正文" in artifact
+    assert artifact == "报告正文"
+    assert "完成摘要" not in artifact
+    assert "状态：planning" not in artifact
+    assert "执行步数：2" not in artifact
 
 
 def test_shift_enter_sequences_are_mapped_to_newline_key() -> None:
@@ -1519,11 +1583,59 @@ def test_resume_initial_output_shows_full_message_history(tmp_path: Path) -> Non
 
     tui = PromptTui(cwd=tmp_path, initial_session=session)
 
-    assert "历史消息" in tui.output.text
+    assert "历史概览" in tui.output.text
     assert "第一轮问题" in tui.output.text
-    assert "第一轮回答" in tui.output.text
     assert "第二轮问题" in tui.output.text
     assert "第二轮结果" in tui.output.text
+
+
+def test_resume_initial_output_summarizes_long_history_before_task_result(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("第一轮问题"))
+    session.messages.append(Message.agent("很长的历史回答\n" + ("细节" * 500)))
+    session.messages.append(Message.user("第二轮问题"))
+    task = TaskState.create(goal="第二轮问题", cwd=tmp_path)
+    task.status = "done"
+    task.result = "第二轮结果"
+    session.active_task = task
+
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    assert tui.output.text.index("最近任务") < tui.output.text.index("历史概览")
+    assert "第二轮结果" in tui.output.text
+    assert "很长的历史回答" not in tui.output.text
+    assert "细节" * 200 not in tui.output.text
+    assert len(tui.output.text.splitlines()) < 40
+
+
+def test_resume_initial_output_hides_terminal_task_debug_process(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("修改 skills demo"))
+    session.messages.append(Message.agent("执行失败：Reflection pytest gate failed"))
+    task = TaskState.create(goal="修改 skills demo", cwd=tmp_path)
+    task.status = "failed"
+    task.result = "执行失败：测试证据不足"
+    task.trace_events.append(
+        TraceEvent(
+            phase="reflection",
+            message="Reflection pytest gate failed",
+            data={
+                "reason": "pytest_case_path=/tmp/test_reflection_acceptance.py\npytest_case=...",
+                "accepted": False,
+            },
+        )
+    )
+    session.active_task = task
+
+    tui = PromptTui(cwd=tmp_path, initial_session=session)
+
+    assert "历史概览" in tui.output.text
+    assert "最近任务" in tui.output.text
+    assert f"Run ID: {task.run_id}" in tui.output.text
+    assert "执行失败：测试证据不足" in tui.output.text
+    assert "执行过程" not in tui.output.text
+    assert "Reflection pytest gate failed" not in tui.output.text
+    assert "pytest_case_path" not in tui.output.text
 
 
 def test_send_current_input_starts_background_turn_without_blocking(monkeypatch) -> None:
@@ -1540,7 +1652,9 @@ def test_send_current_input_starts_background_turn_without_blocking(monkeypatch)
     assert tui.input.text == ""
     assert "用户问题\n总结一下项目" in tui.output.text
     assert "执行过程" in tui.output.text
-    assert "步骤概览" in tui.output.text
+    assert "• 正在分析请求" in tui.output.text
+    assert "暂无工具调用" not in tui.output.text
+    assert "步骤概览" not in tui.output.text
     assert tui.status.text.startswith("状态 正在执行")
     assert "running..." not in tui.status.text
 
@@ -1558,6 +1672,15 @@ def test_send_current_input_outputs_command_directly_without_background_turn(mon
     assert tui.is_running is False
     assert tui.input.text == ""
     assert "可用指令" in tui.output.text
+    assert "常用入口" in tui.output.text
+    assert "默认 TUI 入口" in tui.output.text
+    assert "一次性任务" in tui.output.text
+    assert "MCP 配置" in tui.output.text
+    assert "Skills 管理" in tui.output.text
+    assert "执行与安全" in tui.output.text
+    assert "写入文件前会展示 diff 并等待确认" in tui.output.text
+    assert "运行限制" in tui.output.text
+    assert "Enter：发送" in tui.output.text
     assert "/save-context" in tui.output.text
     assert "/compact" in tui.output.text
     assert tui.status.text.startswith("就绪")
@@ -1750,6 +1873,30 @@ def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(t
     )
 
 
+def test_request_exit_while_running_detaches_background_executor(tmp_path: Path) -> None:
+    class FakeApp:
+        def __init__(self) -> None:
+            self.exited = False
+
+        def exit(self) -> None:
+            self.exited = True
+
+    tui = PromptTui(cwd=tmp_path)
+    task = TaskState.create(goal="长任务", cwd=tmp_path)
+    tui.manager.current.active_task = task
+    tui.is_running = True
+    fake_app = FakeApp()
+
+    tui.request_exit(fake_app)  # type: ignore[arg-type]
+    tui.request_exit(fake_app)  # type: ignore[arg-type]
+
+    assert fake_app.exited is True
+    assert tui.is_running is False
+    assert tui._agent_executor_shutdown is True
+    assert tui.manager.current.active_task is not None
+    assert tui.manager.current.active_task.status == "failed"
+
+
 def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
     from vora.models import TraceEvent
 
@@ -1768,7 +1915,9 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     assert "LLM 回合" not in tui.output.text
     assert "工具调度" not in tui.output.text
-    assert "read_file(unknown) | 参数: path: README.md | 结果: 等待" in tui.output.text
+    assert "● Ran 1 read_file(unknown)" in tui.output.text
+    assert "参数: path: README.md" in tui.output.text
+    assert "工具结果: 等待" in tui.output.text
     assert "最近过程（折叠）" not in tui.output.text
     assert "返回预览" not in tui.output.text
 
@@ -1833,7 +1982,8 @@ def test_prompt_tui_initial_output_shows_welcome_instead_of_empty_artifact() -> 
 
     assert "欢迎使用 Vora" in tui.output.text
     assert "直接输入任务开始连续对话" in tui.output.text
-    assert "工程循环上限" in tui.output.text
+    assert "输入 `/help` 查看常用入口" in tui.output.text
+    assert "工程循环上限" not in tui.output.text
     assert "当前产物会显示在这里" not in tui.output.text
 
 
@@ -1977,19 +2127,41 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
-    task.plan = [
-        PlanStep(description=f"步骤 {index}：收集和整理项目信息", intent="research", status="pending")
-        for index in range(80)
-    ]
     for index in range(40):
-        task.trace_events.append(TraceEvent(phase="react", message=f"event {index}"))
+        task.trace_events.append(
+            TraceEvent(
+                phase="llm",
+                message="LLM requested 1 tool call(s)",
+                data={
+                    "iteration": index + 1,
+                    "reasoning_content": f"第 {index} 轮需要继续检查上下文并读取更多文件。" + ("补充说明 " * 12),
+                    "tool_calls": [
+                        {
+                            "id": f"call-read-{index}",
+                            "name": "read_file",
+                            "args": {"path": f"docs/file-{index}.md"},
+                        }
+                    ],
+                },
+            )
+        )
     tui.manager.current.active_task = task
     tui.render_progress()
     tui.scroll_output_to_start()
     visible_before = tui.visible_trace_count
     output_before = tui.output.text
 
-    task.trace_events.append(TraceEvent(phase="react", message="event 40"))
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 41,
+                "reasoning_content": "新增一轮执行过程。",
+                "tool_calls": [{"id": "call-read-40", "name": "read_file", "args": {"path": "docs/file-40.md"}}],
+            },
+        )
+    )
     tui.render_progress()
 
     assert tui.visible_trace_count == visible_before
@@ -2050,8 +2222,8 @@ def test_stream_session_keeps_final_artifact_structure_during_stream(tmp_path: P
         await asyncio.sleep(0.04)
 
         assert "最终产物" in tui.output.text
-        assert "完成摘要" in tui.output.text
-        assert "结果正文" in tui.output.text
+        assert "完成摘要" not in tui.output.text
+        assert "结果正文" not in tui.output.text
         assert "执行过程" in tui.output.text
 
         await stream_task
@@ -2061,12 +2233,32 @@ def test_stream_session_keeps_final_artifact_structure_during_stream(tmp_path: P
 
 def test_stream_session_preserves_scroll_when_reading_and_resumes_following_at_bottom(tmp_path: Path) -> None:
     async def run() -> None:
+        from vora.models import TraceEvent
+
         tui = PromptTui(cwd=tmp_path)
         session = SessionState.create(cwd=tmp_path)
         session.messages.append(Message.user("写报告"))
         task = TaskState.create(goal="写报告", cwd=tmp_path)
         task.status = "done"
         task.result = "报告正文-" + ("流式内容" * 80)
+        for index in range(12):
+            task.trace_events.append(
+                TraceEvent(
+                    phase="llm",
+                    message="LLM requested 1 tool call(s)",
+                    data={
+                        "iteration": index + 1,
+                        "reasoning_content": f"第 {index} 轮整理报告上下文。" + ("补充说明 " * 12),
+                        "tool_calls": [
+                            {
+                                "id": f"call-read-{index}",
+                                "name": "read_file",
+                                "args": {"path": f"docs/file-{index}.md"},
+                            }
+                        ],
+                    },
+                )
+            )
         session.active_task = task
         tui.is_running = True
 
