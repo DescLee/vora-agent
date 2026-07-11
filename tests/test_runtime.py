@@ -1264,6 +1264,24 @@ def test_react_loop_limits_tool_schema_for_research_task(tmp_path: Path) -> None
     assert result == "分析完成"
 
 
+def test_react_loop_uses_read_only_tools_for_code_review_task(tmp_path: Path) -> None:
+    class InspectingToolNamesLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            assert set(tool_names) == {"list_files", "read_file"}
+            return LLMResult(content="审查完成")
+
+    task = TaskState.create(goal="看看当前项目代码还有哪些问题，列清单", cwd=tmp_path)
+    task.plan = [
+        PlanStep(description="定位关键代码模块并审查风险", intent="code_review"),
+        PlanStep(description="输出问题清单", intent="report"),
+    ]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(InspectingToolNamesLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "审查完成"
+
+
 def test_react_loop_keeps_write_and_shell_tools_for_code_task(tmp_path: Path) -> None:
     class InspectingToolNamesLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
@@ -1280,6 +1298,41 @@ def test_react_loop_keeps_write_and_shell_tools_for_code_task(tmp_path: Path) ->
     result = ReActLoop(InspectingToolNamesLLM(), ToolRegistry()).run(task, session)
 
     assert result == "代码任务完成"
+
+
+def test_code_review_prompt_keeps_only_recent_tool_working_set(tmp_path: Path) -> None:
+    class InspectingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            text = "\n".join(message.content for message in messages)
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert len(tool_messages) <= 4
+            assert "old tool payload 0" not in text
+            assert "old tool payload 5" in text
+            assert "代码审查 Findings Ledger" in text
+            return LLMResult(content="已基于工作集完成审查")
+
+    session = SessionState.create(cwd=tmp_path)
+    session.messages.append(Message.user("看看代码问题"))
+    for index in range(6):
+        call_id = f"call-old-{index}"
+        session.messages.append(Message.agent("读取文件", tool_call_ids=[call_id]))
+        session.messages[-1].metadata["tool_call_names"] = {call_id: "read_file"}
+        session.messages.append(Message.tool(f"old tool payload {index}", tool_call_id=call_id))
+    task = TaskState.create(goal="继续审查代码问题", cwd=tmp_path)
+    task.plan = [PlanStep(description="继续代码审查", intent="code_review")]
+    for index in range(6):
+        task.observations.append(
+            Observation(
+                tool_call_id=f"call-old-{index}",
+                ok=True,
+                summary=f"read src/module_{index}.py",
+                content=f"def func_{index}(): pass",
+            )
+        )
+
+    result = ReActLoop(InspectingLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "已基于工作集完成审查"
 
 
 def test_react_loop_normalizes_empty_and_duplicate_tool_call_ids(tmp_path: Path) -> None:
@@ -1339,7 +1392,7 @@ def test_react_loop_skips_duplicate_successful_read_file_calls(tmp_path: Path) -
         "read_file skipped: already read README.md",
     ]
     assert read_events[1].data.get("deduplicated") is True
-    assert task.observations[-1].content == "# demo"
+    assert task.observations[-1].content == ""
 
 
 def test_react_loop_skips_duplicate_read_file_calls_in_same_iteration(tmp_path: Path) -> None:

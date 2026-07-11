@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+PlanIntent = Literal["chat", "research", "code", "code_review", "code_edit", "code_validate", "automation", "report"]
+
 AgentErrorCode = Literal[
     "FILE_NOT_FOUND",
     "PATH_OUT_OF_WORKSPACE",
@@ -105,7 +107,7 @@ class TraceEvent(BaseModel):
 class PlanStep(BaseModel):
     id: str = Field(default_factory=lambda: new_id("step"))
     description: str
-    intent: Literal["chat", "research", "code", "automation", "report"]
+    intent: PlanIntent
     status: Literal["pending", "running", "done", "skipped", "failed"] = "pending"
 
 
@@ -245,6 +247,7 @@ __all__ = [
     "Message",
     "Observation",
     "PendingConfirmation",
+    "PlanIntent",
     "PlanStep",
     "SessionState",
     "TaskState",

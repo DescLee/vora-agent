@@ -12,12 +12,13 @@ from vora.tools.base import BaseTool, ToolPreview, ToolResult, resolve_workspace
 
 
 DEFAULT_LIST_LIMIT = 500
-DEFAULT_MAX_READ_BYTES = 1_000_000
+DEFAULT_MAX_READ_BYTES = 128_000
 DEFAULT_MAX_WRITE_BYTES = 1_000_000
 DEFAULT_READ_LIMIT_LINES = 200
 DEFAULT_READ_CONTEXT_LINES = 40
 DEFAULT_READ_MAX_MATCHES = 3
 DEFAULT_LARGE_FILE_PREVIEW_LINES = 2
+DEFAULT_LARGE_FILE_PREVIEW_CHARS = 1_200
 FULL_REWRITE_WARNING_BYTES = 4_096
 NOISE_DIR_NAMES = {
     ".cache",
@@ -465,7 +466,7 @@ def _read_large_file_summary(target: Path, *, path: str, max_bytes: int, encodin
         tool_name="read_file",
         ok=True,
         summary=f"file too large; returned summary for {path}",
-        content="".join(preview_lines),
+        content=_truncate_large_file_preview("".join(preview_lines)),
         data={
             "path": path,
             "file_size": size,
@@ -476,6 +477,13 @@ def _read_large_file_summary(target: Path, *, path: str, max_bytes: int, encodin
             "suggestion": "Use query or start_line with limit_lines to read a targeted window.",
         },
     )
+
+
+def _truncate_large_file_preview(content: str) -> str:
+    if len(content) <= DEFAULT_LARGE_FILE_PREVIEW_CHARS:
+        return content
+    omitted = len(content) - DEFAULT_LARGE_FILE_PREVIEW_CHARS
+    return content[:DEFAULT_LARGE_FILE_PREVIEW_CHARS].rstrip() + f"\n... [omitted {omitted} preview char(s)]\n"
 
 
 def _count_text_lines(target: Path) -> int:

@@ -41,12 +41,15 @@ MAX_TOOL_RESULT_CONTENT_CHARS = 4000
 MAX_INLINE_TOOL_RESULT_CONTENT_CHARS = 1200
 TOOL_RESULT_PREVIEW_EDGE_CHARS = 500
 REACT_PROMPT_RECENT_SEGMENTS = 8
+CODE_REVIEW_RECENT_TOOL_EXCHANGES = 4
+CODE_REVIEW_FINDINGS_LIMIT = 8
 RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
 SHELL_CODE_WRITE_TOOLS = {"run_bash", "run_temp_script"}
 READ_ONLY_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "web_search", "fetch_webpage"}
+CODE_REVIEW_TOOL_SCHEMA_NAMES = {"list_files", "read_file"}
 FILE_OUTPUT_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "write_file", "append_file", "make_directory"}
 CODE_FILE_SUFFIXES = {
     ".c",
@@ -321,7 +324,75 @@ def _trim_react_prompt_history(messages: list[Message]) -> list[Message]:
     return result
 
 
+def _build_code_review_working_set(messages: list[Message], task: TaskState) -> list[Message]:
+    segments = build_segments(messages)
+    tool_exchange_indexes = [index for index, segment in enumerate(segments) if segment.kind == "tool_exchange"]
+    if len(tool_exchange_indexes) <= CODE_REVIEW_RECENT_TOOL_EXCHANGES:
+        result = list(messages)
+    else:
+        retained_tool_indexes = set(tool_exchange_indexes[-CODE_REVIEW_RECENT_TOOL_EXCHANGES:])
+        omitted_summaries: list[str] = []
+        result = []
+        for index, segment in enumerate(segments):
+            if segment.kind == "tool_exchange" and index not in retained_tool_indexes:
+                omitted_summaries.extend(_summaries_from_tool_exchange(segment.messages))
+                continue
+            result.extend(segment.messages)
+        if omitted_summaries:
+            summary_lines = [
+                f"[System] 代码审查 working set 已省略 {len(tool_exchange_indexes) - len(retained_tool_indexes)} 个较早工具交换。",
+                "省略工具摘要：",
+            ]
+            summary_lines.extend(f"- {summary}" for summary in omitted_summaries[-CODE_REVIEW_FINDINGS_LIMIT:])
+            result.insert(0, Message.system("\n".join(summary_lines)))
+
+    ledger = _format_code_review_findings_ledger(task)
+    if ledger:
+        result.append(Message.system(ledger))
+    validate_tool_call_pairs(result)
+    return result
+
+
+def _summaries_from_tool_exchange(messages: list[Message]) -> list[str]:
+    summaries: list[str] = []
+    for message in messages:
+        if message.role != "tool":
+            continue
+        if message.tool_call_id:
+            summaries.append(f"omitted tool result {message.tool_call_id}")
+    return summaries
+
+
+def _format_code_review_findings_ledger(task: TaskState) -> str:
+    observations = [observation for observation in task.observations if observation.ok]
+    if not observations:
+        return "代码审查 Findings Ledger\n- 暂无已确认发现；继续读取最小必要文件并沉淀问题项。"
+    lines = [
+        "代码审查 Findings Ledger",
+        "用途：后续请求优先基于本账本和最近工具结果推进，不要反复携带或复读旧工具原文。",
+        "已读观察：",
+    ]
+    for observation in observations[-CODE_REVIEW_FINDINGS_LIMIT:]:
+        evidence = _compact_observation_evidence(observation.content)
+        item = f"- {observation.summary}"
+        if evidence:
+            item += f" | evidence: {evidence}"
+        lines.append(item)
+    return "\n".join(lines)
+
+
+def _compact_observation_evidence(content: str, limit: int = 180) -> str:
+    compact = " ".join(line.strip() for line in content.splitlines() if line.strip())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
+
+
 def _default_tool_names_for_task(task: TaskState, available_names: list[str]) -> list[str]:
+    if _task_is_code_review(task):
+        return [name for name in available_names if name in CODE_REVIEW_TOOL_SCHEMA_NAMES]
+    if _task_is_code_validate(task):
+        return [name for name in available_names if name in {"list_files", "read_file", "run_bash", "run_temp_script"}]
     if _task_needs_code_tools(task):
         return list(available_names)
     if _task_needs_file_output_tools(task):
@@ -330,7 +401,7 @@ def _default_tool_names_for_task(task: TaskState, available_names: list[str]) ->
 
 
 def _task_needs_code_tools(task: TaskState) -> bool:
-    if any(step.intent == "code" for step in task.plan):
+    if any(step.intent in {"code", "code_edit"} for step in task.plan):
         return True
     goal = task.goal.lower()
     if any(suffix in goal for suffix in CODE_FILE_SUFFIXES):
@@ -349,6 +420,21 @@ def _task_needs_code_tools(task: TaskState) -> bool:
             "生成代码",
         ]
     )
+
+
+def _task_is_code_review(task: TaskState) -> bool:
+    if task.plan:
+        return any(step.intent == "code_review" for step in task.plan)
+    normalized = task.goal.lower()
+    if any(keyword in normalized for keyword in ["修改", "修复", "新增", "删除", "生成代码", "重构", "测试", "验证"]):
+        return False
+    return any(keyword in normalized for keyword in ["代码", "源码", "项目", "工程"]) and any(
+        keyword in normalized for keyword in ["审查", "问题", "风险", "清单", "质量", "看看", "分析"]
+    )
+
+
+def _task_is_code_validate(task: TaskState) -> bool:
+    return any(step.intent == "code_validate" for step in task.plan)
 
 
 def _task_needs_file_output_tools(task: TaskState) -> bool:
@@ -557,7 +643,10 @@ class ReActLoop:
                 )
             )
             raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
-        return _trim_react_prompt_history(compacted)
+        trimmed = _trim_react_prompt_history(compacted)
+        if _task_is_code_review(task):
+            trimmed = _build_code_review_working_set(trimmed, task)
+        return trimmed
 
     def _context_limit(self, task: TaskState) -> int:
         return max(1, task.model_context_limit or task.limits.max_estimated_tokens)
@@ -877,6 +966,14 @@ class ReActLoop:
             "如果测试失败，必须根据 stdout/stderr 修复后重新运行，直到测试全部通过或达到循环上限。",
             "最终答复要说明改了什么、验证了什么；如果未修改代码，则说明依据和结论，不要输出空泛过程描述。",
         ]
+        if _task_is_code_review(task):
+            parts.extend(
+                [
+                    "当前是代码审查任务：只读取最小必要文件、沉淀问题证据并输出清单，不要修改文件。",
+                    "代码审查阶段不要请求写入工具、临时脚本或泛化 shell；如需验证某个发现，优先使用 read_file 的 query/start_line/limit_lines 获取精确证据。",
+                    "后续请求会携带代码审查 Findings Ledger；请基于 ledger 收敛，不要重复读取已覆盖文件。",
+                ]
+            )
         skill_prompt = _format_active_skill_for_react(task)
         if skill_prompt:
             parts.extend(["", skill_prompt])
@@ -1416,16 +1513,15 @@ class ReActLoop:
                 or previous_max_bytes != max_bytes
             ):
                 continue
-            observation = self._observation_by_tool_call_id(task, str(event.data.get("tool_call_id", "")))
             return ToolResult(
                 tool_name="read_file",
                 ok=True,
                 summary=f"read_file skipped: already read {path}",
-                content=observation.content if observation is not None else "",
                 data={
                     "deduplicated": True,
                     "path": path,
                     "source_tool_call_id": event.data.get("tool_call_id"),
+                    "content_reused": True,
                 },
             )
         return None
@@ -1684,17 +1780,16 @@ def _duplicate_tool_result(
     task: TaskState | None = None,
 ) -> ToolResult | None:
     if call.name in REPEAT_CACHEABLE_TOOLS:
-        observation = _find_successful_observation(task, source_tool_call_id)
         return ToolResult(
             tool_name=call.name,
             ok=True,
             summary=f"{call.name} skipped: duplicate request already completed",
-            content=observation.content if observation is not None else "",
             data={
                 "deduplicated": True,
                 "fingerprint": fingerprint,
                 "source_tool_call_id": source_tool_call_id,
                 "scope": scope,
+                "content_reused": True,
             },
         )
     if call.name in REPEAT_BLOCKED_TOOLS:

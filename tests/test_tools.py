@@ -254,6 +254,20 @@ def test_read_file_returns_summary_for_oversized_files(tmp_path: Path) -> None:
     assert "line 4" not in result.content
 
 
+def test_read_file_summarizes_large_files_by_default(tmp_path: Path) -> None:
+    content = "module.exports=" + ("x" * 250_000)
+    target = tmp_path / "data.js"
+    target.write_text(content, encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="data.js")
+
+    assert result.ok is True
+    assert result.summary == "file too large; returned summary for data.js"
+    assert len(result.content) < 2_000
+    assert result.data["truncated"] is True
+    assert result.data["file_size"] == target.stat().st_size
+
+
 def test_read_file_reads_line_window(tmp_path: Path) -> None:
     (tmp_path / "module.py").write_text("\n".join(f"line {index}" for index in range(1, 8)) + "\n", encoding="utf-8")
 

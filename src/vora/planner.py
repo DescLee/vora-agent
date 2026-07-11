@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import Literal, cast
+from typing import cast
 
 from vora.context import build_project_code_overview
 from vora.llm import LLMClient, LLMRequestError, extract_usage, get_default_llm_client, openai_messages
 from vora.logging import EventLogger
-from vora.models import Message, PlanStep, SessionState
+from vora.models import Message, PlanIntent, PlanStep, SessionState
 from vora.skills import SkillSpec
 from vora.token_breakdown import record_llm_token_breakdown
 
@@ -28,7 +28,8 @@ PLAN_INSTRUCTIONS = (
     "计划最多 4 步，每一步必须带可验证产出，例如定位范围、读取依据、修改点、测试或最终结论。"
     "\n\n"
     "输出格式：每行一条计划，格式为：`序号. 计划描述 | intent`。"
-    "intent 只能是 chat、research、code、automation、report 之一。"
+    "intent 只能是 chat、research、code_review、code_edit、code_validate、code、automation、report 之一。"
+    "查看代码问题、代码审查、架构风险、列问题清单使用 code_review；修改/修复/生成代码使用 code_edit；运行测试/验证使用 code_validate。"
     "不要输出多余解释，不要输出 JSON。"
 )
 
@@ -272,13 +273,21 @@ def _split_plan_line(line: str) -> tuple[str, str | None]:
     return line.strip(), None
 
 
-def _normalize_intent(intent: str | None, description: str) -> Literal["chat", "research", "code", "automation", "report"]:
+def _normalize_intent(intent: str | None, description: str) -> PlanIntent:
     normalized_intent = intent.strip().lower() if intent and _is_known_intent(intent) else None
     description_lower = description.lower()
     if normalized_intent == "chat" and _description_requires_project_or_file_work(description_lower):
         normalized_intent = None
+    if normalized_intent == "code" and _description_is_code_review(description_lower):
+        return "code_review"
     if normalized_intent and normalized_intent != "chat":
-        return cast(Literal["chat", "research", "code", "automation", "report"], normalized_intent)
+        return cast(PlanIntent, normalized_intent)
+    if _description_is_code_review(description_lower):
+        return "code_review"
+    if _description_is_code_validate(description_lower):
+        return "code_validate"
+    if _description_is_code_edit(description_lower):
+        return "code_edit"
     if any(keyword in description_lower for keyword in ["读取", "查看", "分析", "调研", "扫描", "research"]):
         return "research"
     if any(keyword in description_lower for keyword in ["写", "生成", "创建", "修改", "更新", "补充", "code"]):
@@ -313,7 +322,33 @@ def _description_requires_project_or_file_work(description_lower: str) -> bool:
 
 
 def _is_known_intent(value: str) -> bool:
-    return value.strip().lower() in {"chat", "research", "code", "automation", "report"}
+    return value.strip().lower() in {
+        "chat",
+        "research",
+        "code",
+        "code_review",
+        "code_edit",
+        "code_validate",
+        "automation",
+        "report",
+    }
+
+
+def _description_is_code_review(description_lower: str) -> bool:
+    if _description_is_code_edit(description_lower) or _description_is_code_validate(description_lower):
+        return False
+    return any(keyword in description_lower for keyword in ["代码", "源码", "模块", "架构"]) and any(
+        keyword in description_lower
+        for keyword in ["审查", "分析", "查看", "看看", "问题", "风险", "清单", "质量", "评估"]
+    )
+
+
+def _description_is_code_edit(description_lower: str) -> bool:
+    return any(keyword in description_lower for keyword in ["修改", "修复", "新增", "删除", "生成代码", "重构", "替换", "补丁"])
+
+
+def _description_is_code_validate(description_lower: str) -> bool:
+    return any(keyword in description_lower for keyword in ["测试", "验证", "lint", "pytest", "mypy", "ruff", "构建"])
 
 
 def _deduplicate_plan(steps: list[PlanStep]) -> list[PlanStep]:

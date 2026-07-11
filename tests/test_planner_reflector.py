@@ -108,6 +108,24 @@ def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:
     assert [step.intent for step in steps] == ["research", "research", "report"]
 
 
+def test_planner_classifies_code_problem_review_as_code_review(tmp_path: Path) -> None:
+    class ReviewLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                content=(
+                    "1. 定位关键代码模块并审查风险 | code\n"
+                    "2. 整理代码问题清单 | report"
+                )
+            )
+
+    planner = Planner(llm=ReviewLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("看看当前项目代码还有哪些问题，列清单", session=session)
+
+    assert steps[0].intent == "code_review"
+
+
 def test_planner_records_session_token_usage(tmp_path: Path) -> None:
     class UsageLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
