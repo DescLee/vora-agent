@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections import deque
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -13,6 +14,10 @@ from vora.tools.base import BaseTool, ToolPreview, ToolResult, resolve_workspace
 DEFAULT_LIST_LIMIT = 500
 DEFAULT_MAX_READ_BYTES = 1_000_000
 DEFAULT_MAX_WRITE_BYTES = 1_000_000
+DEFAULT_READ_LIMIT_LINES = 200
+DEFAULT_READ_CONTEXT_LINES = 40
+DEFAULT_READ_MAX_MATCHES = 3
+DEFAULT_LARGE_FILE_PREVIEW_LINES = 2
 FULL_REWRITE_WARNING_BYTES = 4_096
 NOISE_DIR_NAMES = {
     ".cache",
@@ -182,6 +187,33 @@ class ReadFileTool(BaseTool):
                     "default": 0,
                     "minimum": 0,
                 },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional one-based line number. Use with limit_lines to read a code-safe line window.",
+                    "minimum": 1,
+                },
+                "limit_lines": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return when start_line is provided.",
+                    "default": DEFAULT_READ_LIMIT_LINES,
+                    "minimum": 1,
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional text to search before reading. Returns context windows around matching lines.",
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Lines of context before and after each query match.",
+                    "default": DEFAULT_READ_CONTEXT_LINES,
+                    "minimum": 0,
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "description": "Maximum query matches to return.",
+                    "default": DEFAULT_READ_MAX_MATCHES,
+                    "minimum": 1,
+                },
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -211,6 +243,24 @@ class ReadFileTool(BaseTool):
             return ToolResult(tool_name=self.name, ok=False, summary=f"protected read target: {relative_path}", error_code="PROTECTED_PATH")
         max_bytes = _positive_int(kwargs.get("max_bytes"), DEFAULT_MAX_READ_BYTES)
         size = target.stat().st_size
+        query = str(kwargs.get("query", "")).strip()
+        if query:
+            return _read_file_query_window(
+                target,
+                path=str(path),
+                query=query,
+                encoding=str(kwargs.get("encoding", "utf-8")),
+                context_lines=_non_negative_int(kwargs.get("context_lines"), DEFAULT_READ_CONTEXT_LINES),
+                max_matches=_positive_int(kwargs.get("max_matches"), DEFAULT_READ_MAX_MATCHES),
+            )
+        if "start_line" in kwargs:
+            return _read_file_line_window(
+                target,
+                path=str(path),
+                start_line=_positive_int(kwargs.get("start_line"), 1),
+                limit_lines=_positive_int(kwargs.get("limit_lines"), DEFAULT_READ_LIMIT_LINES),
+                encoding=str(kwargs.get("encoding", "utf-8")),
+            )
         has_start_index = "start_index" in kwargs
         start_index = _non_negative_int(kwargs.get("start_index"), 0)
         if has_start_index and start_index > size:
@@ -255,12 +305,7 @@ class ReadFileTool(BaseTool):
                 },
             )
         if size > max_bytes:
-            return ToolResult(
-                tool_name=self.name,
-                ok=False,
-                summary=f"file too large: {size} bytes exceeds {max_bytes} bytes",
-                error_code="FILE_TOO_LARGE",
-            )
+            return _read_large_file_summary(target, path=str(path), max_bytes=max_bytes, encoding=str(kwargs.get("encoding", "utf-8")))
         raw = target.read_bytes()
         if _looks_binary(raw):
             return ToolResult(
@@ -296,6 +341,146 @@ class ReadFileTool(BaseTool):
         except _ToolPathError:
             return []
         return [_display_path(target, workspace.expanduser().resolve())]
+
+
+def _read_file_line_window(target: Path, *, path: str, start_line: int, limit_lines: int, encoding: str) -> ToolResult:
+    selected_lines: list[str] = []
+    total_lines = 0
+    try:
+        with target.open("r", encoding=encoding) as handle:
+            for total_lines, line in enumerate(handle, start=1):
+                if start_line <= total_lines < start_line + limit_lines:
+                    selected_lines.append(line)
+    except UnicodeDecodeError as error:
+        return ToolResult(tool_name="read_file", ok=False, summary=f"decode failed with {encoding}: {error}", error_code="DECODE_ERROR")
+    if start_line > total_lines:
+        return ToolResult(
+            tool_name="read_file",
+            ok=False,
+            summary=f"start_line {start_line} exceeds total lines {total_lines}",
+            error_code="INVALID_TOOL_PARAMS",
+            data={"start_line": start_line, "total_lines": total_lines},
+        )
+    start_index = start_line - 1
+    end_line = min(total_lines, start_index + limit_lines)
+    content = "".join(selected_lines)
+    return ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary=f"read {path} lines {start_line}-{end_line}",
+        content=content,
+        data={
+            "start_line": start_line,
+            "end_line": end_line,
+            "total_lines": total_lines,
+            "truncated": start_line > 1 or end_line < total_lines,
+        },
+    )
+
+
+def _read_file_query_window(target: Path, *, path: str, query: str, encoding: str, context_lines: int, max_matches: int) -> ToolResult:
+    match_lines: list[int] = []
+    captured_lines: dict[int, str] = {}
+    previous_lines: deque[tuple[int, str]] = deque(maxlen=context_lines)
+    capture_until_line = 0
+    total_matches = 0
+    total_lines = 0
+    try:
+        with target.open("r", encoding=encoding) as handle:
+            for total_lines, line in enumerate(handle, start=1):
+                if query in line:
+                    total_matches += 1
+                    if len(match_lines) < max_matches:
+                        match_lines.append(total_lines)
+                        for previous_line_number, previous_line in previous_lines:
+                            captured_lines[previous_line_number] = previous_line
+                        captured_lines[total_lines] = line
+                        capture_until_line = max(capture_until_line, total_lines + context_lines)
+                elif capture_until_line and total_lines <= capture_until_line:
+                    captured_lines[total_lines] = line
+                previous_lines.append((total_lines, line))
+    except UnicodeDecodeError as error:
+        return ToolResult(tool_name="read_file", ok=False, summary=f"decode failed with {encoding}: {error}", error_code="DECODE_ERROR")
+    if not match_lines:
+        return ToolResult(
+            tool_name="read_file",
+            ok=False,
+            summary=f"query not found in {path}",
+            error_code="QUERY_NOT_FOUND",
+            data={"query": query, "total_lines": total_lines},
+        )
+    selected_matches = match_lines
+    windows: list[tuple[int, int]] = []
+    for line_number in selected_matches:
+        start_line = max(1, line_number - context_lines)
+        end_line = min(total_lines, line_number + context_lines)
+        if windows and start_line <= windows[-1][1] + 1:
+            windows[-1] = (windows[-1][0], max(windows[-1][1], end_line))
+        else:
+            windows.append((start_line, end_line))
+
+    chunks = []
+    for start_line, end_line in windows:
+        chunks.append(f"--- lines {start_line}-{end_line} ---\n")
+        chunks.append("".join(captured_lines.get(line_number, "") for line_number in range(start_line, end_line + 1)))
+        if chunks[-1] and not chunks[-1].endswith("\n"):
+            chunks.append("\n")
+    return ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary=f"found {total_matches} match(es) for query in {path}",
+        content="".join(chunks),
+        data={
+            "query": query,
+            "matches": selected_matches,
+            "total_matches": total_matches,
+            "total_lines": total_lines,
+            "truncated": total_matches > len(selected_matches),
+            "windows": [{"start_line": start_line, "end_line": end_line} for start_line, end_line in windows],
+        },
+    )
+
+
+def _read_large_file_summary(target: Path, *, path: str, max_bytes: int, encoding: str) -> ToolResult:
+    with target.open("rb") as handle:
+        if _looks_binary(handle.read(min(max_bytes, 8192))):
+            return ToolResult(
+                tool_name="read_file",
+                ok=False,
+                summary="binary file is not supported",
+                error_code="BINARY_FILE_UNSUPPORTED",
+            )
+    try:
+        with target.open("r", encoding=encoding) as handle:
+            preview_lines = [line for _, line in zip(range(DEFAULT_LARGE_FILE_PREVIEW_LINES), handle, strict=False)]
+    except UnicodeDecodeError as error:
+        return ToolResult(tool_name="read_file", ok=False, summary=f"decode failed with {encoding}: {error}", error_code="DECODE_ERROR")
+    size = target.stat().st_size
+    total_lines = _count_text_lines(target)
+    return ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary=f"file too large; returned summary for {path}",
+        content="".join(preview_lines),
+        data={
+            "file_size": size,
+            "max_bytes": max_bytes,
+            "total_lines": total_lines,
+            "preview_lines": len(preview_lines),
+            "truncated": True,
+            "suggestion": "Use query or start_line with limit_lines to read a targeted window.",
+        },
+    )
+
+
+def _count_text_lines(target: Path) -> int:
+    with target.open("rb") as handle:
+        total = sum(chunk.count(b"\n") for chunk in iter(lambda: handle.read(1024 * 1024), b""))
+    if target.stat().st_size == 0:
+        return 0
+    with target.open("rb") as handle:
+        handle.seek(-1, os.SEEK_END)
+        return total if handle.read(1) == b"\n" else total + 1
 
 
 def _positive_int(value: Any, default: int) -> int:

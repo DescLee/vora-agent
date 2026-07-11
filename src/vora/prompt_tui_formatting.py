@@ -326,36 +326,31 @@ def format_tool_batch_lines(
         for observation in task.observations
         if observation.tool_call_id in call_ids
     }
-    for event in events:
-        if event.phase == "tool" and str(event.data.get("tool_call_id") or "") in call_ids:
-            tool_call_id = str(event.data.get("tool_call_id") or "")
-            tool_name = event.data.get("tool_name", "unknown")
-            prefix = prefixes.get(tool_call_id, default_prefix)
-            diff_preview = str(event.data.get("diff_preview") or "").strip()
-            if diff_preview:
-                lines.append(f"- {prefix} {tool_name}({tool_call_id}) 变更预览:")
-                lines.extend(f"  {line}" for line in diff_preview.splitlines())
-                continue
-            status = format_tool_return_status(event.data)
-            summary = event.data.get("summary") or event.message
-            line = f"- {prefix} {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
-            lines.append(line)
-    if not lines:
-        lines.append(f"- {default_prefix} 等待工具返回。")
-    call_lines = []
     for call_index, call in enumerate(tool_calls, start=start_index):
         tool_call_id = str(call.get("id", "unknown"))
         name = str(call.get("name", "unknown"))
         args = format_inline_args(call.get("args", {}))
         prefix = prefixes.get(tool_call_id, f"{iteration}.{call_index}" if iteration else str(call_index))
-        call_line = f"- {prefix} 调用 {name}({tool_call_id}) {args}".rstrip()
-        call_lines.append(call_line)
-        observation = observation_by_call.get(tool_call_id)
-        if observation is not None and tool_call_id not in event_by_call_id:
-            status = "成功" if observation.ok else "失败"
-            result_line = f"- {prefix} {tool_call_id} {status}: {redact_sensitive_text(observation.summary)}"
-            lines.append(result_line)
-    return [*call_lines, *lines]
+        event = event_by_call_id.get(tool_call_id)
+        diff_preview = str(event.data.get("diff_preview") or "").strip() if event is not None else ""
+        result = "等待"
+        if event is not None:
+            status = format_tool_return_status(event.data)
+            summary = redact_sensitive_text(str(event.data.get("summary") or event.message))
+            result = f"{status}，{summary}" if summary else status
+        else:
+            observation = observation_by_call.get(tool_call_id)
+            if observation is not None:
+                status = "成功" if observation.ok else "失败"
+                result = f"{status}，{redact_sensitive_text(observation.summary)}"
+        line = f"- {prefix} {name}({tool_call_id}) | 参数: {args or '-'} | 结果: {result}"
+        lines.append(line)
+        if diff_preview:
+            lines.append("  变更预览:")
+            lines.extend(f"  {line}" for line in diff_preview.splitlines())
+    if not lines:
+        lines.append(f"- {default_prefix} 等待工具返回。")
+    return lines
 
 
 def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | None = None, limit: int | None = 5) -> str:
@@ -390,7 +385,8 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
         tool_call_id = event.data.get("tool_call_id", "unknown")
         status = format_tool_return_status(event.data)
         summary = event.data.get("summary") or event.message
-        line = f"- {tool_name}({tool_call_id}) {status}: {redact_sensitive_text(str(summary))}"
+        args = format_inline_args(event.data.get("args", {}))
+        line = f"- {tool_name}({tool_call_id}) | 参数: {args or '-'} | 结果: {status}，{redact_sensitive_text(str(summary))}"
         tool_return_lines.append(line)
 
     if not tool_return_lines:
@@ -404,7 +400,6 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
         sections.append("工具调用")
         sections.extend(tool_call_lines if limit is None else tool_call_lines[-limit:])
     if tool_return_lines:
-        sections.append("工具返回")
         sections.extend(tool_return_lines if limit is None else tool_return_lines[-limit:])
     return "\n".join(sections)
 
@@ -415,7 +410,7 @@ def format_observation_return_lines(observations: list[Observation]) -> list[str
         status = "成功" if observation.ok else "失败"
         summary = redact_sensitive_text(observation.summary)
         tool_call_id = observation.tool_call_id or "unknown"
-        line = f"- {tool_call_id} {status}: {summary}"
+        line = f"- unknown({tool_call_id}) | 参数: - | 结果: {status}，{summary}"
         lines.append(line)
     return lines
 

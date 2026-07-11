@@ -319,8 +319,9 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
     process = format_process(session)
 
     assert "工具活动" in process
-    assert "工具返回" in process
     assert "read_file(unknown)" in process
+    assert "参数: -" in process
+    assert "结果: 已返回" in process
     assert "Tool read_file finished: failed" in process
     assert "最近过程（折叠）" not in process
 
@@ -439,8 +440,7 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "1.1 调用 read_file(call-read) path: README.md" in process
-    assert "1.1 read_file(call-read) 已返回: read README.md" in process
+    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 已返回，read README.md" in process
     assert "# demo project" not in process
     assert "最近过程（折叠）" not in process
 
@@ -478,17 +478,89 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
 
     process = format_process(session)
 
-    tool_call_index = process.index("1.1 调用 read_file(call-read) path: README.md")
-    tool_result_index = process.index("1.1 read_file(call-read) 成功: read README.md")
-    assert tool_call_index < tool_result_index
     assert "LLM 回合" not in process
     assert "工具调度" not in process
     assert "第 1 批" not in process
     assert "我需要先确认 README 内容。" not in process
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
-    assert "1.1 调用 read_file(call-read) path: README.md" in process
-    assert "1.1 read_file(call-read) 成功: read README.md" in process
+    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
+
+
+def test_format_process_merges_tool_call_args_and_result_in_one_line(tmp_path: Path) -> None:
+    from vora.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 1,
+                "tool_calls": [{"id": "call-read", "name": "read_file", "args": {"path": "README.md", "query": "Vora"}}],
+            },
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool read_file finished: ok",
+            data={
+                "iteration": 1,
+                "tool_call_id": "call-read",
+                "tool_name": "read_file",
+                "ok": True,
+                "summary": "found 2 match(es)",
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "- 1.1 read_file(call-read) | 参数: path: README.md | query: Vora | 结果: 成功，found 2 match(es)" in process
+    assert "调用 read_file(call-read)" not in process
+    assert "read_file(call-read) 成功:" not in process
+
+
+def test_format_process_keeps_diff_preview_under_merged_tool_line(tmp_path: Path) -> None:
+    from vora.models import TraceEvent
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改代码", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 1 tool call(s)",
+            data={
+                "iteration": 1,
+                "tool_calls": [{"id": "call-write", "name": "write_file", "args": {"path": "src/app.py"}}],
+            },
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool write_file pending confirmation",
+            data={
+                "iteration": 1,
+                "tool_call_id": "call-write",
+                "tool_name": "write_file",
+                "ok": False,
+                "summary": "waiting for confirmation",
+                "diff_preview": "--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new",
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "1.1 write_file(call-write) | 参数: path: src/app.py | 结果: 失败，waiting for confirmation" in process
+    assert "变更预览:" in process
+    assert "--- a/src/app.py" in process
+    assert "+new" in process
 
 
 def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
@@ -512,7 +584,7 @@ def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
     assert "- 推理: 需要先读取 README 和 package.json 判断项目类型。" in process
-    assert "1.1 调用 read_file(call-read) path: README.md" in process
+    assert "1.1 read_file(call-read) | 参数: path: README.md | 结果: 等待" in process
 
 
 def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path: Path) -> None:
@@ -579,9 +651,8 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "10.1 调用 list_files(call-list) path: ." in process
-    assert "10.2 调用 read_file(call-read) path: README.md" in process
-    assert "10.2 read_file(call-read) 成功: read README.md" in process
+    assert "10.1 list_files(call-list) | 参数: path: . | 结果: 等待" in process
+    assert "10.2 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
@@ -644,12 +715,9 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
     assert "共 2 个批次" not in process
     assert "第 1 批" not in process
     assert "第 2 批" not in process
-    assert "10.1 调用 list_files(call-list) path: ." in process
-    assert "10.2 调用 read_file(call-read) path: README.md" in process
-    assert "10.3 调用 read_file(call-docs) path: docs/design.md" in process
-    assert "10.1 list_files(call-list) 成功: found 3 files" in process
-    assert "10.2 read_file(call-read) 成功: read README.md" in process
-    assert "10.3 read_file(call-docs) 成功: read docs/design.md" in process
+    assert "10.1 list_files(call-list) | 参数: path: . | 结果: 成功，found 3 files" in process
+    assert "10.2 read_file(call-read) | 参数: path: README.md | 结果: 成功，read README.md" in process
+    assert "10.3 read_file(call-docs) | 参数: path: docs/design.md | 结果: 成功，read docs/design.md" in process
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
@@ -698,7 +766,8 @@ def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) 
 
     process = format_process(session)
 
-    assert "read_file(call-read) 已返回" in process
+    assert "read_file(call-read) | 参数:" in process
+    assert "结果: 已返回" in process
     assert "read_file(call-read) 失败" not in process
     assert "x" * 260 not in process
     assert "返回预览" not in process
@@ -845,7 +914,7 @@ def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp
 
     process = format_process(session)
 
-    assert "工具返回" in process
+    assert "unknown(call-read) | 参数: - | 结果: 成功，read README.md" in process
     assert "call-read" in process
     assert "read README.md" in process
     assert "# demo project" not in process
@@ -1699,7 +1768,7 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     assert "LLM 回合" not in tui.output.text
     assert "工具调度" not in tui.output.text
-    assert "调用 read_file" in tui.output.text
+    assert "read_file(unknown) | 参数: path: README.md | 结果: 等待" in tui.output.text
     assert "最近过程（折叠）" not in tui.output.text
     assert "返回预览" not in tui.output.text
 

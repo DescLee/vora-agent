@@ -40,15 +40,23 @@ BUILTIN_SKILLS = [
         acceptance=["修改范围清晰", "测试或验证已执行", "说明剩余风险"],
     ),
     SkillSpec(
-        name="interview-demo",
-        description="把当前项目作为面试作品讲解，突出 Agent 工程能力、系统边界和可验证成果。",
-        triggers=["面试", "8年经验", "八年经验", "演示", "项目亮点", "怎么讲"],
+        name="production-code-demo",
+        description="将当前项目作为生产级代码开发 Agent 进行展示，突出工程化能力、可扩展架构与未来演进规划。",
+        triggers=["生产级", "生产化", "产品演示", "产品定位", "未来规划", "roadmap", "路线图", "发展方向"],
         instructions=(
-            "面试场景下不要把项目包装成完整生产平台。重点讲清楚 Agent Runtime 的目标、Planner/ReAct/"
-            "Reflection/ToolScheduler/Session/Memory/Logging 的协作链路，以及为什么这些设计能体现工程经验。"
+            "当前产品定位是能够达到生产级别水平的代码开发 Agent，具备工程化代码生成、修改、测试与调试能力。"
+            "未来还将扩展行业研究调查报告 Agent 功能，以及多 Agent 通信协作等能力。"
+            "演示时重点展示：\n"
+            "1）生产级代码开发能力 —— 代码生成、质量门禁（Reflection pytest gate）、安全边界（路径限制/写入确认/命令风险判断）、"
+            "工具调度（只读并行/写入串行）、上下文压缩等工程化特性；\n"
+            "2）可扩展的 Agent 架构 —— Planner/ReAct/Reflection 协作链路、Skills 能力包机制、ToolRegistry 工具注册体系，"
+            "展示架构如何支撑未来功能扩展；\n"
+            "3）未来演进规划 —— 行研 Agent（行业研究/报告自动生成）、多 Agent 通信（Agent 间协作与消息传递），"
+            "以及当前已在 roadmap 上的生产化方向（容器沙箱、向量记忆、流式输出、多 provider 容灾等）。\n"
+            "注意不要把项目说成已全部完成，要诚实说明当前已实现的能力边界和明确的后续迭代方向。"
         ),
         tool_allowlist=["list_files", "read_file", "run_bash"],
-        acceptance=["突出工程取舍", "能映射到代码模块", "包含不足和后续规划"],
+        acceptance=["体现生产级工程能力", "说明架构可扩展性", "包含清晰的未来规划"],
     ),
 ]
 

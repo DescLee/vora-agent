@@ -239,13 +239,76 @@ def test_read_file_rejects_sensitive_files(tmp_path: Path) -> None:
     assert example_result.content == "LLM_API_KEY="
 
 
-def test_read_file_rejects_oversized_files(tmp_path: Path) -> None:
-    (tmp_path / "big.txt").write_text("x" * 20, encoding="utf-8")
+def test_read_file_returns_summary_for_oversized_files(tmp_path: Path) -> None:
+    (tmp_path / "big.txt").write_text("line 1\nline 2\nline 3\nline 4\n", encoding="utf-8")
 
     result = ReadFileTool().run(workspace=tmp_path, path="big.txt", max_bytes=10)
 
+    assert result.ok is True
+    assert result.summary == "file too large; returned summary for big.txt"
+    assert result.data["file_size"] > 10
+    assert result.data["total_lines"] == 4
+    assert result.data["truncated"] is True
+    assert result.data["suggestion"] == "Use query or start_line with limit_lines to read a targeted window."
+    assert "line 1" in result.content
+    assert "line 4" not in result.content
+
+
+def test_read_file_reads_line_window(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text("\n".join(f"line {index}" for index in range(1, 8)) + "\n", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="module.py", start_line=3, limit_lines=3)
+
+    assert result.ok is True
+    assert result.summary == "read module.py lines 3-5"
+    assert result.content == "line 3\nline 4\nline 5\n"
+    assert result.data["start_line"] == 3
+    assert result.data["end_line"] == 5
+    assert result.data["total_lines"] == 7
+    assert result.data["truncated"] is True
+
+
+def test_read_file_searches_query_and_returns_context_windows(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            "def alpha():",
+            "    pass",
+            "",
+            "def target_handler():",
+            "    return 'first'",
+            "",
+            "def beta():",
+            "    pass",
+            "",
+            "def target_helper():",
+            "    return 'second'",
+        ]
+    )
+    (tmp_path / "module.py").write_text(content + "\n", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="module.py", query="target_", context_lines=1)
+
+    assert result.ok is True
+    assert result.summary == "found 2 match(es) for query in module.py"
+    assert "def target_handler" in result.content
+    assert "def target_helper" in result.content
+    assert result.data["query"] == "target_"
+    assert result.data["matches"] == [4, 10]
+    assert result.data["windows"] == [
+        {"start_line": 3, "end_line": 5},
+        {"start_line": 9, "end_line": 11},
+    ]
+
+
+def test_read_file_query_reports_no_matches(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text("def alpha():\n    pass\n", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="module.py", query="missing_symbol")
+
     assert result.ok is False
-    assert result.error_code == "FILE_TOO_LARGE"
+    assert result.error_code == "QUERY_NOT_FOUND"
+    assert result.data["query"] == "missing_symbol"
+    assert result.data["total_lines"] == 2
 
 
 def test_read_file_reads_slice_from_start_index(tmp_path: Path) -> None:

@@ -714,6 +714,7 @@ class ReActLoop:
             "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
             "开始执行前先定位目标模块和最小相关文件；已有上下文足够时直接推进，不要为了确认而重复读取。",
             "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
+            "读取大文件或定位代码片段时，优先给 read_file 传 query 或 start_line/limit_lines 获取目标上下文窗口，不要整文件读取。",
             "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要只给选项并等待用户选择；请自行选择保守方案并继续执行。",
             "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
             "没有读取原文件前，不要凭空改写已有文件；需要修改时先确认当前内容和精确替换位置。",
@@ -1197,6 +1198,8 @@ class ReActLoop:
         else:
             return None
         if not _looks_like_report_goal(task.goal):
+            return None
+        if _is_production_code_path(path):
             return None
         if _goal_explicitly_requests_file_output(task.goal):
             return None

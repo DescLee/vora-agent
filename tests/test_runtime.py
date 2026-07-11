@@ -1576,7 +1576,7 @@ def test_react_loop_limits_fragmented_read_file_calls_in_one_iteration(tmp_path:
     assert all(event.data.get("error_code") == "READ_FILE_FRAGMENT_LIMIT_EXCEEDED" for event in read_events[2:])
 
 
-def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) -> None:
+def test_react_loop_allows_read_file_retry_after_large_file_summary(tmp_path: Path) -> None:
     class RetryReadLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -1600,7 +1600,8 @@ def test_react_loop_allows_read_file_retry_after_file_too_large(tmp_path: Path) 
         event for event in task.trace_events
         if event.phase == "tool" and event.data.get("tool_name") == "read_file"
     ]
-    assert [event.data.get("error_code") for event in read_events] == ["FILE_TOO_LARGE", None]
+    assert [event.data.get("error_code") for event in read_events] == [None, None]
+    assert "file too large; returned summary" in read_events[0].data.get("summary", "")
     assert read_events[1].data.get("summary") == "read README.md"
 
 
@@ -3035,6 +3036,38 @@ def test_report_query_allows_explicit_write_to_file_phrase(tmp_path: Path) -> No
     assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" not in result
     assert session.pending_confirmation is not None
     assert session.pending_confirmation.tool_name == "write_file"
+
+
+def test_report_query_allows_production_code_write_after_test_evidence(tmp_path: Path) -> None:
+    class CodeWriteLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-write-code",
+                        name="write_file",
+                        args={"path": "src/vora/skills/registry.py", "content": "BUILTIN_SKILLS = []\n"},
+                    )
+                ]
+            )
+
+    (tmp_path / "src" / "vora" / "skills").mkdir(parents=True)
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结当前项目并优化 src/vora/skills/registry.py", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_bash finished: ok",
+            data={"tool_name": "run_bash", "ok": True, "is_test": True, "summary": "pytest passed"},
+        )
+    )
+
+    result = ReActLoop(CodeWriteLLM()).run(task, session)
+
+    assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" not in result
+    assert session.pending_confirmation is not None
+    assert session.pending_confirmation.tool_name == "write_file"
+    assert session.pending_confirmation.tool_args["path"] == "src/vora/skills/registry.py"
 
 
 def test_react_loop_adds_disclaimer_when_web_search_has_no_results(tmp_path: Path) -> None:

@@ -855,6 +855,96 @@
 - 全仓搜索不得残留非兼容场景的 `manus_mini`、`manus-mini` 或 `Manus Mini`。
 - `.manus-mini` 只允许作为旧数据迁移兼容路径保留。
 
+### 149. read_file 面对大文件和精准定位能力不足
+
+#### 现象
+
+- 旧 `read_file` 主要按 `max_bytes` 整段读取，文件超过阈值时直接返回 `FILE_TOO_LARGE`。
+- 需要定位大文件里的某个函数或关键段落时，只能依赖 byte offset，容易截断代码行或多字节字符。
+- ReAct 可能通过反复小片段读取同一个文件来寻找目标，增加上下文浪费。
+
+#### 修复
+
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中为 `read_file` 增加：
+  - `start_line` / `limit_lines`：按行读取代码窗口。
+  - `query` / `context_lines` / `max_matches`：先流式搜索关键行，再返回命中上下文窗口。
+  - 大文件概要 fallback：超过 `max_bytes` 时返回文件大小、总行数、前几行预览和精准读取建议。
+- 保留旧 `start_index` / `max_bytes` byte offset 兼容能力。
+- 大文件概要路径仍会先检测二进制内容，避免绕过 `BINARY_FILE_UNSUPPORTED`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中补充执行提示，要求大文件或代码片段优先使用 `query` 或行窗口读取。
+
+#### 回归点
+
+- 大文件默认返回概要，不再直接硬失败。
+- `read_file(start_line=..., limit_lines=...)` 必须按完整代码行返回窗口。
+- `read_file(query=..., context_lines=...)` 必须返回命中行和上下文窗口。
+- query 未命中时应返回 `QUERY_NOT_FOUND`，并说明总行数。
+- 旧 byte offset 读取行为仍保持兼容。
+
+### 150. TUI 工具调用与返回分开展示，可读性差
+
+#### 现象
+
+- TUI 执行过程里同一个工具调用会拆成“调用”和“返回”两行。
+- 大量工具调用时，用户需要上下对照 call id 才能知道某个调用的参数和结果。
+- 工具参数较长时，过程区会显得像调试日志。
+
+#### 修复
+
+- 在 [src/vora/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui_formatting.py) 中把工具活动合并为单行三段：
+  - 调用函数：`read_file(call-read)`
+  - 参数：`path: README.md`
+  - 结果：`成功，read README.md`
+- 无返回时展示 `结果: 等待`，无参数时展示 `参数: -`。
+- 仅有 observation 或仅有 tool return 的 fallback 场景也统一为三段格式。
+- 保留代码修改工具的 `diff_preview` 展示，作为工具行下方的缩进“变更预览”。
+
+#### 回归点
+
+- 工具调用行必须同时包含函数、参数和结果。
+- 不应再出现重复的“工具调用 / 工具返回”分组。
+- 涉及代码 diff 的工具结果必须继续展示 `变更预览`。
+
+### 151. report-write 门禁误拦源码修改
+
+#### 现象
+
+- 当任务目标里包含“总结 / 报告 / 摘要”等词时，`_report_write_precondition_error()` 会认为这是报告类请求。
+- 如果模型随后写入 `src/vora/skills/registry.py` 这类源码文件，也会被误判为“报告落盘”，返回：
+  - `REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST`
+  - `report write rejected: answer inline instead of writing ...`
+- 这导致代码修改任务即使已有测试证据，也无法进入正常写入确认流。
+
+#### 修复
+
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中调整 report-write 门禁：
+  - 如果目标路径是生产代码文件，跳过 report-write 门禁。
+  - 代码修改仍继续受 `CODE_CHANGE_REQUIRES_TEST_FIRST` 和写入确认流约束。
+- 这样 report-write 只约束报告、摘要、文档类“未显式要求落文件”的场景，不再误伤源码修改。
+
+#### 回归点
+
+- `docs/report.md` 这类未显式要求落文件的报告写入仍应被拒绝。
+- `src/**/*.py` 这类源码写入不应被 report-write 门禁拒绝。
+- 源码写入仍必须满足测试证据和写入确认要求。
+
+### 152. 内置演示 Skill 定位仍偏面试场景
+
+#### 现象
+
+- 旧内置 Skill `interview-demo` 更偏“面试作品讲解”。
+- 当前项目定位已经调整为本地代码开发 Agent，面试只是使用场景之一，不应让内置能力继续强化“面试项目”定位。
+
+#### 修复
+
+- 在 [src/vora/skills/registry.py](/Users/liyong/Desktop/ai-manus/src/vora/skills/registry.py) 中将该内置 Skill 调整为 `production-code-demo`。
+- 新 Skill 聚焦生产级代码开发 Agent 展示，强调代码生成/修改/测试/调试、质量门禁、安全边界、工具调度、上下文压缩、可扩展架构和后续 roadmap。
+
+#### 回归点
+
+- 内置 Skill 不应把项目描述为纯面试项目。
+- 讲解时应同时说明已实现能力、当前边界和后续演进。
+
 ## 本轮新增/调整测试
 
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
@@ -888,6 +978,14 @@
 - [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
   - 扩展 `test_format_welcome_explains_limits_and_controls`，确认欢迎页展示 MCP 和 Skills 管理入口。
 - 全仓测试与评测导入路径同步迁移到 `vora` 包名，覆盖 `python -m vora`、`vora` CLI help、MCP/Skills 子命令和 TUI 欢迎页。
+- [tests/test_tools.py](/Users/liyong/Desktop/ai-manus/tests/test_tools.py)
+  - 增加 `read_file` 大文件概要、按行窗口读取、query 命中上下文和 query 未命中的回归测试。
+- [tests/test_prompt_tui.py](/Users/liyong/Desktop/ai-manus/tests/test_prompt_tui.py)
+  - 增加工具行三段式展示测试。
+  - 增加代码 diff 预览保留测试，确认三段式工具行不会吞掉 `变更预览`。
+- [tests/test_runtime.py](/Users/liyong/Desktop/ai-manus/tests/test_runtime.py)
+  - 增加生产代码写入不被 report-write 门禁误拦的回归测试。
+  - 更新大文件概要后的 `read_file` 重试测试。
 ## 验证结果
 
 本轮修复完成后，已执行：
@@ -904,7 +1002,7 @@ python -m build
 
 结果：
 
-- `pytest -q`：553 passed
+- `pytest -q`：559 passed
 - `ruff check src tests evals`：通过
 - `mypy`：36 个源码文件无错误
 - `python evals/run_evals.py`：12/12 通过
