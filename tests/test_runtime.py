@@ -6,20 +6,20 @@ from time import perf_counter, sleep
 
 import pytest
 
-from manus_mini.llm import LLMResult
-from manus_mini.context import estimate_message_tokens
-from manus_mini.executor import Executor
-from manus_mini.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
-from manus_mini.react import ReActLoop, format_tool_result_message
-from manus_mini.reflection import ReflectionLoop, ReflectionResult
-from manus_mini.logging import EventLogger
-from manus_mini.reporter import Reporter
-from manus_mini.logging import project_outputs_dir
-from manus_mini.runtime import AgentRuntime
-from manus_mini.session import SessionManager
-from manus_mini.tools.base import ToolResult
-from manus_mini.tools.file_tools import ReplaceInFileTool
-from manus_mini.tools.registry import ToolRegistry
+from vora.llm import LLMResult
+from vora.context import estimate_message_tokens
+from vora.executor import Executor
+from vora.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
+from vora.react import ReActLoop, format_tool_result_message
+from vora.reflection import ReflectionLoop, ReflectionResult
+from vora.logging import EventLogger
+from vora.reporter import Reporter
+from vora.logging import project_outputs_dir
+from vora.runtime import AgentRuntime
+from vora.session import SessionManager
+from vora.tools.base import ToolResult
+from vora.tools.file_tools import ReplaceInFileTool
+from vora.tools.registry import ToolRegistry
 from support import ScriptedLLM
 
 
@@ -121,7 +121,7 @@ def test_runtime_does_not_inject_failed_task_result_as_existing_artifact(tmp_pat
     ]
 
 
-def test_runtime_identity_question_uses_manus_mini_system_identity(tmp_path: Path) -> None:
+def test_runtime_identity_question_uses_vora_system_identity(tmp_path: Path) -> None:
     class IdentityLLM:
         def __init__(self) -> None:
             self.system_prompts = []
@@ -130,7 +130,7 @@ def test_runtime_identity_question_uses_manus_mini_system_identity(tmp_path: Pat
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             self.tool_names.append(list(tool_names))
             self.system_prompts.extend(message.content for message in messages if message.role == "system")
-            return LLMResult(content="我叫 manus-mini，是你的个人助理。")
+            return LLMResult(content="我叫 vora，是你的个人助理。")
 
     session = SessionState.create(cwd=tmp_path)
     runtime = AgentRuntime(llm=ScriptedLLM())
@@ -142,12 +142,12 @@ def test_runtime_identity_question_uses_manus_mini_system_identity(tmp_path: Pat
     assert result.active_task.status == "done"
     assert result.active_task.plan[0].intent == "chat"
     assert runtime.react_loop.llm.tool_names[0] == []
-    assert any("你叫 manus-mini" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+    assert any("你叫 vora" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert any("个人助理" in prompt for prompt in runtime.react_loop.llm.system_prompts)
-    assert "manus-mini" in result.messages[-1].content
+    assert "vora" in result.messages[-1].content
 
 
-def test_runtime_scripted_llm_answers_identity_question_with_manus_mini(tmp_path: Path) -> None:
+def test_runtime_scripted_llm_answers_identity_question_with_vora(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     runtime = AgentRuntime(llm=ScriptedLLM())
 
@@ -155,7 +155,7 @@ def test_runtime_scripted_llm_answers_identity_question_with_manus_mini(tmp_path
 
     assert result.active_task is not None
     assert result.active_task.plan[0].intent == "chat"
-    assert "manus-mini" in result.messages[-1].content
+    assert "vora" in result.messages[-1].content
 
 
 def test_runtime_cli_usage_error_passes_through_reflection(tmp_path: Path) -> None:
@@ -167,13 +167,13 @@ def test_runtime_cli_usage_error_passes_through_reflection(tmp_path: Path) -> No
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             self.calls += 1
             self.tool_names.append(list(tool_names))
-            return LLMResult(content="正确用法是 `manus-mini remove <session_id>`")
+            return LLMResult(content="正确用法是 `vora remove <session_id>`")
 
     session = SessionState.create(cwd=tmp_path)
     runtime = AgentRuntime(llm=ScriptedLLM())
     runtime.react_loop.llm = CliIssueLLM()
 
-    result = runtime.on_user_message("manus-mini list remove session-45dc2367524b 这个报错什么意思", session)
+    result = runtime.on_user_message("vora list remove session-45dc2367524b 这个报错什么意思", session)
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
@@ -186,8 +186,8 @@ def test_runtime_cli_usage_error_passes_through_reflection(tmp_path: Path) -> No
 
 def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
-    (tmp_path / "README.md").write_text("# manus-mini\n\nTUI Agent runtime.", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"manus-mini\"\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# vora\n\nTUI Agent runtime.", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"vora\"\n", encoding="utf-8")
     (tmp_path / "docs" / "v1-technical-design.md").write_text("三层 Agent Loop、工具调度、长期记忆。", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
     runtime = AgentRuntime(llm=ScriptedLLM())
@@ -196,18 +196,18 @@ def test_runtime_project_summary_uses_project_files(tmp_path: Path) -> None:
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
-    assert "manus-mini" in result.messages[-1].content
+    assert "vora" in result.messages[-1].content
     assert "TUI" in result.messages[-1].content
     tool_events = [event for event in result.active_task.trace_events if event.phase == "tool"]
     assert any(event.data.get("tool_name") == "list_files" for event in tool_events)
     assert any(event.data.get("tool_name") == "read_file" for event in tool_events)
-    assert runtime.memory_manager.search("manus-mini", limit=5)
+    assert runtime.memory_manager.search("vora", limit=5)
 
 
 def test_runtime_project_question_does_not_become_chat_only_when_planner_mislabels_intent(tmp_path: Path) -> None:
     class BadPlanner:
         def build_plan(self, goal, session):  # noqa: ANN001, ANN201, ARG002
-            from manus_mini.models import PlanStep
+            from vora.models import PlanStep
 
             return [PlanStep(description="读取 README.md 了解项目概述", intent="chat")]
 
@@ -248,7 +248,7 @@ def test_runtime_sends_project_code_overview_to_planner_before_project_requests(
             if self.calls == 1:
                 assert tool_names == []
                 system_messages = [message for message in messages if message.role == "system"]
-                assert any("你叫 manus-mini" in message.content for message in system_messages)
+                assert any("你叫 vora" in message.content for message in system_messages)
                 assert any("项目代码目录结构" in message.content for message in system_messages)
                 assert any("src/：核心实现代码" in message.content for message in system_messages)
                 assert any("工具使用要克制" in message.content for message in system_messages)
@@ -257,8 +257,8 @@ def test_runtime_sends_project_code_overview_to_planner_before_project_requests(
 
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
-    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "src" / "vora").mkdir(parents=True)
+    (tmp_path / "src" / "vora" / "runtime.py").write_text("print('hi')", encoding="utf-8")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
     (tmp_path / "tests").mkdir()
@@ -289,7 +289,7 @@ def test_runtime_output_file_records_input_process_observations_and_result_in_ch
     artifact_path = result.active_task.artifacts[-1].path
     content = artifact_path.read_text(encoding="utf-8")
 
-    assert "# Manus Mini Run" in content
+    assert "# Vora Run" in content
     assert "## 1. 用户目标" in content
     assert "读取 a.md" in content
     assert "## 2. 执行步骤" in content
@@ -327,7 +327,7 @@ def test_runtime_defaults_to_project_reporter_output_dir_under_pytest(tmp_path: 
     runtime = AgentRuntime(llm=ScriptedLLM(), cwd=tmp_path)
 
     assert runtime.reporter.output_dir == project_outputs_dir(tmp_path)
-    assert ".manus-mini/projects/" in str(runtime.logger.root)
+    assert ".vora/projects/" in str(runtime.logger.root)
     assert str(runtime.logger.root).endswith("/logs")
     assert runtime.reporter.run_root is not None
     assert runtime.reporter.run_root == project_outputs_dir(tmp_path).parent / "logs"
@@ -1381,7 +1381,7 @@ def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_pat
                 )
             return LLMResult(content="ok")
 
-    source = tmp_path / "src" / "manus_mini" / "prompt_tui_formatting.py"
+    source = tmp_path / "src" / "vora" / "prompt_tui_formatting.py"
     source.parent.mkdir(parents=True)
     source.write_text("def format_status(): pass", encoding="utf-8")
     session = SessionState.create(cwd=tmp_path)
@@ -1392,7 +1392,7 @@ def test_react_loop_rewrites_missing_root_source_path_to_unique_src_file(tmp_pat
     assert result == "ok"
     read_event = next(event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "read_file")
     assert read_event.data["ok"] is True
-    assert read_event.data["args"]["path"] == "src/manus_mini/prompt_tui_formatting.py"
+    assert read_event.data["args"]["path"] == "src/vora/prompt_tui_formatting.py"
     assert read_event.data.get("path_rewritten") is True
 
 
@@ -1785,7 +1785,7 @@ def test_executor_shutdown_can_detach_running_tool_threads_from_python_exit_join
 
 def test_executor_threading_exit_hook_detaches_live_tool_threads(tmp_path: Path) -> None:
     import concurrent.futures.thread as futures_thread
-    from manus_mini import executor as executor_module
+    from vora import executor as executor_module
 
     class BlockingTool:
         name = "blocking_exit"
@@ -2522,7 +2522,7 @@ def test_runtime_replans_with_llm_planner_after_reflection_requests_replan(tmp_p
 
         def build_plan(self, goal: str, session: SessionState):  # noqa: ANN001, ANN201
             self.calls.append(goal)
-            from manus_mini.models import PlanStep
+            from vora.models import PlanStep
 
             return [
                 PlanStep(description="重新识别目标并拆分执行步骤", intent="report"),
@@ -2612,9 +2612,9 @@ def test_runtime_falls_back_when_model_returns_raw_tool_call_markup(tmp_path: Pa
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
-    assert 'manus-mini run "总结一下当前项目" --cwd .' in result.messages[-1].content
-    assert "manus-mini list --cwd ." in result.messages[-1].content
-    assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
+    assert 'vora run "总结一下当前项目" --cwd .' in result.messages[-1].content
+    assert "vora list --cwd ." in result.messages[-1].content
+    assert "vora resume <session-id> --cwd ." in result.messages[-1].content
     assert "tui" not in result.messages[-1].content.lower()
     assert "<｜｜DSML｜｜tool_calls>" not in result.messages[-1].content
 
@@ -2632,7 +2632,7 @@ def test_runtime_fallback_for_identity_question_is_useful(tmp_path: Path) -> Non
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
-    assert "我是 manus-mini" in result.messages[-1].content
+    assert "我是 vora" in result.messages[-1].content
     assert "兜底原因" not in result.messages[-1].content
 
 
@@ -2650,9 +2650,9 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     assert result.active_task is not None
     assert result.active_task.status == "done"
     assert "pip install -e" in result.messages[-1].content
-    assert 'manus-mini run "总结一下当前项目" --cwd .' in result.messages[-1].content
-    assert "manus-mini list --cwd ." in result.messages[-1].content
-    assert "manus-mini resume <session-id> --cwd ." in result.messages[-1].content
+    assert 'vora run "总结一下当前项目" --cwd .' in result.messages[-1].content
+    assert "vora list --cwd ." in result.messages[-1].content
+    assert "vora resume <session-id> --cwd ." in result.messages[-1].content
     assert "tui" not in result.messages[-1].content.lower()
 
 
@@ -2689,7 +2689,7 @@ def test_runtime_fallback_answers_interview_project_questions(tmp_path: Path, pr
         ("写入确认是怎么做的？", ["diff", "确认", "取消"]),
         ("能不能修改工作区外的文件？", ["不能", "工作区", "PATH_OUT_OF_WORKSPACE"]),
         ("如果要改代码，怎么保证改完是对的？", ["测试", "Reflection", "pytest"]),
-        ("怎么恢复刚才的会话继续修改？", ["manus-mini list", "manus-mini resume", "session_id"]),
+        ("怎么恢复刚才的会话继续修改？", ["vora list", "vora resume", "session_id"]),
     ],
 )
 def test_runtime_fallback_answers_interview_operation_questions(tmp_path: Path, prompt: str, expected_terms: list[str]) -> None:
@@ -2714,11 +2714,11 @@ def test_runtime_fallback_answers_interview_operation_questions(tmp_path: Path, 
     ("prompt", "expected_terms"),
     [
         ("这个项目怎么配置模型？", [".env", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"]),
-        ("运行日志和产物保存在哪里？", [".manus-mini", "sessions", "logs", "outputs"]),
+        ("运行日志和产物保存在哪里？", [".vora", "sessions", "logs", "outputs"]),
         ("上下文压缩是怎么做的？", ["50%", "70%", "90%", "CompressionSnapshot", "tool call"]),
         ("长期记忆是怎么工作的？", ["SQLite", "关键词检索", "敏感信息", "project_memory_path"]),
         ("如果搜索失败怎么办？", ["未获取到有效搜索结果", "页面内容读取失败", "证据不足"]),
-        ("怎么查看历史会话？", ["manus-mini list", "manus-mini resume", "session_id"]),
+        ("怎么查看历史会话？", ["vora list", "vora resume", "session_id"]),
     ],
 )
 def test_runtime_fallback_answers_interview_engineering_questions(
@@ -2852,7 +2852,7 @@ def test_runtime_fallback_answers_interview_defense_questions(
         ("这个项目怎么处理并发和状态一致性？", ["单用户", "串行写入", "ToolScheduler", "session"]),
         ("这个项目怎么做配置管理和环境隔离？", [".env", "环境变量", "源码根目录", "项目级"]),
         ("如果 session 文件损坏了怎么办？", ["CorruptSessionError", "list", "resume", "友好错误"]),
-        ("这个项目怎么做数据隔离？", ["project_key", "~/.manus-mini/projects", "sessions", "logs"]),
+        ("这个项目怎么做数据隔离？", ["project_key", "~/.vora/projects", "sessions", "logs"]),
         ("如果命令执行超时怎么办？", ["max_tool_timeout_seconds", "TIMEOUT", "ToolObservation", "失败说明"]),
         ("这个项目怎么处理敏感信息和密钥？", ["redact_sensitive_text", "API key", "token", "长期记忆"]),
         ("如果 LLM 返回空结果怎么办？", ["空结果", "fallback", "兜底", "done"]),
@@ -2929,7 +2929,7 @@ def test_runtime_fallback_recognizes_space_split_current_project_prompt(tmp_path
 
     assert result.active_task is not None
     assert result.active_task.status == "done"
-    assert "这个项目是 manus-mini" in result.messages[-1].content
+    assert "这个项目是 vora" in result.messages[-1].content
     assert "兜底原因" not in result.messages[-1].content
 
 
@@ -3316,7 +3316,7 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
 
 
 def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
-    from manus_mini.tools.base import ToolResult
+    from vora.tools.base import ToolResult
 
     result = ToolResult(
         tool_name="read_file",
@@ -3336,7 +3336,7 @@ def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
 
 
 def test_react_loop_finishes_when_large_tool_results_are_summarized(tmp_path: Path) -> None:
-    from manus_mini.tools.base import ToolResult
+    from vora.tools.base import ToolResult
 
     class HugeListTool:
         name = "list_files"

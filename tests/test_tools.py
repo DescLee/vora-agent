@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from manus_mini.tools.base import resolve_workspace_path
-from manus_mini.tools import (
+from vora.tools.base import resolve_workspace_path
+from vora.tools import (
     AppendFileTool,
     FetchWebpageTool,
     ListFilesTool,
@@ -53,13 +53,13 @@ def test_file_write_tools_reject_directory_targets_with_structured_error(tmp_pat
 
 
 def test_resolve_workspace_path_allows_system_tmp(tmp_path: Path) -> None:
-    target = resolve_workspace_path(tmp_path, "/tmp/manus-mini-test.txt")
+    target = resolve_workspace_path(tmp_path, "/tmp/vora-test.txt")
 
     assert target.resolve().is_relative_to(Path("/tmp").resolve(strict=False))
 
 
 def test_write_file_allows_system_tmp_path(tmp_path: Path) -> None:
-    target = Path("/tmp") / "manus-mini-write-test.txt"
+    target = Path("/tmp") / "vora-write-test.txt"
     if target.exists():
         target.unlink()
 
@@ -73,7 +73,7 @@ def test_write_file_allows_system_tmp_path(tmp_path: Path) -> None:
     assert result.ok is True
     assert target.read_text(encoding="utf-8") == "hello"
     assert result.written_path is not None
-    assert result.written_path.endswith("manus-mini-write-test.txt")
+    assert result.written_path.endswith("vora-write-test.txt")
     target.unlink()
 
 
@@ -606,7 +606,7 @@ def test_web_search_rejects_invalid_max_results() -> None:
 
 
 def test_web_search_formats_results(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
 
     class FakeDDGS:
         def __enter__(self):
@@ -635,7 +635,7 @@ def test_web_search_formats_results(monkeypatch) -> None:
 
 
 def test_web_search_redacts_secret_values_in_result_urls(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
 
     class FakeDDGS:
         def __enter__(self):
@@ -663,7 +663,7 @@ def test_web_search_redacts_secret_values_in_result_urls(monkeypatch) -> None:
 
 
 def test_web_search_redacts_secret_values_in_query_outputs(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
 
     class FakeDDGS:
         def __enter__(self):
@@ -686,7 +686,7 @@ def test_web_search_redacts_secret_values_in_query_outputs(monkeypatch) -> None:
 
 
 def test_web_search_suppresses_duckduckgo_package_rename_warning(monkeypatch, recwarn, capsys) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import sys
     import warnings
 
@@ -730,7 +730,7 @@ def test_fetch_webpage_validates_url() -> None:
 
 
 def test_fetch_webpage_accepts_uppercase_http_scheme(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     class FakeResponse:
@@ -799,7 +799,7 @@ def test_fetch_webpage_rejects_private_network_literal_urls() -> None:
 
 
 def test_fetch_webpage_rejects_hosts_that_resolve_to_private_addresses(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     def fake_getaddrinfo(host, port, type=0):  # noqa: ANN001, ANN202
@@ -827,7 +827,7 @@ def test_fetch_webpage_rejects_hosts_that_resolve_to_private_addresses(monkeypat
 
 
 def test_fetch_webpage_strips_html(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     class FakeResponse:
@@ -861,7 +861,7 @@ def test_fetch_webpage_strips_html(monkeypatch) -> None:
 
 
 def test_fetch_webpage_decodes_numeric_html_entities(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     class FakeResponse:
@@ -890,7 +890,7 @@ def test_fetch_webpage_decodes_numeric_html_entities(monkeypatch) -> None:
 
 
 def test_fetch_webpage_rejects_redirect_to_private_network(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     class RedirectResponse:
@@ -925,7 +925,7 @@ def test_fetch_webpage_rejects_redirect_to_private_network(monkeypatch) -> None:
 
 
 def test_fetch_webpage_redacts_secret_values_in_url_outputs(monkeypatch) -> None:
-    from manus_mini.tools import search_tools
+    from vora.tools import search_tools
     import socket
 
     class FakeResponse:

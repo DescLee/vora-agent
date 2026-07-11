@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from manus_mini.tools.automation_tools import extract_todos, generate_checklist, organize_notes
-from manus_mini.tools.code_tools import apply_text_edit, propose_patch, scan_project
-from manus_mini.tools.research_tools import collect_local_docs, generate_markdown_report, summarize_text
+from vora.tools.automation_tools import extract_todos, generate_checklist, organize_notes
+from vora.tools.code_tools import apply_text_edit, propose_patch, scan_project
+from vora.tools.research_tools import collect_local_docs, generate_markdown_report, summarize_text
 
 
 def test_research_tools_cover_local_docs_and_reporting(tmp_path: Path) -> None:

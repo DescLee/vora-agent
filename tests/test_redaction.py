@@ -1,4 +1,4 @@
-from manus_mini.redaction import redact_sensitive_text, redact_sensitive_value
+from vora.redaction import redact_sensitive_text, redact_sensitive_value
 
 
 def test_redacts_authorization_bearer_tokens() -> None:

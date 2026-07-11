@@ -29,7 +29,7 @@ def test_eval_runner_writes_machine_and_human_reports(tmp_path: Path) -> None:
     payload = json.loads(json_report.read_text(encoding="utf-8"))
     assert exit_code == 0
     assert payload["failed"] == 0
-    assert "Manus Mini Eval 报告" in markdown_report.read_text(encoding="utf-8")
+    assert "Vora Eval 报告" in markdown_report.read_text(encoding="utf-8")
     assert "分类统计" in markdown_report.read_text(encoding="utf-8")
 
 

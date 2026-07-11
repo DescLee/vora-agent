@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from manus_mini.llm import LLMResult, openai_messages
-from manus_mini.models import ToolCall
+from vora.llm import LLMResult, openai_messages
+from vora.models import ToolCall
 
 
 class ScriptedLLM:
@@ -25,7 +25,7 @@ class ScriptedLLM:
         chat_mode = any(keyword in system_text for keyword in ["对于闲聊", "名字和自我介绍类轻量问题"])
         if chat_mode:
             if any(keyword in user_text for keyword in ["你的名字", "你叫什么", "你是谁"]):
-                content = "我叫 manus-mini，是你的个人助理。"
+                content = "我叫 vora，是你的个人助理。"
             elif any(keyword in user_text for keyword in ["你好", "您好", "hello", "hi"]):
                 content = "你好，我在。你可以继续说你的问题。"
             elif any(keyword in user_text for keyword in ["能力", "可以", "会不会", "能不能", "是否"]):
@@ -39,13 +39,13 @@ class ScriptedLLM:
             )
 
         project_query = any(keyword in user_text for keyword in ["当前项目", "这个项目", "项目是做什么", "项目作用"])
-        cli_issue_query = any(keyword in user_text for keyword in ["manus-mini", "usage:", "unrecognized arguments", "argparse"])
-        cli_remove_mixup = "list remove" in user_text and "manus-mini" in user_text
+        cli_issue_query = any(keyword in user_text for keyword in ["vora", "usage:", "unrecognized arguments", "argparse"])
+        cli_remove_mixup = "list remove" in user_text and "vora" in user_text
         if cli_issue_query or cli_remove_mixup:
             return LLMResult(
                 content=(
                     "这条命令写法有误：`remove` 是独立子命令，不能跟在 `list` 后面。"
-                    "正确用法是 `manus-mini remove <session_id>`。"
+                    "正确用法是 `vora remove <session_id>`。"
                 ),
                 source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
                 source_response={"mode": "scripted", "content": "cli usage guidance"},
@@ -102,7 +102,7 @@ class ScriptedLLM:
                 ]
             )
 
-        if project_query and "read_file" in tool_names and "paths:" in tool_text and "# manus-mini" not in tool_text:
+        if project_query and "read_file" in tool_names and "paths:" in tool_text and "# vora" not in tool_text:
             return LLMResult(
                 tool_calls=[
                     ToolCall(
@@ -123,10 +123,10 @@ class ScriptedLLM:
                 ]
             )
 
-        if project_query and "# manus-mini" in tool_text:
+        if project_query and "# vora" in tool_text:
             return LLMResult(
                 content=(
-                    "这个项目是 manus-mini，一个本地 TUI 版 Agent Runtime。"
+                    "这个项目是 vora，一个本地 TUI 版 Agent Runtime。"
                     "它的核心作用是让用户在终端里连续对话，驱动 Agent 通过 ReAct 循环调用文件工具，"
                     "再经过 reflection 与外层工程循环生成调研、总结或代码相关产物。"
                     "项目已经包含 prompt_toolkit TUI、OpenAI-compatible 配置、文件工具、"

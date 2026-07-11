@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from manus_mini.models import ToolCall
-from manus_mini.scheduler import ToolScheduler
-from manus_mini.tools import ToolRegistry
+from vora.models import ToolCall
+from vora.scheduler import ToolScheduler
+from vora.tools import ToolRegistry
 
 
 def test_scheduler_batches_parallel_read_only_tools(tmp_path: Path) -> None:

@@ -3,11 +3,11 @@ import json
 import threading
 import time
 
-from manus_mini.llm import LLMResult
-from manus_mini.tools.shell_tools import LLMCommandRiskJudge
-from manus_mini.tools import ToolRegistry
-from manus_mini.tools.shell_tools import CommandRisk
-from manus_mini.tools.shell_tools import RunBashTool, RunTempScriptTool
+from vora.llm import LLMResult
+from vora.tools.shell_tools import LLMCommandRiskJudge
+from vora.tools import ToolRegistry
+from vora.tools.shell_tools import CommandRisk
+from vora.tools.shell_tools import RunBashTool, RunTempScriptTool
 
 
 class StaticRiskJudge:

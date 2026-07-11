@@ -3,10 +3,10 @@ import urllib.error
 
 import pytest
 
-from manus_mini.config import AppConfig
-from manus_mini.llm import LLMRequestError, OpenAICompatibleLLMClient, extract_usage, infer_model_context_limit, openai_messages, tool_schema
-from manus_mini.tools import ToolRegistry
-from manus_mini.models import Message
+from vora.config import AppConfig
+from vora.llm import LLMRequestError, OpenAICompatibleLLMClient, extract_usage, infer_model_context_limit, openai_messages, tool_schema
+from vora.tools import ToolRegistry
+from vora.models import Message
 
 
 def test_openai_compatible_client_wraps_http_error(monkeypatch) -> None:

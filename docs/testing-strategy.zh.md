@@ -1,4 +1,4 @@
-# Manus Mini 测试与评测策略
+# Vora 测试与评测策略
 
 ## 目标
 
@@ -59,7 +59,7 @@ python evals/run_evals.py
 ```bash
 ruff check src tests evals
 mypy
-pytest --cov=manus_mini --cov-report=term-missing --cov-report=xml
+pytest --cov=vora --cov-report=term-missing --cov-report=xml
 python evals/run_evals.py --json-report eval-report.json --markdown-report eval-report.md
 python -m build
 ```

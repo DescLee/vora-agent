@@ -1,4 +1,4 @@
-# Manus Mini Eval 说明
+# Vora Eval 说明
 
 ## 目的
 

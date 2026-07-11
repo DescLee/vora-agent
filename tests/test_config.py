@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from manus_mini.config import AppConfig, load_dotenv
-from manus_mini.llm import OpenAICompatibleLLMClient, get_default_llm_client
+from vora.config import AppConfig, load_dotenv
+from vora.llm import OpenAICompatibleLLMClient, get_default_llm_client
 
 
 def clear_llm_env_vars(monkeypatch) -> None:
@@ -91,7 +91,7 @@ def test_app_config_reads_env_file(tmp_path: Path, monkeypatch) -> None:
 def test_app_config_falls_back_to_user_env_when_project_env_is_missing(tmp_path: Path, monkeypatch) -> None:
     clear_llm_env_vars(monkeypatch)
     home = tmp_path / "home"
-    user_env = home / ".manus-mini" / ".env"
+    user_env = home / ".vora" / ".env"
     user_env.parent.mkdir(parents=True)
     user_env.write_text(
         "LLM_PROVIDER=openai-compatible\n"
@@ -125,7 +125,7 @@ def test_app_config_falls_back_to_package_env_when_project_and_user_env_are_miss
 
     config = AppConfig.from_env(
         tmp_path / "other-project" / ".env",
-        user_env_path=tmp_path / "home" / ".manus-mini" / ".env",
+        user_env_path=tmp_path / "home" / ".vora" / ".env",
         package_env_path=package_env,
     )
 
@@ -153,7 +153,7 @@ def test_get_default_llm_client_requires_explicit_provider(tmp_path: Path, monke
     monkeypatch.chdir(tmp_path)
     config = AppConfig.from_env(
         tmp_path / ".env",
-        user_env_path=tmp_path / "home" / ".manus-mini" / ".env",
+        user_env_path=tmp_path / "home" / ".vora" / ".env",
         package_env_path=tmp_path / "package" / ".env",
     )
 

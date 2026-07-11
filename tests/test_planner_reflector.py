@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from manus_mini.llm import LLMResult
-from manus_mini.models import AgentError, LoopLimits, PlanStep, SessionState, TaskState, TraceEvent
-from manus_mini.planner import Planner, build_planner_system_prompt
-from manus_mini.reflection import ReflectionLoop
-from manus_mini.reflector import Reflector
-from manus_mini.reflector import _cli_usage_explained
+from vora.llm import LLMResult
+from vora.models import AgentError, LoopLimits, PlanStep, SessionState, TaskState, TraceEvent
+from vora.planner import Planner, build_planner_system_prompt
+from vora.reflection import ReflectionLoop
+from vora.reflector import Reflector
+from vora.reflector import _cli_usage_explained
 
 
 def test_planner_produces_steps_for_project_analysis(tmp_path: Path) -> None:
@@ -55,7 +55,7 @@ def test_planner_treats_cli_usage_errors_as_report_tasks(tmp_path: Path) -> None
     planner = Planner()
     session = SessionState.create(cwd=tmp_path)
 
-    steps = planner.build_plan("manus-mini list remove session-45dc2367524b 这个报错什么意思", session=session)
+    steps = planner.build_plan("vora list remove session-45dc2367524b 这个报错什么意思", session=session)
 
     assert steps
     assert all(step.intent != "chat" for step in steps)
@@ -145,8 +145,8 @@ def test_planner_corrects_chat_intent_for_file_reading_steps(tmp_path: Path) -> 
 def test_planner_system_prompt_includes_identity_project_overview_and_tool_constraints(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
-    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "src" / "vora").mkdir(parents=True)
+    (tmp_path / "src" / "vora" / "runtime.py").write_text("print('hi')", encoding="utf-8")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
     (tmp_path / "tests").mkdir()
@@ -156,7 +156,7 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
 
     prompt = build_planner_system_prompt(session)
 
-    assert "你叫 manus-mini" in prompt
+    assert "你叫 vora" in prompt
     assert "个人助理" in prompt
     assert "代码项目的查看、总结、诊断和优化建议" in prompt
     assert "修改、删除和生成" in prompt
@@ -194,7 +194,7 @@ def test_planner_sends_identity_and_project_overview_to_llm(tmp_path: Path) -> N
 
     system_prompt = llm.messages[0][0].content
     assert llm.messages[0][0].role == "system"
-    assert "你叫 manus-mini" in system_prompt
+    assert "你叫 vora" in system_prompt
     assert "项目代码目录结构" in system_prompt
     assert "工具使用要克制" in system_prompt
     assert "先定位目标模块，再决定是否读取文件" in system_prompt
@@ -426,7 +426,7 @@ def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_
         TraceEvent(
             phase="tool",
             message="Tool replace_in_file finished: ok",
-            data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced src/manus_mini/prompt_tui.py"},
+            data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced src/vora/prompt_tui.py"},
         )
     )
     task.trace_events.append(
@@ -438,7 +438,7 @@ def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_
                 "ok": True,
                 "summary": "command exited 0",
                 "exit_code": 0,
-                "args": {"command": "python -m py_compile src/manus_mini/prompt_tui.py"},
+                "args": {"command": "python -m py_compile src/vora/prompt_tui.py"},
             },
         )
     )

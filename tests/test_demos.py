@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from manus_mini.llm import LLMResult
-from manus_mini.memory import MemoryManager
-from manus_mini.models import Message, SessionState, TaskState, ToolCall
-from manus_mini.react import ReActLoop
-from manus_mini.runtime import AgentRuntime
-from manus_mini.session import SessionManager
-from manus_mini.tools import ToolRegistry
+from vora.llm import LLMResult
+from vora.memory import MemoryManager
+from vora.models import Message, SessionState, TaskState, ToolCall
+from vora.react import ReActLoop
+from vora.runtime import AgentRuntime
+from vora.session import SessionManager
+from vora.tools import ToolRegistry
 from support import ScriptedLLM
 
 
@@ -107,7 +107,7 @@ def test_demo_code_flow_confirms_write_and_modifies_previous_artifact(tmp_path: 
 
 
 def test_demo_automation_flow_formats_todo_list() -> None:
-    from manus_mini.tools.automation_tools import extract_todos, generate_checklist, organize_notes
+    from vora.tools.automation_tools import extract_todos, generate_checklist, organize_notes
 
     inbox = "\n".join(["TODO: review docs", "- ship release", "meeting note", "* polish output"])
     todos = extract_todos(inbox)

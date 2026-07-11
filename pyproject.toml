@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "manus-mini"
+name = "vora"
 version = "20260702.1644"
 description = "A local, observable and safety-governed Agent Runtime for engineering demonstrations"
 readme = "README.md"
@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-manus-mini = "manus_mini.cli:main"
+vora = "vora.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -40,7 +40,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["manus_mini"]
+source = ["vora"]
 
 [tool.coverage.report]
 fail_under = 80
@@ -49,9 +49,9 @@ skip_covered = true
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src/manus_mini"]
+files = ["src/vora"]
 check_untyped_defs = true
 no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-exclude = ["src/manus_mini/prompt_tui.py", "src/manus_mini/prompt_tui_formatting.py"]
+exclude = ["src/vora/prompt_tui.py", "src/vora/prompt_tui_formatting.py"]

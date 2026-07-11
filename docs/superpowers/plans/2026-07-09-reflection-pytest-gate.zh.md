@@ -14,7 +14,7 @@
 
 **Files:**
 - Modify: `tests/test_planner_reflector.py`
-- Modify: `src/manus_mini/reflection.py`
+- Modify: `src/vora/reflection.py`
 
 - [ ] **Step 1: Write failing test**
 
@@ -38,7 +38,7 @@ Expected: PASS.
 
 **Files:**
 - Modify: `tests/test_planner_reflector.py`
-- Modify: `src/manus_mini/reflection.py`
+- Modify: `src/vora/reflection.py`
 
 - [ ] **Step 1: Write failing tests**
 

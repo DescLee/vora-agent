@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from manus_mini.models import ContextSegment, LoopLimits, Message, SessionState, TaskState
+from vora.models import ContextSegment, LoopLimits, Message, SessionState, TaskState
 
 
 def test_loop_limits_have_v1_defaults() -> None:

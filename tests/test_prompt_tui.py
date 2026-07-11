@@ -5,10 +5,10 @@ from pathlib import Path
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from manus_mini.memory import MemoryManager
-from manus_mini.logging import project_memory_path
-from manus_mini.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, TraceEvent
-from manus_mini.prompt_tui import (
+from vora.memory import MemoryManager
+from vora.logging import project_memory_path
+from vora.models import LoopLimits, Message, Observation, PlanStep, SessionState, TaskState, TraceEvent
+from vora.prompt_tui import (
     SHIFT_ENTER_SEQUENCES,
     PromptTui,
     PromptTuiOptions,
@@ -51,7 +51,7 @@ def test_format_messages_collapses_tool_file_content_into_summary(tmp_path: Path
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(
         Message.tool(
-            "read README.md\n\ncontent:\n# manus-mini\n\nmore text",
+            "read README.md\n\ncontent:\n# vora\n\nmore text",
             tool_call_id="call-read",
         )
     )
@@ -59,7 +59,7 @@ def test_format_messages_collapses_tool_file_content_into_summary(tmp_path: Path
     rendered = format_messages(session)
 
     assert "工具: [README.md 文件内容获取成功]" in rendered
-    assert "# manus-mini" not in rendered
+    assert "# vora" not in rendered
     assert "content:" not in rendered
 
 
@@ -109,14 +109,16 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
         llm_config_source=str(env_path),
     )
 
-    assert "Manus Mini TUI" in welcome
+    assert "Vora TUI" in welcome
     assert "直接输入任务开始连续对话" in welcome
-    assert "默认 TUI 入口：manus-mini --cwd ." in welcome
-    assert "一次性任务：manus-mini run" in welcome
-    assert "查看历史会话：manus-mini list --cwd ." in welcome
-    assert "恢复会话：manus-mini resume <session_id>" in welcome
+    assert "默认 TUI 入口：vora --cwd ." in welcome
+    assert "一次性任务：vora run" in welcome
+    assert "查看历史会话：vora list --cwd ." in welcome
+    assert "恢复会话：vora resume <session_id>" in welcome
+    assert "MCP 配置：vora mcp list --cwd ." in welcome
+    assert "Skills 管理：vora skills list --cwd ." in welcome
     assert "写入文件前会展示 diff 并等待确认" in welcome
-    assert "~/.manus-mini/projects/<project_key>" in welcome
+    assert "~/.vora/projects/<project_key>" in welcome
     assert "当前模型：deepseek-v4-flash" in welcome
     assert f"配置来源：{env_path}" in welcome
     assert "运行限制" in welcome
@@ -134,7 +136,7 @@ def test_format_welcome_explains_limits_and_controls(tmp_path: Path) -> None:
     assert "Ctrl+J：换行" in welcome
     assert "Tab：切换输入区和输出区" in welcome
     assert "Ctrl+C：退出" in welcome
-    assert "manus-mini tui" not in welcome
+    assert "vora tui" not in welcome
 
 
 def test_format_welcome_warns_when_llm_config_is_missing(tmp_path: Path) -> None:
@@ -170,9 +172,9 @@ def test_prompt_tui_welcome_shows_current_model(tmp_path: Path, monkeypatch) -> 
 
 
 def test_prompt_tui_welcome_warns_when_llm_config_is_missing(tmp_path: Path, monkeypatch) -> None:
-    from manus_mini.config import AppConfig
+    from vora.config import AppConfig
 
-    monkeypatch.setattr("manus_mini.prompt_tui.AppConfig.from_env", lambda *args, **kwargs: AppConfig())
+    monkeypatch.setattr("vora.prompt_tui.AppConfig.from_env", lambda *args, **kwargs: AppConfig())
 
     tui = PromptTui(
         options=PromptTuiOptions(cwd=tmp_path, limits=LoopLimits()),
@@ -300,7 +302,7 @@ def test_output_fragments_color_diff_when_process_text_is_rendered_standalone() 
 
 
 def test_format_process_renders_trace_events(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -324,7 +326,7 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
 
 
 def test_format_context_usage_counts_current_session_messages(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="统计上下文", cwd=tmp_path)
@@ -358,7 +360,7 @@ def test_format_context_usage_does_not_use_latest_llm_prompt_tokens(tmp_path: Pa
 
 
 def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -378,7 +380,7 @@ def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> 
 
 
 def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -444,7 +446,7 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
 
 
 def test_format_process_orders_llm_content_before_matching_tool_call_and_result(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -536,7 +538,7 @@ def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path
 
 
 def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -586,7 +588,7 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
 
 
 def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -651,7 +653,7 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -676,7 +678,7 @@ def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
 
 
 def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -747,7 +749,7 @@ def test_format_phase_label_maps_task_status_for_users(tmp_path: Path) -> None:
 
 
 def test_format_status_shows_reflection_reason_as_latest_activity(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -808,7 +810,7 @@ def test_format_process_shows_reflection_decisions_and_reasons(tmp_path: Path) -
 
 
 def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -850,7 +852,7 @@ def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp
 
 
 def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="长过程", cwd=tmp_path)
@@ -872,7 +874,7 @@ def test_format_process_limits_old_events_but_keeps_current_state(tmp_path: Path
 
 
 def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -894,7 +896,7 @@ def test_format_process_redacts_sensitive_trace_data(tmp_path: Path) -> None:
 
 
 def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("总结项目"))
@@ -917,7 +919,7 @@ def test_format_transcript_shows_process_while_running(tmp_path: Path) -> None:
 
 
 def test_format_transcript_keeps_process_for_final_artifact(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("总结项目"))
@@ -939,7 +941,7 @@ def test_format_transcript_keeps_process_for_final_artifact(tmp_path: Path) -> N
 
 
 def test_format_transcript_final_artifact_keeps_full_process_history(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("总结项目"))
@@ -996,7 +998,7 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
 
 def test_prompt_tui_renders_confirmation_overlay(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     session.pending_confirmation = PendingConfirmation(
@@ -1070,7 +1072,7 @@ def test_confirmation_fragments_color_diff_additions_and_removals() -> None:
 
 
 def test_prompt_tui_refreshes_confirmation_when_pending_appears_during_run(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     tui = PromptTui(cwd=tmp_path, initial_session=session)
@@ -1091,7 +1093,7 @@ def test_prompt_tui_refreshes_confirmation_when_pending_appears_during_run(tmp_p
 
 
 def test_prompt_tui_keeps_confirmation_overlay_visible_while_processing(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     session.pending_confirmation = PendingConfirmation(
@@ -1107,7 +1109,7 @@ def test_prompt_tui_keeps_confirmation_overlay_visible_while_processing(tmp_path
 
 
 def test_prompt_tui_scrolls_long_confirmation_preview(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     session.pending_confirmation = PendingConfirmation(
@@ -1129,7 +1131,7 @@ def test_prompt_tui_scrolls_long_confirmation_preview(tmp_path: Path) -> None:
 
 
 def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     session.pending_confirmation = PendingConfirmation(
@@ -1153,7 +1155,7 @@ def test_confirm_pending_confirmation_starts_background_follow_up(tmp_path: Path
 
 
 def test_prompt_tui_enter_cancel_text_rejects_pending_confirmation(tmp_path: Path) -> None:
-    from manus_mini.models import PendingConfirmation
+    from vora.models import PendingConfirmation
 
     session = SessionState.create(cwd=tmp_path)
     session.pending_confirmation = PendingConfirmation(
@@ -1179,7 +1181,7 @@ def test_prompt_tui_enter_cancel_text_rejects_pending_confirmation(tmp_path: Pat
 
 
 def test_format_status_context_usage_includes_active_task_process(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -1223,7 +1225,7 @@ def test_format_status_describes_current_step_while_running(tmp_path: Path) -> N
 
 
 def test_format_current_action_mentions_latest_tool_call_or_result(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
     task.trace_events.append(
@@ -1248,7 +1250,7 @@ def test_format_current_action_mentions_latest_tool_call_or_result(tmp_path: Pat
 
 
 def test_format_status_includes_current_action(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -1271,7 +1273,7 @@ def test_format_status_includes_current_action(tmp_path: Path) -> None:
 
 
 def test_format_status_shows_context_compression_running(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -1299,7 +1301,7 @@ def test_format_status_shows_context_compression_running(tmp_path: Path) -> None
 
 
 def test_format_status_keeps_compression_running_for_two_seconds_after_completion(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -1342,7 +1344,7 @@ def test_format_status_keeps_compression_running_for_two_seconds_after_completio
 
 
 def test_format_status_shows_context_compression_done(tmp_path: Path) -> None:
-    from manus_mini.models import CompressionSnapshot
+    from vora.models import CompressionSnapshot
 
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
@@ -1412,7 +1414,7 @@ def test_insert_newline_inserts_at_cursor() -> None:
 
 
 def test_fresh_tui_does_not_load_persistent_memories(tmp_path: Path) -> None:
-    persistent_memory = MemoryManager(tmp_path / ".manus-mini" / "memory.db")
+    persistent_memory = MemoryManager(tmp_path / ".vora" / "memory.db")
     persistent_memory.add(
         scope="project",
         kind="project_summary",
@@ -1532,7 +1534,7 @@ def test_send_current_input_carries_previous_result_into_context_usage(monkeypat
 
 
 def test_send_current_input_hides_previous_compression_status(monkeypatch, tmp_path: Path) -> None:
-    from manus_mini.models import CompressionSnapshot
+    from vora.models import CompressionSnapshot
 
     tui = PromptTui(cwd=tmp_path)
     tui.manager.current.compression_snapshots.append(
@@ -1655,7 +1657,7 @@ def test_run_agent_turn_saves_unexpected_error_for_resume(tmp_path: Path) -> Non
 
 
 def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(tmp_path: Path) -> None:
-    from manus_mini.context import validate_tool_call_pairs
+    from vora.context import validate_tool_call_pairs
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="读取文件", cwd=tmp_path)
@@ -1680,7 +1682,7 @@ def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(t
 
 
 def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -1703,7 +1705,7 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
 
 def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -1730,7 +1732,7 @@ def test_render_progress_reveals_trace_events_incrementally(tmp_path: Path) -> N
 
 
 def test_render_progress_keeps_output_scrolled_to_latest_content(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -1760,7 +1762,7 @@ def test_output_area_is_focusable_and_input_stays_compact() -> None:
 def test_prompt_tui_initial_output_shows_welcome_instead_of_empty_artifact() -> None:
     tui = PromptTui()
 
-    assert "欢迎使用 Manus Mini" in tui.output.text
+    assert "欢迎使用 Vora" in tui.output.text
     assert "直接输入任务开始连续对话" in tui.output.text
     assert "工程循环上限" in tui.output.text
     assert "当前产物会显示在这里" not in tui.output.text
@@ -1902,7 +1904,7 @@ def test_output_scroll_uses_cached_line_index_for_large_content() -> None:
 
 
 def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     tui = PromptTui(cwd=tmp_path)
     task = TaskState.create(goal="写报告", cwd=tmp_path)
@@ -2023,7 +2025,7 @@ def test_stream_session_preserves_scroll_when_reading_and_resumes_following_at_b
 
 
 def test_stream_session_final_output_can_scroll_back_to_full_history(tmp_path: Path) -> None:
-    from manus_mini.models import TraceEvent
+    from vora.models import TraceEvent
 
     async def run() -> None:
         tui = PromptTui(cwd=tmp_path)

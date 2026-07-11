@@ -13,8 +13,8 @@
 ### Task 1: Shell Tool Tests And Implementation
 
 **Files:**
-- Create: `src/manus_mini/tools/shell_tools.py`
-- Modify: `src/manus_mini/tools/registry.py`
+- Create: `src/vora/tools/shell_tools.py`
+- Modify: `src/vora/tools/registry.py`
 - Test: `tests/test_shell_tools.py`
 
 - [x] Write failing tests for `run_bash` success/failure and `run_temp_script` cleanup.
@@ -26,8 +26,8 @@
 ### Task 2: Reflection Test Gate
 
 **Files:**
-- Modify: `src/manus_mini/reflection.py`
-- Modify: `src/manus_mini/react.py`
+- Modify: `src/vora/reflection.py`
+- Modify: `src/vora/react.py`
 - Test: `tests/test_reflection.py` or existing reflection tests.
 
 - [x] Write failing tests for code modification tasks: no test run rejects accept, failed test rejects accept, passing test allows accept.

@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from manus_mini.context import validate_tool_call_pairs
-from manus_mini.models import Message, PendingConfirmation, SessionState, TaskState
-from manus_mini.runtime import AgentRuntime
-from manus_mini.session import SessionManager
-from manus_mini.session_store import SessionStore
+from vora.context import validate_tool_call_pairs
+from vora.models import Message, PendingConfirmation, SessionState, TaskState
+from vora.runtime import AgentRuntime
+from vora.session import SessionManager
+from vora.session_store import SessionStore
 from support import ScriptedLLM
 
 
@@ -110,8 +110,8 @@ def test_session_manager_help_command_lists_available_commands(monkeypatch, tmp_
     assert "可用指令" in help_text
     assert "/save-context" in help_text
     assert "/compact" in help_text
-    assert "manus-mini list" in help_text
-    assert "manus-mini resume" in help_text
+    assert "vora list" in help_text
+    assert "vora resume" in help_text
 
 
 def test_session_manager_keeps_pending_confirmation_when_user_sends_unrelated_message(tmp_path: Path) -> None:

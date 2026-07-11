@@ -1,4 +1,4 @@
-# Manus Mini 项目讲解 Demo 场景
+# Vora 项目讲解 Demo 场景
 
 ## 目标
 

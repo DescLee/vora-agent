@@ -16,17 +16,17 @@ SRC = ROOT / "src"
 if SRC.as_posix() not in sys.path:
     sys.path.insert(0, SRC.as_posix())
 
-from manus_mini.context import validate_tool_call_pairs
-from manus_mini.llm import LLMResult
-from manus_mini.memory import MemoryManager
-from manus_mini.models import Message, PendingConfirmation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
-from manus_mini.react import ReActLoop
-from manus_mini.reflection import ReflectionLoop
-from manus_mini.scheduler import ToolScheduler
-from manus_mini.session import SessionManager
-from manus_mini.tools.file_tools import ReadFileTool, WriteFileTool
-from manus_mini.tools.registry import ToolRegistry
-from manus_mini.tools.shell_tools import RunBashTool
+from vora.context import validate_tool_call_pairs
+from vora.llm import LLMResult
+from vora.memory import MemoryManager
+from vora.models import Message, PendingConfirmation, PlanStep, SessionState, TaskState, ToolCall, TraceEvent
+from vora.react import ReActLoop
+from vora.reflection import ReflectionLoop
+from vora.scheduler import ToolScheduler
+from vora.session import SessionManager
+from vora.tools.file_tools import ReadFileTool, WriteFileTool
+from vora.tools.registry import ToolRegistry
+from vora.tools.shell_tools import RunBashTool
 
 
 @dataclass(frozen=True)
@@ -282,7 +282,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
         bucket = category_counts.setdefault(result["category"], {"passed": 0, "failed": 0})
         bucket["passed" if result["ok"] else "failed"] += 1
     lines = [
-        "# Manus Mini Eval 报告",
+        "# Vora Eval 报告",
         "",
         f"- 总数：{report['total']}",
         f"- 通过：{report['passed']}",
@@ -310,7 +310,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="运行 Manus Mini 产品约束评测")
+    parser = argparse.ArgumentParser(description="运行 Vora 产品约束评测")
     parser.add_argument("--cases", type=Path, default=ROOT / "evals" / "cases.zh.json")
     parser.add_argument("--json-report", type=Path)
     parser.add_argument("--markdown-report", type=Path)

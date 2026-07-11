@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from manus_mini.context import (
+from vora.context import (
     ContextIntegrityError,
     build_project_code_overview,
     build_segments,
@@ -13,8 +13,8 @@ from manus_mini.context import (
     should_include_project_code_overview,
     validate_tool_call_pairs,
 )
-from manus_mini.llm import LLMResult
-from manus_mini.models import Message
+from vora.llm import LLMResult
+from vora.models import Message
 
 
 def test_estimate_tokens_uses_v1_rules() -> None:
@@ -282,8 +282,8 @@ def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "manus_mini").mkdir(parents=True)
-    (tmp_path / "src" / "manus_mini" / "runtime.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "src" / "vora").mkdir(parents=True)
+    (tmp_path / "src" / "vora" / "runtime.py").write_text("print('hi')", encoding="utf-8")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "design.md").write_text("design", encoding="utf-8")
     (tmp_path / "tests").mkdir()
@@ -294,7 +294,7 @@ def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path
     assert "项目代码目录结构" in overview
     assert "README.md：项目说明、安装方式和使用入口" in overview
     assert "src/：核心实现代码" in overview
-    assert "manus_mini/：主应用包，包含运行链路和工具逻辑" in overview
+    assert "vora/：主应用包，包含运行链路和工具逻辑" in overview
     assert "runtime.py：运行编排、外层循环和中断兜底" in overview
     assert "docs/：设计文档、问题记录和优化说明" in overview
     assert "tests/：自动化测试" in overview

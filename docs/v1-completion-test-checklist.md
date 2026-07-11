@@ -1,8 +1,8 @@
-# Manus Mini V1 完成度测试清单
+# Vora V1 完成度测试清单
 
 生成日期：2026-07-01
 
-本文用于对照 `docs/v1-product-design.md` 和 `docs/v1-technical-design.md`，审查 Manus Mini V1 当前实现与第一版功能/技术承诺之间的差距。
+本文用于对照 `docs/v1-product-design.md` 和 `docs/v1-technical-design.md`，审查 Vora V1 当前实现与第一版功能/技术承诺之间的差距。
 
 状态说明：
 
@@ -63,7 +63,7 @@ python evals/run_evals.py: 7 passed
 
 | 测试项目 | 优先级 | 完成情况 | 结论 |
 |---|---:|---:|---|
-| TUI 入口与连续对话 | P1 | 已完成 | `manus-mini` 和 prompt_toolkit TUI 都已接入参数化入口，可连续输入、渲染消息和产物。 |
+| TUI 入口与连续对话 | P1 | 已完成 | `vora` 和 prompt_toolkit TUI 都已接入参数化入口，可连续输入、渲染消息和产物。 |
 | 四区布局：消息区/产物区/状态区/输入区 | P2 | 已完成 | 已具备消息区、产物区、状态区和输入区，且能展示过程与确认状态。 |
 | CLI 参数：`--cwd`、`--max-steps`、`--max-react`、`--max-reflect`、`--dry-run` 等 | P1 | 已完成 | `argparse` 已接入，CLI 和 TUI 入口都支持参数化运行。 |
 | 三层 Loop 基础结构 | P0 | 已完成 | Runtime -> Reflection -> ReAct 已接入，且 Planner / Reflector / Executor / Observer 已拆分。 |
@@ -97,7 +97,7 @@ python evals/run_evals.py: 7 passed
 | 手动保存上下文快照 | P2 | 已完成 | `/save-context` 会在项目根目录写入带时间戳的 `context-*` 快照目录。 |
 | 指令帮助 | P3 | 已完成 | `/help` 会输出 TUI 指令和 CLI 指令清单。 |
 | 执行日志 `events.jsonl` | P2 | 已完成 | 已记录计划、反思、工具批次、超时和上下文信息。 |
-| 对话 list/resume | P1 | 已完成 | `manus-mini list` 可列出会话，`manus-mini resume <session_id>` 可恢复上下文。 |
+| 对话 list/resume | P1 | 已完成 | `vora list` 可列出会话，`vora resume <session_id>` 可恢复上下文。 |
 | `runs/<run_id>/summary.md` | P2 | 已完成 | Reporter 已写入 `runs/<run_id>/summary.md`。 |
 | Markdown 产物输出 | P3 | 已完成 | 每轮会写 `outputs/<timestamp>-<run_id>.md`。 |
 | 多轮基于当前产物修改 | P1 | 已完成 | 已保留会话历史、产物回写和当前产物上下文注入，可连续基于上一轮结果修改。 |

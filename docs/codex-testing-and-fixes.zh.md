@@ -1,6 +1,6 @@
 # Codex 测试与修复记录
 
-本文档记录本轮通过 Codex 对 `manus-mini` 进行真实运行测试后发现并修复的问题，便于后续回归验证、面试演示和继续迭代。
+本文档记录本轮通过 Codex 对 `vora` 进行真实运行测试后发现并修复的问题，便于后续回归验证、面试演示和继续迭代。
 
 ## 测试范围
 
@@ -17,19 +17,19 @@
 
 #### 现象
 
-- 直接执行 `manus-mini --cwd .` 时，旧实现会把 `.` 误判为子命令参数，报 `invalid choice`。
+- 直接执行 `vora --cwd .` 时，旧实现会把 `.` 误判为子命令参数，报 `invalid choice`。
 - README 中的启动示例和实际 CLI 解析行为不一致，容易误导首次使用者。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中增加顶层全局参数兼容。
-- 同时保留 `manus-mini list --cwd .` 这类原有子命令写法。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中增加顶层全局参数兼容。
+- 同时保留 `vora list --cwd .` 这类原有子命令写法。
 - 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中将显式启动命令改为当前仍支持的 `list` / `resume` 入口。
 
 #### 回归点
 
-- `manus-mini --cwd .`
-- `manus-mini list --cwd .`
+- `vora --cwd .`
+- `vora list --cwd .`
 
 ### 2. 模型可能将原始工具调用 DSL 直接暴露给用户
 
@@ -40,7 +40,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/llm.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/llm.py) 中增加对原始工具调用标记的检测。
+- 在 [src/vora/llm.py](/Users/liyong/Desktop/ai-manus/src/vora/llm.py) 中增加对原始工具调用标记的检测。
 - 命中后视为无效 LLM 输出，转入现有 rule fallback，而不是直接展示给用户。
 
 #### 回归点
@@ -51,13 +51,13 @@
 
 #### 现象
 
-- 默认日志、会话、产物、记忆路径位于 `~/.manus-mini`。
+- 默认日志、会话、产物、记忆路径位于 `~/.vora`。
 - 受限环境或沙箱环境下，用户主目录可能不可写，导致初始化过程直接抛错。
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中增加回退逻辑。
-- 如果默认用户目录不可写，则自动回退到项目内 `.manus-mini`。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 中增加回退逻辑。
+- 如果默认用户目录不可写，则自动回退到项目内 `.vora`。
 
 #### 回归点
 
@@ -75,8 +75,8 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展规则兜底：
-  - 身份问题直接回答 `我是 manus-mini...`
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展规则兜底：
+  - 身份问题直接回答 `我是 vora...`
   - 启动问题直接给安装、配置、启动和会话命令
   - “模型不可用”类问题直接解释兜底行为
   - 项目简介类问题给最小可用摘要
@@ -97,7 +97,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/runtime.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/runtime.py) 中增加 `_ensure_non_empty_result`。
+- 在 [src/vora/runtime.py](/Users/liyong/Desktop/ai-manus/src/vora/runtime.py) 中增加 `_ensure_non_empty_result`。
 - 无论是正常 reflection 结果、循环上限收口，还是确认后继续执行的结果，只要最终字符串为空，就强制回退到规则 fallback。
 
 #### 回归点
@@ -113,7 +113,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加报告类写入前置条件。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加报告类写入前置条件。
 - 对“行研/调研/摘要/报告”这类普通问答请求，默认要求 **直接在对话中回答**。
 - 只有当用户明确提出“保存到文件 / 写入文件 / 生成文件”等意图时，才允许 `write_file` 落文档。
 
@@ -131,7 +131,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加搜索失败收口逻辑。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加搜索失败收口逻辑。
 - 如果本轮 `web_search` 全部成功执行但结果都为 0，则在最终答案前自动加提示：
   - `本次联网搜索未获取到有效搜索结果`
   - `下面内容基于已有知识整理`
@@ -150,7 +150,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中将 `replace_in_file` 纳入确认流。
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中将 `replace_in_file` 纳入确认流。
 - 现在 `replace_in_file` 会像 `write_file` / `append_file` 一样先生成 diff 预览，再等待用户确认。
 
 #### 回归点
@@ -167,7 +167,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加本地启发式风险识别。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中增加本地启发式风险识别。
 - 目前会优先拦截这类明显的工作区文件修改命令并进入确认流，例如：
   - `sed -i`
   - `perl -pi`
@@ -189,7 +189,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中移除按语言隐藏 reasoning 的逻辑。
+- 在 [src/vora/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui_formatting.py) 中移除按语言隐藏 reasoning 的逻辑。
 - 中文和英文 reasoning 均按同一规则展示；超过 240 字符时仍会截断，避免撑满界面。
 
 #### 回归点
@@ -197,23 +197,23 @@
 - 英文 reasoning 应直接显示实际内容，不再替换为固定占位提示。
 - 长 reasoning 仍应保持 240 字符截断保护。
 
-### 11. `manus-mini clear` 会先删除会话，再询问用户是否确认
+### 11. `vora clear` 会先删除会话，再询问用户是否确认
 
 #### 现象
 
-- 按普通用户路径执行 `manus-mini clear --cwd <目录>` 时，旧实现会先调用 `clear_all()` 删除全部会话。
+- 按普通用户路径执行 `vora clear --cwd <目录>` 时，旧实现会先调用 `clear_all()` 删除全部会话。
 - 然后才弹出确认提示；即使用户输入 `n` 或直接取消，会话其实已经被删掉了。
 - 这会导致 CLI 确认流形同虚设，属于明显的数据删除顺序错误。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中调整 `clear` 子命令流程。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中调整 `clear` 子命令流程。
 - 先用 `list_sessions()` 统计当前会话数量，仅用于展示确认提示。
 - 只有用户明确确认后，才真正执行 `clear_all()` 和日志清理。
 
 #### 回归点
 
-- 用户拒绝 `manus-mini clear` 后，已有会话必须仍然存在。
+- 用户拒绝 `vora clear` 后，已有会话必须仍然存在。
 - 只有确认通过后，CLI 才能真正删除会话和对应日志。
 
 ### 12. 联网搜索失败时，最终行研回答未提示证据不足
@@ -226,7 +226,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中将搜索收口条件改为“本轮没有任何有效搜索结果”。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中将搜索收口条件改为“本轮没有任何有效搜索结果”。
 - 只要本轮调用过 `web_search`，但没有拿到有效结果，就在最终答案前追加证据不足提示。
 - 如果存在至少一次有效搜索结果，则不额外添加该提示，避免误伤正常搜索场景。
 
@@ -245,7 +245,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地命令风险启发式。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中扩展本地命令风险启发式。
 - 新增对相对路径输出重定向的识别，例如 `> note.md`、`>> logs/result.txt`。
 - 规则只针对相对路径，避免把 `/tmp/...` 这类非工作区输出路径误判为工作区文件修改。
 
@@ -264,7 +264,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展代码修改前置校验。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展代码修改前置校验。
 - 对 `run_bash` / `run_temp_script` 中明显的相对路径重定向写入，先解析目标路径。
 - 如果目标是生产代码文件，且当前任务还没有测试执行证据，则直接返回：
   - `CODE_CHANGE_REQUIRES_TEST_FIRST`
@@ -284,7 +284,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地风险启发式。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中扩展本地风险启发式。
 - 新增对 `tee` / `tee -a` 写相对路径文件的识别。
 - 仍然只拦截相对路径，避免误伤 `/tmp/...` 这类非工作区输出。
 
@@ -303,7 +303,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展 `_shell_write_path()`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展 `_shell_write_path()`。
 - 除了重定向写入外，也会识别 `tee` / `tee -a` 的相对路径目标。
 - 命中生产代码文件且没有测试执行证据时，继续返回：
   - `CODE_CHANGE_REQUIRES_TEST_FIRST`
@@ -323,7 +323,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展 `_shell_write_path()`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展 `_shell_write_path()`。
 - 除了 `tee` 和重定向写入外，也会识别 `sed -i`、`perl -pi` 的目标文件路径。
 - 命中生产代码文件且没有测试执行证据时，同样返回：
   - `CODE_CHANGE_REQUIRES_TEST_FIRST`
@@ -333,24 +333,24 @@
 - `run_bash` 执行 `sed -i ... app.py` 这类原地编辑生产代码命令时，也必须先有测试执行证据。
 - `sed -i` / `perl -pi` 不应成为绕过代码测试门禁的旁路。
 
-### 18. `manus-mini resume` 恢复不存在的会话时直接抛 Python 异常
+### 18. `vora resume` 恢复不存在的会话时直接抛 Python 异常
 
 #### 现象
 
-- 按普通用户路径执行 `manus-mini resume missing-session --cwd <目录>` 时，旧实现直接让 `FileNotFoundError` 冒泡。
+- 按普通用户路径执行 `vora resume missing-session --cwd <目录>` 时，旧实现直接让 `FileNotFoundError` 冒泡。
 - 用户会看到 Python traceback，而不是清晰的 CLI 错误信息。
 - 同类的 `remove` 子命令已经有友好错误提示，`resume` 行为不一致。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获 `FileNotFoundError`。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中捕获 `FileNotFoundError`。
 - 缺失会话时输出：
   - `Error: session '<session_id>' not found.`
 - 随后以 `SystemExit(1)` 退出，和 `remove` 的失败语义保持一致。
 
 #### 回归点
 
-- `manus-mini resume <missing>` 不应输出 Python traceback。
+- `vora resume <missing>` 不应输出 Python traceback。
 - 命令应打印友好错误，并以非 0 状态退出。
 
 ### 19. `run_bash` 通过 Python 写生产代码时会绕过测试前置门禁
@@ -363,7 +363,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展 `_shell_write_path()`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展 `_shell_write_path()`。
 - 新增识别：
   - `Path('file').write_text(...)`
   - `open('file', 'w'/'a')`
@@ -385,7 +385,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中把 shell 写入路径解析从单路径改成多路径。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中把 shell 写入路径解析从单路径改成多路径。
 - `_shell_write_paths()` 会收集命令中所有可识别写入目标。
 - 只要任一目标是生产代码文件，且没有测试执行证据，就返回：
   - `CODE_CHANGE_REQUIRES_TEST_FIRST`
@@ -405,7 +405,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展报告写入前置条件。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展报告写入前置条件。
 - 对 `run_bash` / `run_temp_script` 中可识别的写文件路径，同样应用：
   - `REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST`
 - 只有用户明确要求“保存到文件 / 写入文件 / 生成文件”等场景，才允许报告类任务落文件。
@@ -425,7 +425,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session.py) 中收紧待确认状态处理。
+- 在 [src/vora/session.py](/Users/liyong/Desktop/ai-manus/src/vora/session.py) 中收紧待确认状态处理。
 - 如果存在待确认写入，除 `确认` / `取消` 和已有内置指令外，普通消息不会进入 runtime。
 - 系统会提示：
   - `当前有待确认的写入操作，请先输入 \`确认\` 或 \`取消\`，再继续新的请求。`
@@ -445,7 +445,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中扩展显式文件输出意图词。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中扩展显式文件输出意图词。
 - 新增识别：
   - `写到`
   - `输出到`
@@ -468,7 +468,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/runtime.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/runtime.py) 中收紧已有产物注入条件。
+- 在 [src/vora/runtime.py](/Users/liyong/Desktop/ai-manus/src/vora/runtime.py) 中收紧已有产物注入条件。
 - 只有旧任务 `status == "done"` 且存在结果时，才注入 `已有产物`。
 - 失败、取消、等待确认等非完成状态不会再作为产物进入下一轮上下文。
 
@@ -487,7 +487,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中补充最终回答收口判断。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中补充最终回答收口判断。
 - 如果 `web_search` 有有效结果，但后续 `fetch_webpage` 尝试全部失败，则在最终答案前增加提示：
   - `本次联网搜索虽返回了搜索结果，但页面内容读取失败`
 - 仅在“搜索有效且抓取全失败”时触发，不影响已有的“搜索 0 结果 / 搜索直接失败”分支。
@@ -508,7 +508,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中补充 shell 写路径检测规则。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中补充 shell 写路径检测规则。
 - 新增识别 `Path('...').open('w'/'a')` 这种 `pathlib` 写文件写法。
 - 这样该类命令也会先触发“先测试再改代码”的门禁，而不是直接执行。
 
@@ -527,7 +527,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中补充 shell 写路径检测规则。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中补充 shell 写路径检测规则。
 - 新增识别 `Path('...').write_bytes(...)` 这种 `pathlib` 二进制写文件写法。
 - 这样该类命令也会先触发“先测试再改代码”的门禁，而不是直接执行。
 
@@ -546,8 +546,8 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加 `touch` 和 `Path(...).touch()` 的本地风险识别。
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中解析 `touch` 的全部相对路径目标，并复用 `CODE_CHANGE_REQUIRES_TEST_FIRST` 门禁。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中增加 `touch` 和 `Path(...).touch()` 的本地风险识别。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中解析 `touch` 的全部相对路径目标，并复用 `CODE_CHANGE_REQUIRES_TEST_FIRST` 门禁。
 - 支持跳过 `touch -A/-d/-r/-t` 的选项参数，避免把参考时间参数误判成写入目标。
 
 #### 回归点
@@ -662,7 +662,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展本地命令风险启发式。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中扩展本地命令风险启发式。
 - 新增识别：
   - `Path(...).write_bytes(...)`
   - `Path(...).open('w'/'a')`
@@ -685,7 +685,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中收紧保护规则。
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中收紧保护规则。
 - 默认保护所有以 `.env` 开头的文件名。
 - 保留 `.env.example` 作为模板文件例外，方便项目继续维护安全的配置示例。
 
@@ -707,7 +707,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中新增统一敏感文件判断。
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中新增统一敏感文件判断。
 - `list_files` 默认过滤 `.env*`、`*.pem`、`*.key`。
 - `read_file` 直接读取敏感文件时返回 `PROTECTED_PATH`。
 - `.env.example` 仍作为安全模板例外，可被列出和读取。
@@ -729,7 +729,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中增加本地敏感读取启发式。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中增加本地敏感读取启发式。
 - 对 `cat`、`head`、`tail`、`grep`、`sed`、`awk`、`less`、`more` 等常见读取命令，只要目标包含 `.env*`、`*.pem`、`*.key`，就先进入确认流。
 - `.env.example` 仍作为安全模板例外。
 
@@ -750,7 +750,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展敏感读取启发式。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中扩展敏感读取启发式。
 - 新增识别：
   - `open('敏感路径')`
   - `Path('敏感路径').read_text()`
@@ -775,7 +775,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中识别 `sh` / `bash` / `zsh` 的 `-c` 脚本文本。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中识别 `sh` / `bash` / `zsh` 的 `-c` 脚本文本。
 - 使用保留引号语义的 shell token 分段，避免先按分号切分时把 `-c` 脚本文本切坏。
 - 对 `-c` 后的脚本文本递归复用敏感读取检测。
 - 递归深度限制为两层，避免异常命令造成无限递归或过度分析。
@@ -797,7 +797,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中扩展 quote-aware shell token 分析。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中扩展 quote-aware shell token 分析。
 - 对 `<` / `<>` 后面的路径执行敏感文件判定。
 - 该检测复用嵌套 shell 的递归分析，因此 `bash -c` / `sh -c` 内部输入重定向也会被拦截。
 
@@ -817,7 +817,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中提取 `$()` 和反引号命令替换内容。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中提取 `$()` 和反引号命令替换内容。
 - 对提取出来的命令替换内容递归复用敏感读取检测。
 - 复用既有递归深度限制，避免异常输入造成过度分析。
 
@@ -837,7 +837,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中把 `source` 和 `.` 纳入敏感读取命令集合。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中把 `source` 和 `.` 纳入敏感读取命令集合。
 - 对 `.` 命令保留原始命令名，避免 `Path('.').name` 归一化为空字符串。
 - 在 shell token 分段前把换行作为命令分隔符处理，确保临时脚本多行命令分别分析。
 
@@ -857,7 +857,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中引入统一敏感内容脱敏。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 中引入统一敏感内容脱敏。
 - `record()` 在 `compact_event()` 后对事件 payload 递归执行 `redact_sensitive_value()`。
 - `record_summary()` 对 `user_input` 和 `result` 执行 `redact_sensitive_text()` 后再写盘。
 
@@ -877,7 +877,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session.py) 中为导出快照生成脱敏副本。
+- 在 [src/vora/session.py](/Users/liyong/Desktop/ai-manus/src/vora/session.py) 中为导出快照生成脱敏副本。
 - `session.json` 导出前对 `SessionState.model_dump(mode="json")` 递归执行 `redact_sensitive_value()`。
 - `context.md` 渲染时对任务目标、消息内容和压缩摘要执行 `redact_sensitive_text()`。
 - 内部会话状态仍保留原文，避免破坏恢复会话语义。
@@ -898,7 +898,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中新增 Bearer 认证头脱敏规则。
+- 在 [src/vora/redaction.py](/Users/liyong/Desktop/ai-manus/src/vora/redaction.py) 中新增 Bearer 认证头脱敏规则。
 - 新增 URL query secret 参数脱敏规则，覆盖 `access_token`、`refresh_token`、`api_key`、`token`、`password`、`secret`。
 - 对这类匹配保留原始前缀，只替换敏感值为 `[REDACTED]`，避免破坏日志和 URL 结构。
 
@@ -919,10 +919,10 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中新增 `validate_session_id()`。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 中新增 `validate_session_id()`。
 - 只允许普通 ID 字符：字母、数字、下划线、点、短横线，且不能包含 `/` 或 `\`。
 - `save/load/delete` 和日志清理路径统一复用校验，避免 session 文件和 logs 目录路径穿越。
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获非法 ID，输出明确错误并退出。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中捕获非法 ID，输出明确错误并退出。
 
 #### 回归点
 
@@ -942,7 +942,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/search_tools.py) 中，抓取前解析 URL host。
+- 在 [src/vora/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/search_tools.py) 中，抓取前解析 URL host。
 - 对解析出的 IP 地址执行保护判断，拒绝 private、loopback、link-local、multicast、reserved、unspecified 地址。
 - 对 DNS 解析失败的 URL 直接拒绝，避免把不可判定目标交给 `requests.get()`。
 - 被拒绝时返回 `PROTECTED_URL`，便于上层识别为安全拦截而不是普通网络失败。
@@ -966,7 +966,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中新增文件工具路径解析包装。
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中新增文件工具路径解析包装。
 - 文件工具 `run()` 入口捕获路径越界，并返回 `ToolResult(error_code="PATH_OUT_OF_WORKSPACE")`。
 - `resource_keys()` 遇到越界路径时返回空资源键，避免调度资源分析阶段抛异常。
 - 保留底层 `resolve_workspace_path()` 的原始语义，避免影响已有调用方。
@@ -988,7 +988,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/executor.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/executor.py) 中，diff 预览生成前复用 `resolve_workspace_path()`。
+- 在 [src/vora/executor.py](/Users/liyong/Desktop/ai-manus/src/vora/executor.py) 中，diff 预览生成前复用 `resolve_workspace_path()`。
 - 如果路径越过工作区，直接不生成 diff 预览。
 - 保留工作区内文件的确认 diff 和 replace trace diff 行为。
 
@@ -1007,7 +1007,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中复用统一的 `redact_sensitive_text`。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中复用统一的 `redact_sensitive_text`。
 - `run_bash` / `run_temp_script` 的正常完成、超时和取消分支，都在写入 `ToolResult` 前先脱敏 stdout/stderr。
 
 #### 回归点
@@ -1025,7 +1025,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中扩展键名识别。
+- 在 [src/vora/redaction.py](/Users/liyong/Desktop/ai-manus/src/vora/redaction.py) 中扩展键名识别。
 - 只要键名包含 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 等敏感片段，即可保留键名和分隔符，并将值替换为 `[REDACTED]`。
 - 保留 URL query secret 的既有行为，避免新规则吞掉后续非敏感 query 参数。
 
@@ -1047,7 +1047,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/search_tools.py) 中复用统一脱敏函数。
+- 在 [src/vora/tools/search_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/search_tools.py) 中复用统一脱敏函数。
 - `web_search` 对搜索结果标题、摘要、URL、query、warning 和 stderr 做返回前脱敏。
 - `fetch_webpage` 真实请求仍使用原始 URL，但返回的 summary、失败信息和 `data.url` 使用脱敏后的 URL。
 
@@ -1067,7 +1067,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/executor.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/executor.py) 的 diff 生成边界复用 `redact_sensitive_text`。
+- 在 [src/vora/executor.py](/Users/liyong/Desktop/ai-manus/src/vora/executor.py) 的 diff 生成边界复用 `redact_sensitive_text`。
 - 真实写入/替换仍使用原始内容；只对待确认展示和 trace 预览内容脱敏。
 
 #### 回归点
@@ -1085,8 +1085,8 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/base.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/base.py) 中对通用 preview summary 和 args 做统一脱敏。
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中对自定义 shell preview 的 summary 和 args 做同样脱敏。
+- 在 [src/vora/tools/base.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/base.py) 中对通用 preview summary 和 args 做统一脱敏。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中对自定义 shell preview 的 summary 和 args 做同样脱敏。
 - 真实工具执行仍使用原始 tool call 参数，避免脱敏影响实际命令或请求。
 
 #### 回归点
@@ -1104,7 +1104,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中，发送给 LLM 风险判定的 `command_or_script` 先执行统一脱敏。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中，发送给 LLM 风险判定的 `command_or_script` 先执行统一脱敏。
 - 本地启发式风险分析仍使用原始命令，避免影响敏感文件读取、写入检测等本地安全判断。
 
 #### 回归点
@@ -1121,7 +1121,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/memory.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/memory.py) 中让 `add_if_allowed()` 同时检查 content、tags 和 source_message_ids。
+- 在 [src/vora/memory.py](/Users/liyong/Desktop/ai-manus/src/vora/memory.py) 中让 `add_if_allowed()` 同时检查 content、tags 和 source_message_ids。
 - 保留底层 `add()` 的显式写入能力；自动/安全入口继续负责敏感信息拦截。
 
 #### 回归点
@@ -1139,7 +1139,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/redaction.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/redaction.py) 中增加敏感字段名识别。
+- 在 [src/vora/redaction.py](/Users/liyong/Desktop/ai-manus/src/vora/redaction.py) 中增加敏感字段名识别。
 - 对 `api_key`、`access_token`、`refresh_token`、`password`、`secret` 以及 `_token`、`_secret` 等组合式字段名的值直接替换为 `[REDACTED]`。
 - 保留 `token_count` 等非敏感统计字段，避免过度脱敏影响排障。
 
@@ -1153,19 +1153,19 @@
 
 #### 现象
 
-- `manus-mini list` 直接打印 `SessionSummary.last_user_message`。
+- `vora list` 直接打印 `SessionSummary.last_user_message`。
 - 如果最近用户消息很长，列表会被整段内容撑开，影响查找会话。
 - 如果消息中包含 `token=...` 等敏感值，列表命令会在终端里原样展示。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为列表展示增加统一格式化。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中为列表展示增加统一格式化。
 - 最近用户消息展示前先执行敏感信息脱敏，再折叠换行并截断到固定预览长度。
 - 只调整 CLI 展示层，不修改会话持久化数据。
 
 #### 回归点
 
-- `manus-mini list` 不得输出最近用户消息中的原始 token。
+- `vora list` 不得输出最近用户消息中的原始 token。
 - 超长最近用户消息不得完整刷屏，应以省略号截断展示。
 
 ### 59. 会话列表遇到损坏文件会整体崩溃
@@ -1173,18 +1173,18 @@
 #### 现象
 
 - `SessionStore.list_sessions()` 会对 sessions 目录下所有 `*.json` 直接执行 `_summary()`。
-- 只要其中一个会话文件被异常中断、手工编辑或磁盘写入损坏，`manus-mini list` 就会抛 `JSONDecodeError`。
+- 只要其中一个会话文件被异常中断、手工编辑或磁盘写入损坏，`vora list` 就会抛 `JSONDecodeError`。
 - 结果是一个坏文件会阻断所有正常会话的查看，用户也无法快速定位还可恢复的会话。
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 的列表枚举边界捕获无法读取、解析或迁移的会话文件。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 的列表枚举边界捕获无法读取、解析或迁移的会话文件。
 - 跳过损坏文件，继续返回其它正常会话摘要。
 - 单个 `resume/load` 的错误语义保持不变，避免掩盖用户明确指定会话时的问题。
 
 #### 回归点
 
-- sessions 目录中存在损坏 JSON 文件时，`manus-mini list` 仍应列出正常会话。
+- sessions 目录中存在损坏 JSON 文件时，`vora list` 仍应列出正常会话。
 - 损坏文件名不应污染正常列表输出。
 
 ### 60. 恢复损坏会话会误报为非法 session id
@@ -1192,18 +1192,18 @@
 #### 现象
 
 - `SessionStore.load()` 读取损坏 JSON 时会抛出 `JSONDecodeError`。
-- `JSONDecodeError` 是 `ValueError` 子类，`manus-mini resume` 会把它误捕获为非法 `session_id`。
+- `JSONDecodeError` 是 `ValueError` 子类，`vora resume` 会把它误捕获为非法 `session_id`。
 - 用户明确恢复一个存在但损坏的会话时，错误提示会误导排查方向。
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中增加 `CorruptSessionError`。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 中增加 `CorruptSessionError`。
 - `load()` 在通过 `session_id` 校验并确认文件存在后，将读取、解析、模型迁移失败统一转换为损坏会话错误。
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中优先捕获损坏会话错误，输出明确的友好错误。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中优先捕获损坏会话错误，输出明确的友好错误。
 
 #### 回归点
 
-- `manus-mini resume broken-session` 指向损坏 JSON 时，应提示该会话不可读取或已损坏。
+- `vora resume broken-session` 指向损坏 JSON 时，应提示该会话不可读取或已损坏。
 - 非法 `session_id` 与缺失会话的既有友好错误保持不变。
 
 ### 61. 事件日志 session_id 可越过日志根目录
@@ -1216,7 +1216,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中为日志入口增加本地 `session_id` 校验。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 中为日志入口增加本地 `session_id` 校验。
 - `record()` 和 `record_summary()` 在计算路径和写盘前先拒绝路径穿越、斜杠和非法字符。
 - 不从 `session_store` 反向导入校验函数，避免日志模块与会话存储模块形成循环依赖。
 
@@ -1236,7 +1236,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中提取统一日志入口清理函数。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 中提取统一日志入口清理函数。
 - 遇到 symlink 时只 `unlink()` 链接本身，不跟随删除外部目标。
 - 真实目录继续使用 `shutil.rmtree()` 清理；单个会话日志清理和批量日志清理复用同一安全路径。
 
@@ -1256,7 +1256,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中调整单个日志入口存在性判断。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 中调整单个日志入口存在性判断。
 - 对“目标不存在但入口本身是 symlink”的情况继续进入 `_remove_log_entry()`，只删除链接本身。
 - 非 symlink 的缺失路径仍返回 0，保持原有幂等行为。
 
@@ -1266,39 +1266,39 @@
 - 断开的 symlink 本身应被删除。
 - 缺失的普通日志目录仍应返回 0。
 
-### 64. `python -m manus_mini` 入口不可用
+### 64. `python -m vora` 入口不可用
 
 #### 现象
 
-- 实际执行 `python -m manus_mini --help` 时，Python 报 `No module named manus_mini.__main__`。
+- 实际执行 `python -m vora --help` 时，Python 报 `No module named vora.__main__`。
 - 对开发、调试和未安装 console script 的场景不友好。
 
 #### 修复
 
-- 新增 [src/manus_mini/__main__.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/__main__.py)，复用 `manus_mini.cli:main`。
-- 保持 `manus-mini` console script 和 `python -m manus_mini` 使用同一 CLI 入口。
+- 新增 [src/vora/__main__.py](/Users/liyong/Desktop/ai-manus/src/vora/__main__.py)，复用 `vora.cli:main`。
+- 保持 `vora` console script 和 `python -m vora` 使用同一 CLI 入口。
 
 #### 回归点
 
-- 包必须暴露 `manus_mini.__main__`。
+- 包必须暴露 `vora.__main__`。
 - `__main__.main` 必须指向现有 CLI `main`。
 
 ### 65. 子命令会覆盖命令前的全局 `--cwd`
 
 #### 现象
 
-- 实际使用 `manus-mini --cwd <project> list` 时，子命令 parser 的 `cwd=None` 会覆盖全局 `--cwd`。
+- 实际使用 `vora --cwd <project> list` 时，子命令 parser 的 `cwd=None` 会覆盖全局 `--cwd`。
 - 结果会列出当前目录的会话，而不是用户指定项目的会话。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中将全局 `--cwd` 与子命令 `--cwd` 使用不同 `dest`。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中将全局 `--cwd` 与子命令 `--cwd` 使用不同 `dest`。
 - 主流程按 `subcommand_cwd or global_cwd or Path.cwd()` 解析工作目录。
 
 #### 回归点
 
-- `manus-mini --cwd <project> list` 必须读取 `<project>` 的会话。
-- 原有 `manus-mini list --cwd <project>` 仍保持兼容。
+- `vora --cwd <project> list` 必须读取 `<project>` 的会话。
+- 原有 `vora list --cwd <project>` 仍保持兼容。
 
 ### 66. 会话读取会跟随 symlink 读取外部 JSON
 
@@ -1309,7 +1309,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/session_store.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/session_store.py) 中拒绝读取 symlink 会话文件。
+- 在 [src/vora/session_store.py](/Users/liyong/Desktop/ai-manus/src/vora/session_store.py) 中拒绝读取 symlink 会话文件。
 - `list_sessions()` 复用 summary 解析时也跳过 symlink 会话文件。
 
 #### 回归点
@@ -1355,12 +1355,12 @@
 
 #### 现象
 
-- legacy `.manus-mini/sessions/*.json` 迁移使用 `is_file()` 判断源文件。
+- legacy `.vora/sessions/*.json` 迁移使用 `is_file()` 判断源文件。
 - `Path.is_file()` 会跟随 symlink，导致迁移把外部 JSON 内容复制进当前项目会话存储。
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 的 legacy 迁移中显式跳过 symlink。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 的 legacy 迁移中显式跳过 symlink。
 - 只迁移真实 legacy 会话 JSON 文件。
 
 #### 回归点
@@ -1377,7 +1377,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中增加日志目录 symlink 检查。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 中增加日志目录 symlink 检查。
 - 写入 node/pipeline/summary 前先拒绝 symlink 日志目录。
 
 #### 回归点
@@ -1394,7 +1394,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中识别 `cp` 命令读取 `.env*`、`*.pem`、`*.key`。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中识别 `cp` 命令读取 `.env*`、`*.pem`、`*.key`。
 - 命中后进入人工确认流，默认不执行复制。
 
 #### 回归点
@@ -1446,7 +1446,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/file_tools.py) 中为 `write_file` 和 `append_file` 增加目录目标检查。
+- 在 [src/vora/tools/file_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/file_tools.py) 中为 `write_file` 和 `append_file` 增加目录目标检查。
 - 已存在但不是普通文件时返回 `INVALID_TOOL_PARAMS` 和 `not a file` 摘要。
 
 #### 回归点
@@ -1458,17 +1458,17 @@
 
 #### 现象
 
-- 实际使用 `manus-mini --dry-run --max-react 1 resume <session>` 时，CLI 已解析参数，但 `_run_resume()` 没有接收这些参数。
+- 实际使用 `vora --dry-run --max-react 1 resume <session>` 时，CLI 已解析参数，但 `_run_resume()` 没有接收这些参数。
 - 恢复会话后仍使用默认或旧限制，用户以为开启了 dry-run/限制回合，实际没有生效。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中将 `dry_run` 和 `max-*` 参数传入 resume 启动路径。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中将 `dry_run` 和 `max-*` 参数传入 resume 启动路径。
 - `PromptTuiOptions` 使用本次 CLI 参数构造，保证用户显式输入生效。
 
 #### 回归点
 
-- `manus-mini --dry-run --max-react 1 resume <session>` 必须开启 dry-run。
+- `vora --dry-run --max-react 1 resume <session>` 必须开启 dry-run。
 - 恢复后的运行限制必须使用本次传入的 `max-react=1`。
 
 ### 76. TUI 待确认时输入“取消”会被 Enter 当作确认
@@ -1480,7 +1480,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 中增加确认输入提交路径。
+- 在 [src/vora/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui.py) 中增加确认输入提交路径。
 - 输入框非空时走 `SessionManager.handle_user_message()` 的确认/取消语义；空 Enter 保留快捷确认。
 
 #### 回归点
@@ -1513,7 +1513,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中识别用户本次是否显式传入 `--max-*`。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中识别用户本次是否显式传入 `--max-*`。
 - 只有显式传入的限制才覆盖已保存 active task limits；未传入时保留保存值。
 
 #### 回归点
@@ -1530,7 +1530,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/tools/shell_tools.py) 中把 `mv` 纳入敏感文件外带命令集合。
+- 在 [src/vora/tools/shell_tools.py](/Users/liyong/Desktop/ai-manus/src/vora/tools/shell_tools.py) 中把 `mv` 纳入敏感文件外带命令集合。
 - 命中 `.env*`、`*.pem`、`*.key` 时先进入确认流。
 
 #### 回归点
@@ -1599,7 +1599,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/context.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/context.py) 中检测强制截断是否实际覆盖了消息。
+- 在 [src/vora/context.py](/Users/liyong/Desktop/ai-manus/src/vora/context.py) 中检测强制截断是否实际覆盖了消息。
 - 如果消息未减少且内容未改写，返回 `snapshot=None`，避免记录假压缩。
 
 #### 回归点
@@ -1617,7 +1617,7 @@
 
 #### 修复
 
-- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 的异常渲染路径中同步更新 session。
+- 在 [src/vora/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui.py) 的异常渲染路径中同步更新 session。
 - active task 标记为 failed，记录 `UNKNOWN_ERROR`，写入系统消息，并调用 `_save_current()`。
 
 #### 回归点
@@ -1626,41 +1626,41 @@
 - 错误信息必须写入消息和 task result。
 - 异常状态必须被保存，供后续 resume 排查。
 
-### 85. `manus-mini list` 有会话时输出为裸 TSV，演示和排障可读性差
+### 85. `vora list` 有会话时输出为裸 TSV，演示和排障可读性差
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini list --cwd /Users/liyong/Desktop/ai-manus` 时，输出只有无表头 TSV 行。
+- 亲自执行 `python -m vora list --cwd /Users/liyong/Desktop/ai-manus` 时，输出只有无表头 TSV 行。
 - 用户无法直接看出每列含义、会话总数、会话存储目录，也没有下一步如何恢复会话的提示。
 - 这类问题不影响核心执行，但会明显拉低面试/demo 时的工程成熟度和可诊断性。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中优化 `list` 输出。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中优化 `list` 输出。
 - 有会话时固定展示：
   - `Session directory`
   - `Saved sessions` 总数
   - `SESSION ID / UPDATED / MESSAGES / LAST USER MESSAGE` 表头
-  - 默认恢复最新会话的 `manus-mini resume ... --cwd ...` 示例命令
+  - 默认恢复最新会话的 `vora resume ... --cwd ...` 示例命令
 - 保留最近用户消息的脱敏和截断逻辑，避免为了可读性回退安全边界。
 
 #### 回归点
 
-- `manus-mini list` 有会话时必须展示目录、总数、表头和恢复命令。
+- `vora list` 有会话时必须展示目录、总数、表头和恢复命令。
 - 最近用户消息仍必须先脱敏并截断。
 - 空会话时仍保持简洁提示，不输出无意义表头。
 
-### 86. `manus-mini clear` 在非交互环境会抛 `EOFError` 栈
+### 86. `vora clear` 在非交互环境会抛 `EOFError` 栈
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini clear --cwd /Users/liyong/Desktop/ai-manus` 时，stdin 没有可读输入会触发 `EOFError`。
+- 亲自执行 `python -m vora clear --cwd /Users/liyong/Desktop/ai-manus` 时，stdin 没有可读输入会触发 `EOFError`。
 - 旧实现直接泄露 Python traceback，用户无法判断会话是否已被删除。
 - 这属于 CLI 删除类操作的可诊断性和安全感问题。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中捕获确认输入阶段的 `EOFError`。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中捕获确认输入阶段的 `EOFError`。
 - stdin 不可读时按取消处理，输出 `Clear cancelled.`，不删除任何会话。
 
 #### 回归点
@@ -1672,18 +1672,18 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini resume <session-id> --max-react 1 --cwd ...` 时，旧实现报 `unrecognized arguments`。
+- 亲自执行 `python -m vora resume <session-id> --max-react 1 --cwd ...` 时，旧实现报 `unrecognized arguments`。
 - 但交互入口支持后置运行参数，且用户自然会把恢复会话的参数写在 session id 后面。
 - 这会让面试演示中的“恢复会话并覆盖本轮限制”显得不一致。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中给 `resume` 子命令注册交互运行参数。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中给 `resume` 子命令注册交互运行参数。
 - 支持 `--dry-run`、`--max-steps`、`--max-react`、`--max-reflect`、`--max-tool-retries` 在 `resume <session-id>` 后传入。
 
 #### 回归点
 
-- `manus-mini resume <session-id> --max-react 1 --cwd ...` 必须能通过解析。
+- `vora resume <session-id> --max-react 1 --cwd ...` 必须能通过解析。
 - 后置 runtime 参数必须真正覆盖本次恢复运行的 limits。
 
 ### 88. 非终端环境启动交互界面会泄露 prompt_toolkit 栈
@@ -1695,9 +1695,9 @@
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中进入 TUI 前先检查 stdin 是否是终端。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中进入 TUI 前先检查 stdin 是否是终端。
 - 非终端环境直接输出友好错误：
-  - `Error: interactive TUI requires a terminal. Use 'manus-mini --help' for non-interactive commands.`
+  - `Error: interactive TUI requires a terminal. Use 'vora --help' for non-interactive commands.`
 - 同时保留对 TUI 运行阶段终端错误的兜底捕获。
 
 #### 回归点
@@ -1715,9 +1715,9 @@
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中删除直接启动交互界面的子命令和默认无参启动路径。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中删除直接启动交互界面的子命令和默认无参启动路径。
 - 无参执行现在只打印帮助，不再启动交互界面。
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中将启动兜底回答改为 `list` / `resume`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中将启动兜底回答改为 `list` / `resume`。
 - 在 [README.md](/Users/liyong/Desktop/ai-manus/README.md) 中删除旧启动命令示例。
 
 #### 回归点
@@ -1736,8 +1736,8 @@
 
 #### 修复
 
-- 在 [src/manus_mini/planner.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/planner.py) 和 [src/manus_mini/reflector.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/reflector.py) 中删除旧交互子命令关键词。
-- 在 [src/manus_mini/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui.py) 中删除直连 `main()` 包装函数。
+- 在 [src/vora/planner.py](/Users/liyong/Desktop/ai-manus/src/vora/planner.py) 和 [src/vora/reflector.py](/Users/liyong/Desktop/ai-manus/src/vora/reflector.py) 中删除旧交互子命令关键词。
+- 在 [src/vora/prompt_tui.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui.py) 中删除直连 `main()` 包装函数。
 - 将交互帮助、技术设计、生产化说明和项目摘要改为 `run/list/resume` 语义，不再推荐旧启动方式。
 
 #### 回归点
@@ -1750,24 +1750,24 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini --help` 和空项目 `list` 后发现，只剩 `list/resume/remove/clear`。
+- 亲自执行 `python -m vora --help` 和空项目 `list` 后发现，只剩 `list/resume/remove/clear`。
 - 对一个没有历史会话的新项目来说，用户无法从 CLI 创建第一条会话。
 - 这会让面试演示的首条路径断掉：工具看起来只能恢复历史，不能开始任务。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中新增 `run` 子命令。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中新增 `run` 子命令。
 - `run` 会创建新 session，执行一次用户问题，保存 session，并输出：
   - 最终回答
   - `Session ID`
   - 任务状态
   - 后续 `resume` 命令
-- 空会话 `list` 会提示 `manus-mini run "你的问题" --cwd ...`，帮助新用户闭合首条使用路径。
+- 空会话 `list` 会提示 `vora run "你的问题" --cwd ...`，帮助新用户闭合首条使用路径。
 - README 和规则兜底启动说明同步改为先用 `run`。
 
 #### 回归点
 
-- `manus-mini run "问题" --cwd ...` 必须创建并保存 session。
+- `vora run "问题" --cwd ...` 必须创建并保存 session。
 - `list` 空会话时必须提示如何创建第一条会话。
 - 启动说明必须包含 `run` 入口。
 
@@ -1775,41 +1775,41 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "怎么启动和使用？" --cwd /private/tmp/manus-mini-run-check` 时，日志目录创建阶段抛出 `PermissionError`。
-- 根因是 `project_storage_dir()` 只验证了 `~/.manus-mini/projects` 父目录可创建，没有验证具体项目目录可创建。
+- 亲自执行 `python -m vora run "怎么启动和使用？" --cwd /private/tmp/vora-run-check` 时，日志目录创建阶段抛出 `PermissionError`。
+- 根因是 `project_storage_dir()` 只验证了 `~/.vora/projects` 父目录可创建，没有验证具体项目目录可创建。
 - 当父目录存在但当前项目目录创建失败时，运行时仍继续使用不可写路径。
 
 #### 修复
 
-- 在 [src/manus_mini/logging.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/logging.py) 中让 `project_storage_dir()` 同时创建并验证具体项目存储目录。
-- 只要用户级项目目录创建失败，就回退到工作区 `.manus-mini`。
+- 在 [src/vora/logging.py](/Users/liyong/Desktop/ai-manus/src/vora/logging.py) 中让 `project_storage_dir()` 同时创建并验证具体项目存储目录。
+- 只要用户级项目目录创建失败，就回退到工作区 `.vora`。
 
 #### 回归点
 
-- 用户级项目目录不可写时，必须回退到工作区 `.manus-mini`。
-- `manus-mini run` 在该场景下不得抛原始 `PermissionError`。
+- 用户级项目目录不可写时，必须回退到工作区 `.vora`。
+- `vora run` 在该场景下不得抛原始 `PermissionError`。
 
 ### 93. 首次运行提示和中文分词兜底不够适合面试演示
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini --help` 时，只能看到参数列表，没有首条示例和恢复路径。
-- 执行 `python -m manus_mini run --help` 时，`prompt` 位置参数没有说明，也没有提示多词 prompt 要加引号。
-- 执行 `python -m manus_mini run --cwd <目录>` 时，argparse 只报缺少 `prompt`，没有下一步示例。
-- 执行 `python -m manus_mini run "" --cwd <目录>` 时，只输出 `Error: prompt is required.`，没有可复制命令。
-- 执行 `python -m manus_mini run 总结 当前 项目 --cwd <目录> --max-steps 1 --max-react 1` 时，中文被 shell 分词成 `总结 当前 项目`，规则兜底无法识别“当前项目”，导致输出低价值的网络错误兜底。
+- 亲自执行 `python -m vora --help` 时，只能看到参数列表，没有首条示例和恢复路径。
+- 执行 `python -m vora run --help` 时，`prompt` 位置参数没有说明，也没有提示多词 prompt 要加引号。
+- 执行 `python -m vora run --cwd <目录>` 时，argparse 只报缺少 `prompt`，没有下一步示例。
+- 执行 `python -m vora run "" --cwd <目录>` 时，只输出 `Error: prompt is required.`，没有可复制命令。
+- 执行 `python -m vora run 总结 当前 项目 --cwd <目录> --max-steps 1 --max-react 1` 时，中文被 shell 分词成 `总结 当前 项目`，规则兜底无法识别“当前项目”，导致输出低价值的网络错误兜底。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为顶层 help 和 `run --help` 增加首条运行示例、引号说明和恢复命令。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中为顶层 help 和 `run --help` 增加首条运行示例、引号说明和恢复命令。
 - `run` 缺少 `prompt` 时，在 argparse 错误后追加可复制示例。
 - 空 prompt、空会话列表、缺失会话恢复错误都补充下一步命令。
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中压缩中文字符之间的空格后再识别“当前项目”，兼容未加引号的中文 prompt。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中压缩中文字符之间的空格后再识别“当前项目”，兼容未加引号的中文 prompt。
 
 #### 回归点
 
-- `manus-mini --help` 必须展示项目分析示例和 resume 示例。
-- `manus-mini run --help` 必须说明 `prompt`，并提示多词 prompt 需要加引号。
+- `vora --help` 必须展示项目分析示例和 resume 示例。
+- `vora run --help` 必须说明 `prompt`，并提示多词 prompt 需要加引号。
 - 缺少 prompt、空 prompt、空会话列表、缺失 session 都必须给出可执行下一步。
 - `总结 当前 项目` 必须命中当前项目概览兜底，不能退回只展示网络错误原因。
 
@@ -1817,17 +1817,17 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini remove --help` 时，只显示裸 `session_id`，没有说明会删除什么。
-- 执行 `python -m manus_mini clear --help` 时，没有说明清空范围和 `--force` 的使用风险。
-- 执行 `python -m manus_mini remove missing-session --cwd <目录>` 时，只输出缺失错误，没有提示先 `list`。
-- 执行 `python -m manus_mini clear --cwd <空目录>` 时，只输出无会话可清理，没有提示如何开始或检查会话。
+- 亲自执行 `python -m vora remove --help` 时，只显示裸 `session_id`，没有说明会删除什么。
+- 执行 `python -m vora clear --help` 时，没有说明清空范围和 `--force` 的使用风险。
+- 执行 `python -m vora remove missing-session --cwd <目录>` 时，只输出缺失错误，没有提示先 `list`。
+- 执行 `python -m vora clear --cwd <空目录>` 时，只输出无会话可清理，没有提示如何开始或检查会话。
 - 有会话时的 `list` 只提示 resume，不提示 remove/clear，现场演示会话生命周期不完整。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中为 `remove` 增加 session_id 说明、日志清理风险说明和示例。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中为 `remove` 增加 session_id 说明、日志清理风险说明和示例。
 - 为 `clear` 增加清空范围、日志清理风险、`--force` 使用建议和示例。
-- `remove` 找不到 session 时提示先执行 `manus-mini list --cwd ...`。
+- `remove` 找不到 session 时提示先执行 `vora list --cwd ...`。
 - 空目录执行 `clear` 时提示如何新建会话和查看会话。
 - `list` 有会话时同时输出 resume、remove、clear all 三类下一步命令。
 
@@ -1843,13 +1843,13 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "这个项目有哪些核心能力？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 亲自执行 `python -m vora run "这个项目有哪些核心能力？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
 - `这个项目怎么保证安全？` 和 `这个项目测试怎么跑？` 也同样只展示 `兜底原因` 和当前目标。
 - 这些问题是面试官最可能现场追问的工程问题，低价值兜底会削弱项目专业感。
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加高频面试问答的直接规则兜底：
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加高频面试问答的直接规则兜底：
   - 核心能力：任务规划、工具调用、会话持久化、上下文压缩、写入确认、Reflection 质量门禁、结构化日志。
   - 安全设计：工作区边界、写入确认、命令风险识别、敏感信息脱敏、会话文件路径校验。
   - 测试验证：`pytest -q`、`ruff check src tests evals`、`mypy`、`python evals/run_evals.py`、覆盖率和构建。
@@ -1863,18 +1863,18 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "怎么修改文件？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 亲自执行 `python -m vora run "怎么修改文件？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
 - `写入确认是怎么做的？`、`能不能修改工作区外的文件？`、`如果要改代码，怎么保证改完是对的？`、`怎么恢复刚才的会话继续修改？` 也同样退化成 `兜底原因`。
 - 这些问题对应文件修改、确认流、路径边界、质量门禁和会话恢复，是面试现场最常见的操作追问。
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加操作类直接规则兜底：
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加操作类直接规则兜底：
   - 修改文件：说明 `read_file` + `replace_in_file` + 写入确认。
   - 写入确认：说明 diff、确认、取消。
   - 工作区边界：说明不能修改工作区外文件，以及 `PATH_OUT_OF_WORKSPACE`。
   - 代码质量：说明先测试再改代码、Reflection 和 pytest gate。
-  - 会话恢复：说明 `manus-mini list` 和 `manus-mini resume <session_id>`。
+  - 会话恢复：说明 `vora list` 和 `vora resume <session_id>`。
 
 #### 回归点
 
@@ -1885,32 +1885,32 @@
 
 #### 现象
 
-- 用户预期执行 `manus-mini` 直接进入 TUI，但旧测试仍要求无参只打印帮助。
-- `manus-mini tui` 已不再需要，但入口关系和首屏说明不够清楚，容易让人误判应该保留显式 `tui` 子命令。
+- 用户预期执行 `vora` 直接进入 TUI，但旧测试仍要求无参只打印帮助。
+- `vora tui` 已不再需要，但入口关系和首屏说明不够清楚，容易让人误判应该保留显式 `tui` 子命令。
 
 #### 修复
 
-- 在 [src/manus_mini/cli.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/cli.py) 中恢复无子命令启动 `PromptTui`，并保留全局 `--cwd`、`--dry-run`、循环上限参数。
-- 保持 `manus-mini tui` 为非法子命令，不重新暴露旧入口。
-- 在 [src/manus_mini/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/prompt_tui_formatting.py) 中优化欢迎页，明确当前入口、一次性任务入口、恢复会话入口、模型配置来源、运行限制和常用快捷键。
+- 在 [src/vora/cli.py](/Users/liyong/Desktop/ai-manus/src/vora/cli.py) 中恢复无子命令启动 `PromptTui`，并保留全局 `--cwd`、`--dry-run`、循环上限参数。
+- 保持 `vora tui` 为非法子命令，不重新暴露旧入口。
+- 在 [src/vora/prompt_tui_formatting.py](/Users/liyong/Desktop/ai-manus/src/vora/prompt_tui_formatting.py) 中优化欢迎页，明确当前入口、一次性任务入口、恢复会话入口、模型配置来源、运行限制和常用快捷键。
 - README 的运行示例补充默认 TUI 入口。
 
 #### 回归点
 
-- CLI 测试覆盖无子命令启动 TUI，并继续拒绝 `manus-mini tui`。
-- TUI 欢迎页测试覆盖首屏信息不推荐 `manus-mini tui`，并展示 `Enter`、`Ctrl+J`、`Tab`、`Ctrl+C` 等核心操作。
+- CLI 测试覆盖无子命令启动 TUI，并继续拒绝 `vora tui`。
+- TUI 欢迎页测试覆盖首屏信息不推荐 `vora tui`，并展示 `Enter`、`Ctrl+J`、`Tab`、`Ctrl+C` 等核心操作。
 
 ### 98. 模型配置追问在 LLM 不可用时缺少可讲答案
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "这个项目怎么配置模型？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 亲自执行 `python -m vora run "这个项目怎么配置模型？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
 - 面试官追问模型接入方式时，看不到 `.env`、环境变量、OpenAI-compatible endpoint、API key 和模型名这些关键工程点。
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加模型配置类直接规则兜底。
-- 回答说明配置读取顺序：环境变量、当前目录 `.env`、`~/.manus-mini/.env`、源码根目录 `.env`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加模型配置类直接规则兜底。
+- 回答说明配置读取顺序：环境变量、当前目录 `.env`、`~/.vora/.env`、源码根目录 `.env`。
 - 回答明确 `LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，并提到超时和重试配置。
 
 #### 回归点
@@ -1922,29 +1922,29 @@
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "运行日志和产物保存在哪里？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 亲自执行 `python -m vora run "运行日志和产物保存在哪里？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
 - 这会让面试展示缺少可观测性说明，无法快速说明 session、logs、outputs 的落点。
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加运行产物位置类直接规则兜底。
-- 回答说明本地状态在 `.manus-mini`，历史会话在 `sessions`，结构化运行记录在 `logs`，报告和上下文快照在 `outputs`。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加运行产物位置类直接规则兜底。
+- 回答说明本地状态在 `.vora`，历史会话在 `sessions`，结构化运行记录在 `logs`，报告和上下文快照在 `outputs`。
 
 #### 回归点
 
 - 模型不可用时，日志和产物位置追问不得展示 `兜底原因`。
-- 回答必须包含 `.manus-mini`、`sessions`、`logs`、`outputs`。
+- 回答必须包含 `.vora`、`sessions`、`logs`、`outputs`。
 
 ### 100. 上下文压缩追问在 LLM 不可用时缺少工程细节
 
 #### 现象
 
-- 亲自执行 `python -m manus_mini run "上下文压缩是怎么做的？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
+- 亲自执行 `python -m vora run "上下文压缩是怎么做的？" --cwd <目录> --max-steps 1 --max-react 1` 时，只输出网络错误兜底。
 - 面试时这类问题需要讲清阈值、快照和 tool call 完整性，而不是只说“会压缩”。
 
 #### 修复
 
-- 在 [src/manus_mini/react.py](/Users/liyong/Desktop/ai-manus/src/manus_mini/react.py) 中增加上下文压缩类直接规则兜底。
+- 在 [src/vora/react.py](/Users/liyong/Desktop/ai-manus/src/vora/react.py) 中增加上下文压缩类直接规则兜底。
 - 回答说明 50% / 70% / 90% 分层压缩、`CompressionSnapshot` 记录，以及 assistant/tool call/result 成组完整性校验。
 
 #### 回归点
@@ -1957,7 +1957,7 @@
 - [tests/test_context.py](/Users/liyong/Desktop/ai-manus/tests/test_context.py)
   - 强制截断没有实际减少上下文时不生成假 compression snapshot
 - [tests/test_cli.py](/Users/liyong/Desktop/ai-manus/tests/test_cli.py)
-  - `python -m manus_mini` 复用 CLI 入口
+  - `python -m vora` 复用 CLI 入口
   - 顶层 `--cwd` 兼容
   - 子命令保留命令前的全局 `--cwd`
   - 旧写法子命令参数兼容
@@ -1994,7 +1994,7 @@
   - LLM 指数退避和 `Retry-After`
 - [tests/test_logging.py](/Users/liyong/Desktop/ai-manus/tests/test_logging.py)
   - 用户目录不可写时路径回退
-  - 用户级项目目录不可写时回退到工作区 `.manus-mini`
+  - 用户级项目目录不可写时回退到工作区 `.vora`
   - 事件日志落盘前必须递归脱敏敏感字段
   - summary 日志落盘前必须脱敏用户输入和最终结果
   - 事件日志和 summary 日志必须拒绝非法 `session_id` 路径穿越
@@ -2116,8 +2116,8 @@ pytest -q
 - 分支覆盖率：85.22%（门禁 80%）
 - Agent eval：12/12 通过
 - `python -m build`：通过，生成 sdist 和 wheel
-- `python -m manus_mini --help`：通过，能正常展示 CLI 帮助
-- `python -m manus_mini doctor --cwd /private/tmp/manus-mini-doctor-check`：通过，能展示本地存储和 LLM 配置诊断
+- `python -m vora --help`：通过，能正常展示 CLI 帮助
+- `python -m vora doctor --cwd /private/tmp/vora-doctor-check`：通过，能展示本地存储和 LLM 配置诊断
 
 并额外做了本地脚本级别验证，确认以下场景可正常返回：
 
@@ -2169,20 +2169,20 @@ pytest -q
 - Shell LLM 风险判定请求不会发送命令里的原始敏感值
 - 长期记忆安全入口不会通过 tags/source_message_ids 落盘敏感值
 - 结构化 payload 中 `api_key` / `CLIENT_SECRET` 字段值会脱敏，`token_count` 不会被误脱敏
-- `manus-mini list` 展示最近用户消息前会脱敏并截断长文本
-- `manus-mini list` 遇到损坏会话文件时仍能列出其它正常会话
-- `manus-mini resume` 指向损坏会话文件时会输出明确的友好错误
+- `vora list` 展示最近用户消息前会脱敏并截断长文本
+- `vora list` 遇到损坏会话文件时仍能列出其它正常会话
+- `vora resume` 指向损坏会话文件时会输出明确的友好错误
 - `EventLogger` 写入事件日志和 summary 日志前会拒绝非法 `session_id` 路径穿越
 - 批量日志清理会删除 symlink 本身但不会跟随删除外部目录
-- `manus-mini clear` 在 stdin 不可读时会取消操作，不再输出 traceback
-- `manus-mini resume <session-id> --max-react 1 --cwd ...` 不再被 argparse 拒绝
-- `manus-mini resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
-- `manus-mini doctor --cwd ...` 能展示项目隔离存储、会话数量和 LLM 配置状态，且不泄露 API key 原文
+- `vora clear` 在 stdin 不可读时会取消操作，不再输出 traceback
+- `vora resume <session-id> --max-react 1 --cwd ...` 不再被 argparse 拒绝
+- `vora resume` 在非终端环境输出友好错误，不再泄露 prompt_toolkit 栈
+- `vora doctor --cwd ...` 能展示项目隔离存储、会话数量和 LLM 配置状态，且不泄露 API key 原文
 - 旧交互启动子命令已被拒绝，无参执行只打印帮助
-- `python -m manus_mini --help` 不再展示旧交互启动子命令
+- `python -m vora --help` 不再展示旧交互启动子命令
 - 规则兜底的启动说明不再推荐旧交互启动子命令
-- `manus-mini run "怎么启动和使用？" --cwd /private/tmp/manus-mini-run-check` 可以创建并保存新会话
-- `manus-mini list --cwd /private/tmp/manus-mini-run-check` 能展示刚创建的会话
+- `vora run "怎么启动和使用？" --cwd /private/tmp/vora-run-check` 可以创建并保存新会话
+- `vora list --cwd /private/tmp/vora-run-check` 能展示刚创建的会话
 
 ## 后续建议
 

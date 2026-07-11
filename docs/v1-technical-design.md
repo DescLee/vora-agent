@@ -1,4 +1,4 @@
-# Manus Mini V1 技术设计文档
+# Vora V1 技术设计文档
 
 ## 1. 技术目标
 
@@ -125,11 +125,11 @@ AgentRuntime
 当前实现目录：
 
 ```text
-manus-mini/
+vora/
   pyproject.toml
   README.md
   src/
-    manus_mini/
+    vora/
       __init__.py
       prompt_tui.py
       prompt_tui_formatting.py
@@ -168,7 +168,7 @@ manus-mini/
     adr/
   evals/
     run_evals.py
-  .manus-mini/
+  .vora/
     sessions/
     logs/
     outputs/
@@ -633,7 +633,7 @@ async def execute_batch_with_policy(batch: list[ToolCall], session: SessionState
 存储位置：
 
 ```text
-.manus/
+.vora/
   memory.db
   sessions/
     <session_id>.json

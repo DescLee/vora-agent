@@ -1,9 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from manus_mini.memory import MemoryManager
-from manus_mini.models import Message
-from manus_mini.session import SessionManager
+from vora.memory import MemoryManager
+from vora.models import Message
+from vora.session import SessionManager
 
 
 def test_user_preference_can_be_saved_and_retrieved(tmp_path: Path) -> None:

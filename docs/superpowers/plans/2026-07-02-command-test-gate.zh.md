@@ -13,8 +13,8 @@
 ### Task 1：Shell 工具测试与实现
 
 **文件：**
-- 新建：`src/manus_mini/tools/shell_tools.py`
-- 修改：`src/manus_mini/tools/registry.py`
+- 新建：`src/vora/tools/shell_tools.py`
+- 修改：`src/vora/tools/registry.py`
 - 测试：`tests/test_shell_tools.py`
 
 - [x] 编写失败测试，覆盖 `run_bash` 成功/失败和 `run_temp_script` 清理脚本。
@@ -26,8 +26,8 @@
 ### Task 2：Reflection 测试门禁
 
 **文件：**
-- 修改：`src/manus_mini/reflection.py`
-- 修改：`src/manus_mini/react.py`
+- 修改：`src/vora/reflection.py`
+- 修改：`src/vora/react.py`
 - 测试：`tests/test_planner_reflector.py`
 
 - [x] 编写失败测试，覆盖代码修改任务未执行测试不接受、测试失败不接受、测试通过才接受。

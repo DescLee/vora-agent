@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from manus_mini.models import Message, SessionState, TaskState
-from manus_mini.logging import project_logs_dir, project_memory_path, project_sessions_dir
-from manus_mini.session_store import CorruptSessionError, SessionStore
+from vora.models import Message, SessionState, TaskState
+from vora.logging import project_logs_dir, project_memory_path, project_sessions_dir
+from vora.session_store import CorruptSessionError, SessionStore
 
 
 def test_session_store_saves_loads_and_lists_sessions(monkeypatch, tmp_path: Path) -> None:
@@ -240,7 +240,7 @@ def test_session_store_log_cleanup_cannot_escape_logs_dir(monkeypatch, tmp_path:
     assert saved_path.exists()
 
 
-def test_session_store_cleans_logs_from_user_manus_mini(monkeypatch, tmp_path: Path) -> None:
+def test_session_store_cleans_logs_from_user_vora(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: home)
     session_id = "session-abc123"
@@ -293,16 +293,16 @@ def test_session_store_deletes_broken_symlink_for_single_log_cleanup(monkeypatch
     assert not broken_link.is_symlink()
 
 
-def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path: Path) -> None:
+def test_session_store_migrates_legacy_project_vora(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     legacy_session = SessionState.create(cwd=tmp_path)
-    legacy_sessions_dir = tmp_path / ".manus-mini" / "sessions"
+    legacy_sessions_dir = tmp_path / ".vora" / "sessions"
     legacy_sessions_dir.mkdir(parents=True)
     (legacy_sessions_dir / f"{legacy_session.session_id}.json").write_text(
         legacy_session.model_dump_json(indent=2),
         encoding="utf-8",
     )
-    (tmp_path / ".manus-mini" / "memory.db").write_bytes(b"legacy-memory")
+    (tmp_path / ".vora" / "memory.db").write_bytes(b"legacy-memory")
 
     SessionStore(tmp_path)
 
@@ -313,7 +313,7 @@ def test_session_store_migrates_legacy_project_manus_mini(monkeypatch, tmp_path:
 
 def test_session_store_migration_skips_legacy_symlinked_session_files(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    legacy_sessions_dir = tmp_path / ".manus-mini" / "sessions"
+    legacy_sessions_dir = tmp_path / ".vora" / "sessions"
     legacy_sessions_dir.mkdir(parents=True)
     outside = tmp_path / "outside-session.json"
     outside.write_text(SessionState.create(cwd=tmp_path).model_dump_json(indent=2), encoding="utf-8")
@@ -326,10 +326,10 @@ def test_session_store_migration_skips_legacy_symlinked_session_files(monkeypatc
 
 def test_session_store_migration_does_not_overwrite_existing_project_data(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    legacy_sessions_dir = tmp_path / ".manus-mini" / "sessions"
+    legacy_sessions_dir = tmp_path / ".vora" / "sessions"
     legacy_sessions_dir.mkdir(parents=True)
     (legacy_sessions_dir / "session-existing.json").write_text("legacy", encoding="utf-8")
-    (tmp_path / ".manus-mini" / "memory.db").write_bytes(b"legacy-memory")
+    (tmp_path / ".vora" / "memory.db").write_bytes(b"legacy-memory")
     project_sessions_dir(tmp_path).mkdir(parents=True)
     (project_sessions_dir(tmp_path) / "session-existing.json").write_text("current", encoding="utf-8")
     project_memory_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)

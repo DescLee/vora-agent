@@ -1,1 +1,1 @@
-"""Manus Mini evaluation harness."""
+"""Vora evaluation harness."""

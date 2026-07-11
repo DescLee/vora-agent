@@ -3,18 +3,18 @@ from pathlib import Path
 
 import pytest
 
-from manus_mini.logging import (
+from vora.logging import (
     EventLogger,
-    default_manus_home,
+    default_vora_home,
     project_memory_path,
     project_logs_dir,
     project_outputs_dir,
     project_sessions_dir,
     project_storage_dir,
 )
-from manus_mini.models import TaskState
-from manus_mini.reporter import Reporter
-from manus_mini.reporter import render_task_report
+from vora.models import TaskState
+from vora.reporter import Reporter
+from vora.reporter import render_task_report
 
 
 def test_event_logger_writes_jsonl(tmp_path: Path) -> None:
@@ -158,14 +158,14 @@ def test_event_logger_defaults_to_disabled_in_tests(tmp_path: Path) -> None:
     assert not path.exists()
 
 
-def test_event_logger_defaults_to_user_manus_mini_logs(monkeypatch, tmp_path: Path) -> None:
+def test_event_logger_defaults_to_user_vora_logs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     logger = EventLogger()
     path = logger.record("session-1", "run-1", {"type": "context_budget"})
 
-    assert logger.root == default_manus_home() / "logs"
-    assert path.parent == default_manus_home() / "logs" / "session-1"
+    assert logger.root == default_vora_home() / "logs"
+    assert path.parent == default_vora_home() / "logs" / "session-1"
 
 
 def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path: Path) -> None:
@@ -174,7 +174,7 @@ def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path
     project_b = tmp_path / "workspace-b" / "same-name"
 
     assert project_storage_dir(project_a) != project_storage_dir(project_b)
-    assert project_storage_dir(project_a).parent == default_manus_home() / "projects"
+    assert project_storage_dir(project_a).parent == default_vora_home() / "projects"
     assert project_sessions_dir(project_a) == project_storage_dir(project_a) / "sessions"
     assert project_logs_dir(project_a) == project_storage_dir(project_a) / "logs"
     assert project_outputs_dir(project_a) == project_storage_dir(project_a) / "outputs"
@@ -182,7 +182,7 @@ def test_project_storage_dirs_are_isolated_by_project_path(monkeypatch, tmp_path
 
 
 def test_project_storage_dir_falls_back_to_workspace_when_user_home_is_unwritable(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("manus_mini.logging.default_manus_home", lambda: tmp_path / "home")
+    monkeypatch.setattr("vora.logging.default_vora_home", lambda: tmp_path / "home")
     project = tmp_path / "workspace"
 
     original_mkdir = Path.mkdir
@@ -196,13 +196,13 @@ def test_project_storage_dir_falls_back_to_workspace_when_user_home_is_unwritabl
 
     storage = project_storage_dir(project)
 
-    assert storage == project / ".manus-mini"
+    assert storage == project / ".vora"
 
 
 def test_project_storage_dir_falls_back_when_project_store_is_unwritable(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     projects_root = home / "projects"
-    monkeypatch.setattr("manus_mini.logging.default_manus_home", lambda: home)
+    monkeypatch.setattr("vora.logging.default_vora_home", lambda: home)
     project = tmp_path / "workspace"
 
     original_mkdir = Path.mkdir
@@ -216,7 +216,7 @@ def test_project_storage_dir_falls_back_when_project_store_is_unwritable(monkeyp
 
     storage = project_storage_dir(project)
 
-    assert storage == project / ".manus-mini"
+    assert storage == project / ".vora"
 
 
 def test_event_logger_compacts_duplicate_llm_payload_fields(tmp_path: Path) -> None:
