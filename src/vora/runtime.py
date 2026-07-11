@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from inspect import signature
 from datetime import datetime
+from inspect import signature
 from pathlib import Path
 
-from vora.logging import EventLogger, project_logs_dir, project_outputs_dir
+from vora.config import AppConfig
 from vora.context import (
     build_context_bundle,
     complete_interrupted_tool_messages,
     estimate_session_context_usage,
 )
+from vora.llm import LLMClient, get_default_llm_client
+from vora.logging import EventLogger, project_logs_dir, project_outputs_dir
+from vora.memory import MemoryManager
 from vora.models import (
     AgentError,
     AgentErrorCode,
@@ -22,12 +25,10 @@ from vora.models import (
     TaskState,
     TraceEvent,
 )
-from vora.memory import MemoryManager
 from vora.planner import Planner
 from vora.reflection import ReflectionLoop
 from vora.reporter import Reporter
 from vora.react import ReActLoop
-from vora.llm import LLMClient
 from vora.skills import SkillRegistry, SkillSpec
 
 
@@ -58,6 +59,26 @@ class AgentRuntime:
         self.dry_run = dry_run
         self.memory_manager = memory_manager or MemoryManager(":memory:")
         self.skill_registry = skill_registry or SkillRegistry.default(self.cwd)
+
+    def resolve_model_context_limit(self) -> int | None:
+        llm = getattr(self.react_loop, "llm", None)
+        if llm is None:
+            try:
+                llm = get_default_llm_client(AppConfig.from_env(self.cwd / ".env"))
+            except Exception:
+                return None
+            self.react_loop.llm = llm
+            if hasattr(self.reflection_loop, "llm") and self.reflection_loop.llm is None:
+                self.reflection_loop.llm = llm
+            if hasattr(self.planner, "llm") and self.planner.llm is None:
+                self.planner.llm = llm
+        context_limit_getter = getattr(llm, "context_limit", None)
+        if not callable(context_limit_getter):
+            return None
+        try:
+            return context_limit_getter()
+        except Exception:
+            return None
 
     def _default_reporter_output_dir(self) -> Path:
         return project_outputs_dir(self.cwd)
@@ -101,8 +122,7 @@ class AgentRuntime:
             },
         )
         if session.model_context_limit is None or session.model_context_limit <= 0:
-            context_limit_getter = getattr(self.react_loop.llm, "context_limit", None)
-            model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
+            model_context_limit = self.resolve_model_context_limit()
             session.model_context_limit = model_context_limit or task.limits.max_estimated_tokens
         task.model_context_limit = session.model_context_limit
         pre_compression_tokens, pre_compression_usage = estimate_session_context_usage(session, task.model_context_limit)

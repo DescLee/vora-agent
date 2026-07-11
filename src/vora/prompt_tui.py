@@ -54,7 +54,7 @@ from vora.prompt_tui_formatting import (  # noqa: F401
     style_output_fragments,
     wrap_text_for_display,
 )
-from vora.session import COMPACT_CONTEXT_COMMANDS, HELP_COMMANDS, SAVE_CONTEXT_COMMANDS, SessionManager
+from vora.session import COMPACT_CONTEXT_COMMANDS, HELP_COMMANDS, SAVE_CONTEXT_COMMANDS, STATUS_COMMANDS, SessionManager
 
 
 @dataclass(slots=True)
@@ -277,7 +277,10 @@ class PromptTui:
             dry_run=resolved_options.dry_run,
             memory_manager=memory_manager,
             initial_session=initial_session,
+            resolve_model_context_limit_on_init=False,
         )
+        self.startup_initialization_done = initial_session is not None and bool(initial_session.model_context_limit)
+        self.startup_initialization_running = False
         self.is_running = False
         self.is_streaming_artifact = False
         self.visible_trace_count = 0
@@ -292,7 +295,7 @@ class PromptTui:
         initial_output = (
             self.format_history()
             if self.completed_transcript_blocks
-            else self._format_initial_welcome()
+            else self._format_loading_welcome()
         )
         self.output_line_starts = build_line_starts(initial_output)
         self.output_display_width: int | None = None
@@ -318,6 +321,18 @@ class PromptTui:
         self.status = Label(format_status(self.manager.current), style="class:status")
         self.app = self._build_app()
 
+    def _format_loading_welcome(self) -> str:
+        return "\n".join(
+            [
+                "欢迎使用 Vora TUI",
+                "",
+                "正在加载会话与模型信息...",
+                "直接输入任务开始连续对话。Agent 会读取项目、调用工具、生成报告或在确认后写入文件。",
+                "- 你可以先输入问题，我会在发送前补齐必要的模型上下文信息。",
+                "- 输入 `/help` 查看常用入口、快捷键、运行限制和安全说明。",
+            ]
+        )
+
     def _format_initial_welcome(self) -> str:
         config = AppConfig.from_env(self.options.cwd / ".env")
         llm_configured = (
@@ -331,6 +346,40 @@ class PromptTui:
             llm_configured=llm_configured,
             llm_config_source=config.llm_config_source,
         )
+
+    def complete_startup_initialization(self) -> None:
+        if self.startup_initialization_done:
+            return
+        self.manager._ensure_session_model_context_limit()
+        self.startup_initialization_done = True
+        self.startup_initialization_running = False
+        if not self.completed_transcript_blocks:
+            self.set_output_text(self._format_initial_welcome(), force_follow=True)
+        self.status.text = format_status(self.manager.current)
+        self.app.invalidate()
+
+    def _resolve_startup_model_context_limit(self) -> None:
+        self.manager._ensure_session_model_context_limit()
+
+    async def complete_startup_initialization_async(self) -> None:
+        if self.startup_initialization_done or self.startup_initialization_running:
+            return
+        self.startup_initialization_running = True
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(self._agent_executor, self._resolve_startup_model_context_limit)
+            self.startup_initialization_done = True
+            if not self.completed_transcript_blocks:
+                self.set_output_text(self._format_initial_welcome(), force_follow=True)
+            self.status.text = format_status(self.manager.current)
+            self.app.invalidate()
+        finally:
+            self.startup_initialization_running = False
+
+    def start_startup_initialization(self) -> None:
+        if self.startup_initialization_done or self.startup_initialization_running:
+            return
+        self.app.create_background_task(self.complete_startup_initialization_async())
 
     def _initial_completed_transcript_blocks(self, initial_session: SessionState | None) -> list[str]:
         if initial_session is None or (not initial_session.messages and initial_session.active_task is None):
@@ -553,7 +602,12 @@ class PromptTui:
 
     def is_direct_command(self, content: str) -> bool:
         normalized = content.strip().lower()
-        if normalized in HELP_COMMANDS or normalized in SAVE_CONTEXT_COMMANDS or normalized in COMPACT_CONTEXT_COMMANDS:
+        if (
+            normalized in HELP_COMMANDS
+            or normalized in SAVE_CONTEXT_COMMANDS
+            or normalized in COMPACT_CONTEXT_COMMANDS
+            or normalized in STATUS_COMMANDS
+        ):
             return True
         return normalized.startswith("忘记")
 
@@ -860,7 +914,7 @@ class PromptTui:
 
     def run(self) -> None:
         try:
-            self.app.run()
+            self.app.run(pre_run=self.start_startup_initialization)
         except KeyboardInterrupt:
             self.handle_interrupted_execution()
         finally:

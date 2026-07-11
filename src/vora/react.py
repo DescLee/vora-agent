@@ -7,7 +7,13 @@ from collections.abc import Sequence
 from pathlib import PurePosixPath
 from time import monotonic
 
-from vora.context import compact_messages_with_snapshot, estimate_message_tokens, run_context_compression_pipeline, validate_tool_call_pairs
+from vora.context import (
+    build_segments,
+    compact_messages_with_snapshot,
+    estimate_message_tokens,
+    run_context_compression_pipeline,
+    validate_tool_call_pairs,
+)
 from vora.llm import (
     LLMClient,
     LLMRequestError,
@@ -23,18 +29,25 @@ from vora.models import Message, SessionState, TaskState, TraceEvent
 from vora.observer import Observer
 from vora.scheduler import ToolScheduler
 from vora.skills import SkillSpec
+from vora.token_breakdown import record_llm_token_breakdown
 from vora.tools.base import ToolResult
 from vora.tools.registry import ToolRegistry
 from vora.tools.shell_tools import LLMCommandRiskJudge, RunBashTool, RunTempScriptTool
+from vora.validation import looks_like_inline_test_script, looks_like_validation_command
 
 
 MAX_TOOL_RESULT_PATHS = 20
 MAX_TOOL_RESULT_CONTENT_CHARS = 4000
+MAX_INLINE_TOOL_RESULT_CONTENT_CHARS = 1200
+TOOL_RESULT_PREVIEW_EDGE_CHARS = 500
+REACT_PROMPT_RECENT_SEGMENTS = 8
 RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
 SHELL_CODE_WRITE_TOOLS = {"run_bash", "run_temp_script"}
+READ_ONLY_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "web_search", "fetch_webpage"}
+FILE_OUTPUT_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "write_file", "append_file", "make_directory"}
 CODE_FILE_SUFFIXES = {
     ".c",
     ".cc",
@@ -155,6 +168,13 @@ def format_tool_result_message(tool_result, content_ref: str | None = None) -> s
         return "\n\n".join(parts)
     if tool_result.tool_name == "read_file" and tool_result.ok and tool_result.content and content_ref:
         parts.append(_format_read_file_content_ref(tool_result, content_ref))
+    if (
+        tool_result.content
+        and content_ref
+        and len(tool_result.content) > MAX_INLINE_TOOL_RESULT_CONTENT_CHARS
+    ):
+        parts.append(_format_large_content_ref(tool_result, content_ref, include_ref=tool_result.tool_name != "read_file"))
+        return "\n\n".join(parts)
     if tool_result.content:
         parts.append(_format_content(tool_result.content))
     elif tool_result.ok:
@@ -187,6 +207,33 @@ def _format_read_file_content_ref(tool_result, content_ref: str) -> str:
         lines.append(f"total_lines: {total_lines}")
     if tool_result.data.get("truncated"):
         lines.append("truncated: true")
+    return "\n".join(lines)
+
+
+def _format_large_content_ref(tool_result, content_ref: str, *, include_ref: bool = True) -> str:
+    content = tool_result.content
+    head = content[:TOOL_RESULT_PREVIEW_EDGE_CHARS].rstrip()
+    tail = content[-TOOL_RESULT_PREVIEW_EDGE_CHARS:].lstrip()
+    omitted = max(0, len(content) - len(head) - len(tail))
+    lines = []
+    if include_ref:
+        lines.append("content_ref: " + content_ref)
+    lines.extend(
+        [
+            f"content_chars: {len(content)}",
+            "content_note: 完整工具结果已保存在本地工具观察中，模型上下文只保留引用和头尾预览；需要更多细节时请使用更精确的工具参数重新获取。",
+        ]
+    )
+    lines.extend([
+        "content_preview:",
+        head,
+    ])
+    if omitted > 0:
+        lines.append(f"... [omitted {omitted} char(s); full content in {content_ref}]")
+    if tail and tail != head:
+        lines.append(tail)
+    if tool_result.error_code:
+        lines.append(f"error_code: {tool_result.error_code}")
     return "\n".join(lines)
 
 
@@ -256,6 +303,56 @@ def _format_active_skill_for_react(task: TaskState) -> str:
     if skill.acceptance:
         lines.append(f"- 验收标准：{'; '.join(skill.acceptance)}")
     return "\n".join(lines)
+
+
+def _trim_react_prompt_history(messages: list[Message]) -> list[Message]:
+    segments = build_segments(messages)
+    if len(segments) <= REACT_PROMPT_RECENT_SEGMENTS:
+        return messages
+
+    omitted_count = len(segments) - REACT_PROMPT_RECENT_SEGMENTS
+    recent_segments = segments[-REACT_PROMPT_RECENT_SEGMENTS:]
+    trimmed = [message for segment in recent_segments for message in segment.messages]
+    omitted_message = Message.system(
+        f"[System] 较早对话历史已从本次模型请求中省略 {omitted_count} 段；如需恢复细节，请基于当前任务重新读取相关文件或询问用户。"
+    )
+    result = [omitted_message, *trimmed]
+    validate_tool_call_pairs(result)
+    return result
+
+
+def _default_tool_names_for_task(task: TaskState, available_names: list[str]) -> list[str]:
+    if _task_needs_code_tools(task):
+        return list(available_names)
+    if _task_needs_file_output_tools(task):
+        return [name for name in available_names if name in FILE_OUTPUT_TOOL_SCHEMA_NAMES]
+    return [name for name in available_names if name in READ_ONLY_TOOL_SCHEMA_NAMES]
+
+
+def _task_needs_code_tools(task: TaskState) -> bool:
+    if any(step.intent == "code" for step in task.plan):
+        return True
+    goal = task.goal.lower()
+    if any(suffix in goal for suffix in CODE_FILE_SUFFIXES):
+        return True
+    return any(
+        keyword in goal
+        for keyword in [
+            "代码",
+            "修复",
+            "bug",
+            "测试",
+            "replace",
+            "修改",
+            "删除",
+            "重构",
+            "生成代码",
+        ]
+    )
+
+
+def _task_needs_file_output_tools(task: TaskState) -> bool:
+    return any(keyword in task.goal for keyword in EXPLICIT_WRITE_INTENT_KEYWORDS)
 
 
 class ReActLoop:
@@ -333,10 +430,10 @@ class ReActLoop:
             )
 
             if not llm_result.tool_calls:
-                self._record_llm_usage(task, llm_result)
+                self._record_llm_usage(task, session, llm_result)
                 return self._finalize_answer_content(task, llm_result.content)
 
-            self._record_llm_usage(task, llm_result)
+            self._record_llm_usage(task, session, llm_result)
             assistant_message = assistant_message_from_llm_result(llm_result)
             messages.append(assistant_message)
             session.messages.append(assistant_message)
@@ -421,13 +518,18 @@ class ReActLoop:
             return False
         return bool(task.plan) and all(step.intent == "chat" for step in task.plan)
 
-    def _record_llm_usage(self, task: TaskState, llm_result: LLMResult) -> None:
+    def _record_llm_usage(self, task: TaskState, session: SessionState, llm_result: LLMResult) -> None:
         usage = extract_usage(llm_result.source_response)
         if usage is None:
             return
         task.last_prompt_tokens = usage.get("prompt_tokens")
         task.last_completion_tokens = usage.get("completion_tokens")
         task.last_total_tokens = usage.get("total_tokens")
+        session.record_token_usage(
+            prompt_tokens=task.last_prompt_tokens,
+            completion_tokens=task.last_completion_tokens,
+            total_tokens=task.last_total_tokens,
+        )
 
     def _conversation_context(self, task: TaskState, session: SessionState) -> list[Message]:
         history = list(session.messages)
@@ -455,7 +557,7 @@ class ReActLoop:
                 )
             )
             raise RuntimeError("TOKEN_BUDGET_EXCEEDED")
-        return compacted
+        return _trim_react_prompt_history(compacted)
 
     def _context_limit(self, task: TaskState) -> int:
         return max(1, task.model_context_limit or task.limits.max_estimated_tokens)
@@ -641,7 +743,7 @@ class ReActLoop:
                 },
             )
         )
-        self._record_llm_usage(task, llm_result)
+        self._record_llm_usage(task, session, llm_result)
         if llm_result.tool_calls:
             task.trace_events.append(
                 TraceEvent(
@@ -664,13 +766,23 @@ class ReActLoop:
             resolved_tool_names = tool_names if tool_names is not None else self.registry.names()
             request_payload = {"messages": self._loggable_messages(messages), "tool_names": resolved_tool_names}
             if self.logger is not None:
+                iteration = len([event for event in task.trace_events if event.phase == "react"])
+                record_llm_token_breakdown(
+                    self.logger,
+                    session_id,
+                    task.run_id,
+                    stage="react",
+                    iteration=iteration,
+                    messages=messages,
+                    tool_names=list(resolved_tool_names),
+                )
                 self.logger.record(
                     session_id,
                     task.run_id,
                     {
                         "type": "llm_request",
                         "stage": "react",
-                        "iteration": len([event for event in task.trace_events if event.phase == "react"]),
+                        "iteration": iteration,
                         "request": request_payload,
                         "api_request_payload": request_payload,
                     },
@@ -776,7 +888,7 @@ class ReActLoop:
             return []
         skill = _active_skill_from_task(task)
         if skill is None or not skill.tool_allowlist:
-            return self.registry.names()
+            return _default_tool_names_for_task(task, self.registry.names())
         return [name for name in skill.tool_allowlist if name in self.registry]
 
     def _format_execution_plan(self, task: TaskState) -> str:
@@ -1626,8 +1738,12 @@ def _has_prior_test_execution(task: TaskState, session: SessionState) -> bool:
             for tool_call_id, tool_name in names.items():
                 if tool_name not in {"run_bash", "run_temp_script"}:
                     continue
-                raw_arguments = str(arguments.get(tool_call_id, "")).lower()
-                if "test" in str(tool_call_id).lower() or "test" in raw_arguments:
+                raw_arguments = str(arguments.get(tool_call_id, ""))
+                if (
+                    looks_like_validation_command(raw_arguments)
+                    or looks_like_inline_test_script(raw_arguments)
+                    or "test" in str(tool_call_id).lower()
+                ):
                     test_tool_call_ids.add(str(tool_call_id))
         elif message.role == "tool" and message.tool_call_id:
             executed_tool_call_ids.add(message.tool_call_id)
@@ -1733,16 +1849,12 @@ def _is_test_tool_event(data: dict) -> bool:
     args = data.get("args")
     if not isinstance(args, dict):
         args = {}
-    text = " ".join(
-        str(value).lower()
-        for value in [
-            *args.values(),
-            data.get("summary", ""),
-            data.get("stdout", ""),
-            data.get("stderr", ""),
-        ]
+    command = str(args.get("command") or args.get("script") or args.get("content") or args.get("filename") or "")
+    return (
+        looks_like_validation_command(command)
+        or (data.get("tool_name") == "run_temp_script" and looks_like_inline_test_script(command))
+        or bool(data.get("validation") is True)
     )
-    return any(keyword in text for keyword in ["pytest", "unittest", "test", "go test", "cargo test", "npm test", "pnpm test", "yarn test", "ruff"])
 
 
 def _is_test_tool_call(call) -> bool:

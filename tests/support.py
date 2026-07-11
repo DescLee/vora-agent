@@ -58,17 +58,16 @@ class ScriptedLLM:
         )
         if (
             create_hello_world_query
-            and ("command exited" not in tool_text or "wrote helloworld.py" in tool_text)
-            and "command exited 0" not in tool_text
+            and "pre-validation passed" not in tool_text
             and "run_bash" in tool_names
         ):
             return LLMResult(
                 tool_calls=[
                     ToolCall(
-                        id="call-test-helloworld",
+                        id="call-prevalidate-helloworld",
                         name="run_bash",
                         args={
-                            "command": "python helloworld.py | grep 'hello world' # test helloworld",
+                            "command": "python -m compileall . && echo pre-validation passed",
                         },
                     )
                 ]
@@ -88,7 +87,20 @@ class ScriptedLLM:
                 ]
             )
 
-        if create_hello_world_query and "wrote helloworld.py" in tool_text and "command exited 0" in tool_text:
+        if create_hello_world_query and "wrote helloworld.py" in tool_text and "post-validation passed" not in tool_text:
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-postvalidate-helloworld",
+                        name="run_bash",
+                        args={
+                            "command": "python -m py_compile helloworld.py && echo post-validation passed",
+                        },
+                    )
+                ]
+            )
+
+        if create_hello_world_query and "wrote helloworld.py" in tool_text and "post-validation passed" in tool_text:
             return LLMResult(content="已在工作目录下新建 helloworld.py，内容为 `print('hello world')`。")
 
         if project_query and "list_files" in tool_names and not tool_text:

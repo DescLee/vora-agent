@@ -191,10 +191,21 @@ class SessionState(BaseModel):
     pending_confirmation: PendingConfirmation | None = None
     run_ids: list[str] = Field(default_factory=list)
     model_context_limit: int | None = None
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
 
     @classmethod
     def create(cls, cwd: Path) -> "SessionState":
         return cls(cwd=cwd)
+
+    def record_token_usage(self, prompt_tokens: int | None = None, completion_tokens: int | None = None, total_tokens: int | None = None) -> None:
+        prompt = prompt_tokens if isinstance(prompt_tokens, int) and prompt_tokens > 0 else 0
+        completion = completion_tokens if isinstance(completion_tokens, int) and completion_tokens > 0 else 0
+        total = total_tokens if isinstance(total_tokens, int) and total_tokens > 0 else prompt + completion
+        self.total_prompt_tokens += prompt
+        self.total_completion_tokens += completion
+        self.total_tokens += total
 
 
 class ContextSegment(BaseModel):

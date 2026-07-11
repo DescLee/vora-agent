@@ -1147,15 +1147,22 @@
   - 测试覆盖 Planner/ReAct 提示词包含中文 reasoning 约束。
   - TUI reasoning 展示测试改为中文内容，不再把英文推理作为期望展示路径。
 
-### 9.38 Reflection 不识别 `node -c` 语法检查
+### 9.38 Reflection 验证证据识别过窄
 
-- 现象：小程序项目修改 `.js` 文件后，Agent 已执行 `node -c pages/.../*.js` 并全部退出 0，但 Reflection 仍反复返回 `local_update`，最终外层循环耗尽并标记 failed。
-- 根因：Reflection gate 只把命令文本里包含 `pytest`、`test`、`go test`、`ruff` 等关键词的 `run_bash` / `run_temp_script` 视为测试事件；`node -c` 不在识别列表里，导致 `has_passing_test_after_latest_code_change=false`。
+- 现象：小程序项目修改 `.js` 文件后，Agent 已执行 `node -c pages/.../*.js` 并全部退出 0，但 Reflection 仍反复返回 `local_update`，最终外层循环耗尽并标记 failed。类似问题也会影响其它语言的编译、类型检查、lint 或 build 验证。
+- 根因：Reflection gate 只把命令文本里包含 `pytest`、`test`、`go test`、`ruff` 等少量关键词的 `run_bash` / `run_temp_script` 视为测试事件；`node -c`、`python -m py_compile`、`tsc`、`cargo check`、`dotnet build` 等验证命令不会被识别，导致 `has_passing_test_after_latest_code_change=false`。
 - 修复：
-  - 将 `node -c` 纳入 Reflection 测试命令关键词。
+  - 新增统一验证命令识别模块，覆盖测试、lint、typecheck、build、compile 和 syntax check。
+  - 覆盖 Python、Node/JS/TS、Go、Rust、Java/Gradle/Maven、.NET、Swift、PHP、Ruby、Shell、Make/CMake 等常见命令。
+  - 对 `run_temp_script` 的 inline 测试脚本增加识别，包含 `assert`、`expect`、`describe`、`test`、`throw new Error` 等测试特征时，可作为写前测试证据；失败的红灯测试也允许后续进入代码修改。
+  - ReAct 写前门禁和 Reflection 写后门禁共用同一套识别逻辑，避免两边规则再次分叉。
   - 保持原有通过条件不变：工具执行必须 `ok=True`、`exit_code=0`，且输出中不能出现失败标记。
+  - 普通查询命令如 `grep -R TODO src` 不会被误判为验证。
 - 验证：
   - 新增回归测试覆盖：最新 `replace_in_file` 后执行 `node -c pages/practice/practice.js`，Reflection 可以接受。
+  - 参数化测试覆盖多语言常见验证命令。
+  - Runtime 测试覆盖写生产代码前执行 `python -m py_compile` 后允许继续写入。
+  - Runtime 测试覆盖失败的 inline 测试脚本之后允许执行 `replace_in_file`，对应 TDD 红灯后修复流程。
 
 ### 9.37 TUI 多轮对话展示不再清空
 
@@ -1603,7 +1610,7 @@ total=7, passed=7, failed=0
   - `SessionState` 新增 `model_context_limit`。
   - `SessionManager` 创建或进入会话时只解析一次当前模型上下文窗口。
   - 后续所有 `TaskState.model_context_limit` 都继承会话级固定值，不再每轮重新读取。
-  - TUI 状态栏右侧展示固定窗口大小，例如 `窗口 1,000,000`。
+  - TUI 状态栏右侧展示固定窗口大小，例如 `上下文窗口上限 1,000,000`，避免误解为当前已用上下文。
 - 验证：
   - `tests/test_session.py` 覆盖会话创建时解析一次模型窗口，后续不会被覆盖。
   - `tests/test_runtime.py` 覆盖 runtime 始终使用 session 固定窗口。
@@ -1750,3 +1757,155 @@ python -m vora doctor --cwd /private/tmp/vora-doctor-check
   - `python -m vora doctor --cwd /private/tmp/vora-doctor-check` 通过。
   - `python -m build` 生成 `vora-20260702.1644.tar.gz` 和 `vora-20260702.1644-py3-none-any.whl`。
   - 全量 `pytest -q`、`ruff check src tests evals`、`mypy`、`python evals/run_evals.py`、覆盖率门禁全部通过。
+
+## 18. TUI 上下文窗口上限动态解析
+
+更新日期：2026-07-11
+
+### 18.1 DeepSeek 模型进入 TUI 后显示 128k 上下文窗口
+
+- 现象：
+  - 使用 DeepSeek 等 OpenAI-compatible 模型时，TUI 初始状态可能显示 `上下文窗口上限 128,000`。
+  - 这不是展示层问题，而是 `SessionManager` 初始化时 `react_loop.llm` 还未创建，导致直接回退到默认 `LoopLimits.max_estimated_tokens`。
+- 修复：
+  - `AgentRuntime` 新增 `resolve_model_context_limit()`，统一负责解析当前 LLM client 并读取 `context_limit()`。
+  - `SessionManager` 初始化时通过 runtime 解析真实模型窗口，不再只检查已经存在的 `react_loop.llm`。
+  - `OpenAICompatibleLLMClient` 查询上下文窗口时优先请求 `{LLM_BASE_URL}/models/{LLM_MODEL}`。
+  - 如果单模型详情接口不可用，再请求 `{LLM_BASE_URL}/models`，并只使用 `id/name/model` 匹配当前 `LLM_MODEL` 的模型条目。
+  - 动态查询失败时才回退到本地模型名推断，避免把 DeepSeek 等模型固定误判成 128k。
+  - 模型信息查询使用较短超时，避免 TUI 首次进入时长时间卡住。
+- 验证：
+  - `tests/test_llm.py::test_openai_compatible_client_context_limit_from_model_detail`
+  - `tests/test_llm.py::test_openai_compatible_client_context_limit_from_model_list`
+  - `tests/test_session.py::test_session_manager_resolves_default_llm_context_limit_on_init`
+
+### 18.2 会话内缺少状态查看命令
+
+- 现象：
+  - TUI 对话中无法直接查看当前会话使用的模型、Base URL、工作目录、Session ID、累计 token 和上下文窗口。
+  - 之前只记录单个任务最近一次 LLM 返回的 usage，不能表示本次 session 的累计 input/output token。
+- 修复：
+  - 新增 `/status` 会话内指令，不触发 LLM 请求，直接输出当前会话状态。
+  - 输出内容包含：
+    - Model
+    - Base URL
+    - 当前目录
+    - Session ID
+    - Token usage：按本次 session 累计 input / output / total 展示
+    - Context window
+  - `SessionState` 新增 session 级 token 累计字段。
+  - Planner、ReAct、Reflection 拿到模型返回的 `usage` 后统一累加到当前 session。
+  - 所有 token 数量展示统一使用 `K` 单位，例如 `1.5K`、`64.0K`。
+  - `/help` 中新增 `/status` 说明。
+- 验证：
+  - `tests/test_session.py::test_session_manager_status_command_reports_session_info`
+  - `tests/test_session.py::test_format_session_status_uses_k_units`
+  - `tests/test_runtime.py::test_react_loop_records_llm_usage_from_source_response`
+  - `tests/test_planner_reflector.py::test_planner_records_session_token_usage`
+
+### 18.3 ReAct 请求 input token 偏高
+
+- 现象：
+  - 同一项目、同一问题下，Vora 的 session 级 input token 明显高于 Codex。
+  - 主要成本来自多阶段请求累计，以及 ReAct 每轮重复发送较多历史消息和完整工具 schema。
+- 约束：
+  - 不改变模型真实上下文窗口语义。
+  - 如果模型信息返回 1M context window，`/status` 和上下文窗口上限仍按真实值展示和使用。
+- 优化：
+  - ReAct 发起模型请求前只保留最近 8 段对话上下文，较早历史以一条系统提示说明已省略。
+  - 保留消息段时按 `build_segments()` 处理，避免拆散 assistant tool call 与 tool result 配对。
+  - 普通研究/报告类任务只下发只读工具 schema：`list_files`、`read_file`、`web_search`、`fetch_webpage`。
+  - 代码类任务继续下发写入和 shell 工具，避免影响修复、测试和文件修改能力。
+  - 明确文件输出意图时下发文件输出工具，但不默认下发 shell 工具。
+- 预期收益：
+  - 多轮长会话中，每次 ReAct 请求不再重复携带大量早期对话。
+  - 非代码任务不再重复发送写入、目录创建、shell 执行等工具 schema，降低 input token 和误调用概率。
+- 验证：
+  - `tests/test_runtime.py::test_react_loop_trims_old_conversation_context_before_llm_request`
+  - `tests/test_runtime.py::test_react_loop_limits_tool_schema_for_research_task`
+  - `tests/test_runtime.py::test_react_loop_keeps_write_and_shell_tools_for_code_task`
+
+### 18.4 LLM 请求缺少 input token 归因日志
+
+- 现象：
+  - `/status` 可以看到 session 级真实 input/output token 总量。
+  - 但无法判断 input token 主要来自 system prompt、工具 schema、历史消息、工具结果还是项目结构摘要。
+- 优化：
+  - 新增 `llm_token_breakdown` 诊断日志，写入现有 `node.jsonl`。
+  - 该日志使用本地估算 token，只用于结构占比分析，不参与 `/status` 的真实 usage 统计。
+  - Planner、ReAct、Reflection 发起 LLM 请求前都会记录一条归因日志。
+  - 当前拆分字段：
+    - `system_prompt`
+    - `project_overview`
+    - `current_task`
+    - `history_user`
+    - `assistant_messages`
+    - `tool_results`
+    - `tool_schema`
+    - `other`
+  - 同时记录 `estimated_total_tokens`、`message_count`、`tool_count`，便于后续分析请求膨胀来源。
+- 验证：
+  - `tests/test_runtime.py::test_runtime_logs_llm_request_and_response_payloads` 覆盖 Planner/ReAct breakdown 日志写入。
+
+### 18.5 TUI 启动前同步获取模型信息导致卡顿
+
+- 现象：
+  - 执行 `vora` 后，需要等待模型上下文窗口查询完成才进入 TUI。
+  - 当模型服务响应慢或网络抖动时，用户会感觉命令卡住。
+- 优化：
+  - `SessionManager` 支持延迟解析 `model_context_limit`。
+  - `PromptTui` 构造阶段不再同步请求模型信息，先渲染 TUI。
+  - 初始页面展示加载态：
+    - `正在加载会话与模型信息...`
+    - 提示用户可以先输入问题，发送前会补齐必要模型上下文信息。
+  - TUI 启动后通过后台任务解析模型上下文窗口，完成后刷新欢迎页和状态栏。
+  - 非 TUI 的一次性 `vora run` 仍保持同步解析，避免改变命令行任务行为。
+- 验证：
+  - `tests/test_prompt_tui.py::test_prompt_tui_welcome_shows_current_model`
+  - `tests/test_prompt_tui.py::test_prompt_tui_startup_initialization_updates_welcome_model`
+  - `tests/test_prompt_tui.py::test_prompt_tui_constructor_does_not_resolve_model_context_limit`
+
+### 18.6 长工具结果在 ReAct 多轮中反复进入上下文
+
+- 现象：
+  - token 归因日志显示，session 级 input token 的主要来源是 ReAct 阶段的 `tool_results`。
+  - 多轮读取、搜索或抓取后，较早工具结果会作为 `tool` message 继续进入后续 LLM 请求，造成重复计费。
+- 根因：
+  - 工具原始内容和模型工作上下文耦合过紧。
+  - 之前只对非定向 `read_file` 做了 `content_ref` 引用化，其他长工具结果仍主要依赖固定长度截断。
+- 优化：
+  - 对所有带 `content_ref` 的长工具结果统一做引用化。
+  - 完整内容继续保存在 `Observation.content` 和结构化工具结果日志中。
+  - 进入模型上下文的 tool message 只保留 summary、`content_ref`、字符数、说明和头尾预览。
+  - 非定向 `read_file` 仍只返回引用和文件元信息；定向读取在内容过长时也会自动压缩预览。
+- 预期收益：
+  - ReAct 后续轮次不再重复携带搜索、网页抓取、命令输出等长内容全文。
+  - 保留审计和排障能力，同时降低 `tool_results` 对 input token 的累计贡献。
+- 验证：
+  - `tests/test_runtime.py::test_format_tool_result_message_summarizes_large_generic_content_by_ref`
+  - `tests/test_runtime.py::test_react_loop_keeps_large_tool_content_out_of_next_llm_request`
+
+### 18.7 代码审查类任务仍可能产生过高 token
+
+- 现象：
+  - `session-94cc8ad17175` 中，用户目标是查看当前代码项目还有哪些问题并列清单。
+  - 该任务属于代码类任务，但不是代码修改任务。
+  - 实际执行中 ReAct 运行 29 轮，累计 input token 达到约 432.3K。
+  - token 归因显示主要消耗仍来自 ReAct 的 `tool_results`，其次是每轮重复下发完整 `tool_schema`。
+- 根因：
+  - 当前 `code` intent 过粗，把代码审查、代码修改和代码验证混在一起。
+  - 一旦任务中出现 `code`，ReAct 会长期暴露写入、shell、临时脚本等完整工具集。
+  - 代码审查任务没有明确的探索预算和停止条件，模型会为了“更全面”持续读取更多文件。
+  - 工具结果虽然已经引用化，但历史 tool message 仍会按会话消息反复进入后续请求。
+- 判断：
+  - 批量读取可以减少 LLM 往返轮次，但不是根因修复。
+  - 根因是代码审查任务缺少子意图、证据账本和工作集选择。
+- 后续优化方向：
+  - 将代码类任务内部细分为 `code_review`、`code_edit`、`code_validate`。
+  - `code_review` 默认只暴露只读审查工具，不提前暴露写入工具和完整 shell 工具。
+  - 为 `code_review` 设置探索预算，例如最大读取文件数、最大探索轮次、最大保留 observation 数。
+  - 引入 Findings Ledger，将读取结果沉淀为结构化问题项：标题、严重级别、文件、证据、影响、建议、置信度。
+  - ReAct 每轮基于 working set 构造请求，只携带当前相关 findings、已读文件清单、最近工具结果和必要证据，不再全量携带历史 tool messages。
+- 当前状态：
+  - 已完成 token 归因日志、session 级 token 统计、工具结果引用化和启动卡顿优化。
+  - `session-94cc8ad17175` 暴露出的下一阶段核心问题是“代码审查任务收敛机制”，待后续专项实现。

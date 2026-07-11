@@ -10,7 +10,7 @@ DEFAULT_LLM_MAX_ATTEMPTS = 3
 DEFAULT_LLM_RETRY_BACKOFF_SECONDS = 0.25
 
 
-def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
+def load_dotenv(path: str | Path = ".env", *, update_environment: bool = True) -> dict[str, str]:
     env_path = Path(path)
     loaded: dict[str, str] = {}
     if not env_path.exists():
@@ -28,7 +28,8 @@ def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
         if not key:
             continue
         loaded[key] = value
-        os.environ.setdefault(key, value)
+        if update_environment:
+            os.environ.setdefault(key, value)
 
     return loaded
 
@@ -78,9 +79,9 @@ class AppConfig:
             "LLM_MAX_ATTEMPTS": os.environ.get("LLM_MAX_ATTEMPTS"),
             "LLM_RETRY_BACKOFF_SECONDS": os.environ.get("LLM_RETRY_BACKOFF_SECONDS"),
         }
-        loaded_env = load_dotenv(env_path)
-        loaded_user_env = load_dotenv(user_env_path or Path.home() / ".vora" / ".env")
-        loaded_package_env = load_dotenv(package_env_path or _default_package_env_path())
+        loaded_env = load_dotenv(env_path, update_environment=False)
+        loaded_user_env = load_dotenv(user_env_path or Path.home() / ".vora" / ".env", update_environment=False)
+        loaded_package_env = load_dotenv(package_env_path or _default_package_env_path(), update_environment=False)
         sources = _config_sources(
             env_path=env_path,
             user_env_path=user_env_path or Path.home() / ".vora" / ".env",

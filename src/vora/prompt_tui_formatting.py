@@ -810,7 +810,7 @@ def format_context_window_limit(session: SessionState) -> str:
     limit = session.model_context_limit or (task.model_context_limit if task is not None else None)
     if limit is None or limit <= 0:
         return ""
-    return f"窗口 {limit:,}"
+    return f"上下文窗口上限 {limit:,}"
 
 
 def format_status_label(task: TaskState, is_running: bool | None = None) -> str:

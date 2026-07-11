@@ -443,6 +443,9 @@ def test_react_loop_records_llm_usage_from_source_response(tmp_path: Path) -> No
     assert task.last_prompt_tokens == 321
     assert task.last_completion_tokens == 45
     assert task.last_total_tokens == 366
+    assert session.total_prompt_tokens == 321
+    assert session.total_completion_tokens == 45
+    assert session.total_tokens == 366
 
 
 def test_react_loop_executes_independent_tool_batch_in_parallel(tmp_path: Path) -> None:
@@ -603,6 +606,91 @@ def test_react_loop_rejects_code_write_before_test_case_runs(tmp_path: Path) -> 
     assert result == "先补测试再改代码"
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == "old"
     assert task.observations[-1].summary == "code change rejected: run a test case before editing production code"
+
+
+def test_react_loop_allows_code_write_after_compile_validation(tmp_path: Path) -> None:
+    class ValidateThenEditLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-validate",
+                            name="run_bash",
+                            args={"command": "python -m py_compile app.py"},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-replace",
+                            name="replace_in_file",
+                            args={"path": "app.py", "old_text": "old", "new_text": "new"},
+                        )
+                    ]
+                )
+            return LLMResult(content="修改完成")
+
+    (tmp_path / "app.py").write_text('VALUE = "old"\n', encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 app.py 代码", cwd=tmp_path)
+
+    result = ReActLoop(ValidateThenEditLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "修改完成"
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == 'VALUE = "new"\n'
+    assert "CODE_CHANGE_REQUIRES_TEST_FIRST" not in "\n".join(observation.summary for observation in task.observations)
+
+
+def test_react_loop_allows_code_write_after_failing_inline_test_script(tmp_path: Path) -> None:
+    class RedTestThenEditLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-red-test",
+                            name="run_temp_script",
+                            args={
+                                "filename": "test-input-count.sh",
+                                "content": "node - <<'NODE'\nconst count = 0;\nif (count < 1) throw new Error('minimum value protection missing');\nNODE\n",
+                            },
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-replace",
+                            name="replace_in_file",
+                            args={"path": "pages/setup/setup.js", "old_text": "const count = 0;", "new_text": "const count = 1;"},
+                        )
+                    ]
+                )
+            return LLMResult(content="修复完成")
+
+    target = tmp_path / "pages" / "setup" / "setup.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("const count = 0;\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="修改 pages/setup/setup.js 代码", cwd=tmp_path)
+
+    result = ReActLoop(RedTestThenEditLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "修复完成"
+    assert target.read_text(encoding="utf-8") == "const count = 1;\n"
+    assert "CODE_CHANGE_REQUIRES_TEST_FIRST" not in "\n".join(observation.summary for observation in task.observations)
 
 
 def test_react_loop_rejects_shell_code_write_before_test_case_runs(tmp_path: Path) -> None:
@@ -1131,6 +1219,67 @@ def test_react_loop_includes_recent_conversation_context_for_follow_up(tmp_path:
     result = ReActLoop(ContextAwareLLM(), ToolRegistry()).run(task, session)
 
     assert result == "已基于上一版报告修改"
+
+
+def test_react_loop_trims_old_conversation_context_before_llm_request(tmp_path: Path) -> None:
+    class InspectingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            text = "\n".join(message.content for message in messages)
+            assert "很早以前的大段历史" not in text
+            assert "最近结论：保留这个重点" in text
+            assert "请继续优化" in text
+            return LLMResult(content="已继续")
+
+    session = SessionState.create(cwd=tmp_path)
+    for index in range(26):
+        session.messages.append(Message.user(f"很早以前的大段历史 {index} " + ("x" * 500)))
+        session.messages.append(Message.agent(f"旧回复 {index} " + ("y" * 500)))
+    for index in range(4):
+        session.messages.append(Message.user(f"较近历史 {index} " + ("x" * 120)))
+        session.messages.append(Message.agent(f"较近回复 {index} " + ("y" * 120)))
+    session.messages.append(Message.user("最近问题"))
+    session.messages.append(Message.agent("最近结论：保留这个重点"))
+    task = TaskState.create(goal="请继续优化", cwd=tmp_path)
+
+    result = ReActLoop(InspectingLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "已继续"
+
+
+def test_react_loop_limits_tool_schema_for_research_task(tmp_path: Path) -> None:
+    class InspectingToolNamesLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            assert set(tool_names) == {"list_files", "read_file", "web_search", "fetch_webpage"}
+            return LLMResult(content="分析完成")
+
+    task = TaskState.create(goal="分析当前项目并给优化建议", cwd=tmp_path)
+    task.plan = [
+        PlanStep(description="查看项目结构", intent="research"),
+        PlanStep(description="整理优化建议", intent="report"),
+    ]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(InspectingToolNamesLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "分析完成"
+
+
+def test_react_loop_keeps_write_and_shell_tools_for_code_task(tmp_path: Path) -> None:
+    class InspectingToolNamesLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            assert "replace_in_file" in tool_names
+            assert "write_file" in tool_names
+            assert "run_bash" in tool_names
+            assert "run_temp_script" in tool_names
+            return LLMResult(content="代码任务完成")
+
+    task = TaskState.create(goal="修复代码并运行测试", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改代码", intent="code")]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(InspectingToolNamesLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "代码任务完成"
 
 
 def test_react_loop_normalizes_empty_and_duplicate_tool_call_ids(tmp_path: Path) -> None:
@@ -3341,12 +3490,16 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     request_rows = [row for row in rows if row.get("type") == "llm_request"]
     response_rows = [row for row in rows if row.get("type") == "llm_response"]
+    breakdown_rows = [row for row in rows if row.get("type") == "llm_token_breakdown"]
     assert request_rows
     assert response_rows
+    assert breakdown_rows
     planner_request = next(row for row in request_rows if row.get("stage") == "planner")
     planner_response = next(row for row in response_rows if row.get("stage") == "planner")
     react_request = next(row for row in request_rows if row.get("stage") == "react")
     react_response = next(row for row in response_rows if row.get("stage") == "react")
+    planner_breakdown = next(row for row in breakdown_rows if row.get("stage") == "planner")
+    react_breakdown = next(row for row in breakdown_rows if row.get("stage") == "react")
     assert planner_request["request"]["messages"]
     assert planner_request["request"]["tool_names"] == []
     assert "api_request_payload" not in planner_request
@@ -3356,6 +3509,12 @@ def test_runtime_logs_llm_request_and_response_payloads(tmp_path: Path) -> None:
     assert "response" in planner_response
     assert react_request["request"]["messages"]
     assert react_request["request"]["tool_names"]
+    assert planner_breakdown["parts"]["current_task"] > 0
+    assert planner_breakdown["tool_count"] == 0
+    assert react_breakdown["parts"]["system_prompt"] > 0
+    assert react_breakdown["parts"]["tool_schema"] > 0
+    assert react_breakdown["message_count"] >= 1
+    assert react_breakdown["estimated_total_tokens"] >= sum(react_breakdown["parts"].values())
     assert "api_request_payload" not in react_request
     assert "request" not in react_response
     assert "api_request_payload" not in react_response
@@ -3412,6 +3571,26 @@ def test_format_tool_result_message_summarizes_read_file_content_by_ref() -> Non
     assert "full file content" not in message
 
 
+def test_format_tool_result_message_summarizes_large_generic_content_by_ref() -> None:
+    from vora.tools.base import ToolResult
+
+    result = ToolResult(
+        tool_name="web_search",
+        ok=True,
+        summary="fetched search results",
+        content="alpha\n" + ("middle\n" * 900) + "omega",
+    )
+
+    message = format_tool_result_message(result, content_ref="obs-search")
+
+    assert "fetched search results" in message
+    assert "content_ref: obs-search" in message
+    assert "content_chars:" in message
+    assert "middle\n" * 200 not in message
+    assert "alpha" in message
+    assert "omega" in message
+
+
 def test_react_loop_finishes_when_large_tool_results_are_summarized(tmp_path: Path) -> None:
     from vora.tools.base import ToolResult
 
@@ -3453,6 +3632,53 @@ def test_react_loop_finishes_when_large_tool_results_are_summarized(tmp_path: Pa
     result = ReActLoop(SizeSensitiveLLM(), ToolRegistry(tools=[HugeListTool()])).run(task, session)
 
     assert result == "已获得足够信息，开始总结。"
+
+
+def test_react_loop_keeps_large_tool_content_out_of_next_llm_request(tmp_path: Path) -> None:
+    from vora.tools.base import ToolResult
+
+    full_content = "alpha\n" + ("middle\n" * 900) + "omega"
+
+    class LargeSearchTool:
+        name = "web_search"
+        risk_level = "safe"
+        requires_confirmation = False
+        is_read_only = True
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            raise NotImplementedError
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201
+            return ToolResult(
+                tool_name=self.name,
+                ok=True,
+                summary="search returned a long page",
+                content=full_content,
+            )
+
+    class InspectingLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(tool_calls=[ToolCall(id="call-search", name="web_search", args={"query": "vora"})])
+            tool_messages = [message for message in messages if message.role == "tool"]
+            assert tool_messages
+            assert "content_ref:" in tool_messages[-1].content
+            assert full_content not in tool_messages[-1].content
+            return LLMResult(content="已根据搜索摘要完成。")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="调研 vora", cwd=tmp_path)
+    result = ReActLoop(InspectingLLM(), ToolRegistry(tools=[LargeSearchTool()])).run(task, session)
+
+    assert result == "已根据搜索摘要完成。"
+    assert any(observation.tool_call_id == "call-search" and observation.content == full_content for observation in task.observations)
 
 
 def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path: Path) -> None:

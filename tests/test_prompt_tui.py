@@ -168,9 +168,38 @@ def test_prompt_tui_welcome_shows_current_model(tmp_path: Path, monkeypatch) -> 
 
     tui = PromptTui(cwd=tmp_path)
 
+    assert "正在加载会话与模型信息" in tui.output.text
+
+
+def test_prompt_tui_startup_initialization_updates_welcome_model(tmp_path: Path, monkeypatch) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "LLM_PROVIDER=openai-compatible\n"
+        "LLM_BASE_URL=http://localhost:1234/v1\n"
+        "LLM_API_KEY=test-key\n"
+        "LLM_MODEL=qwen-test\n",
+        encoding="utf-8",
+    )
+    for key in ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT_SECONDS"]:
+        monkeypatch.delenv(key, raising=False)
+
+    tui = PromptTui(cwd=tmp_path)
+    tui.complete_startup_initialization()
+
     assert "当前模型：qwen-test" in tui.output.text
     assert f"配置来源：{env_path}" in tui.output.text
     assert "未找到可用 LLM 配置" not in tui.output.text
+
+
+def test_prompt_tui_constructor_does_not_resolve_model_context_limit(monkeypatch, tmp_path: Path) -> None:
+    def fail_if_called(self):  # noqa: ANN001
+        raise AssertionError("model context should resolve after TUI is visible")
+
+    monkeypatch.setattr("vora.runtime.AgentRuntime.resolve_model_context_limit", fail_if_called)
+
+    tui = PromptTui(cwd=tmp_path)
+
+    assert "正在加载会话与模型信息" in tui.output.text
 
 
 def test_prompt_tui_welcome_warns_when_llm_config_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -181,6 +210,7 @@ def test_prompt_tui_welcome_warns_when_llm_config_is_missing(tmp_path: Path, mon
     tui = PromptTui(
         options=PromptTuiOptions(cwd=tmp_path, limits=LoopLimits()),
     )
+    tui.complete_startup_initialization()
 
     assert "未找到可用 LLM 配置" in tui.output.text
     assert "LLM_PROVIDER" in tui.output.text
@@ -1108,7 +1138,7 @@ def test_format_status_hides_send_hints(tmp_path: Path) -> None:
 
     status = format_status(session)
 
-    assert status == "就绪 | 窗口 1,000,000"
+    assert status == "就绪 | 上下文窗口上限 1,000,000"
     assert "Enter 发送" not in status
     assert "Shift+Enter 换行" not in status
 
@@ -1125,7 +1155,7 @@ def test_format_status_shows_context_usage(tmp_path: Path) -> None:
 
     assert "当前上下文 25%" not in status
     assert "当前上下文 25.0%" in status
-    assert status.endswith("窗口 100")
+    assert status.endswith("上下文窗口上限 100")
     assert "最新请求" not in status
     assert format_context_usage(session) == "当前上下文 25.0%"
 
@@ -1722,7 +1752,7 @@ def test_send_current_input_carries_previous_result_into_context_usage(monkeypat
     tui.send_current_input()
 
     assert any(message.role == "system" and "上一轮结果" in message.content for message in tui.manager.current.messages)
-    assert tui.status.text == "状态 正在执行 | 当前上下文 0.4% | 窗口 128,000"
+    assert tui.status.text == "状态 正在执行 | 当前上下文 0.4% | 上下文窗口上限 128,000"
 
 
 def test_send_current_input_hides_previous_compression_status(monkeypatch, tmp_path: Path) -> None:
@@ -1764,7 +1794,7 @@ def test_send_current_input_uses_session_context_limit_before_background_turn(mo
 
     assert tui.manager.current.active_task is not None
     assert tui.manager.current.active_task.model_context_limit == 1_000_000
-    assert tui.status.text == "状态 正在执行 | 当前上下文 3.2% | 窗口 1,000,000"
+    assert tui.status.text == "状态 正在执行 | 当前上下文 3.2% | 上下文窗口上限 1,000,000"
 
 
 def test_resume_stream_session_preserves_existing_history(tmp_path: Path) -> None:
@@ -1863,7 +1893,7 @@ def test_handle_interrupted_execution_marks_failed_and_completes_tool_messages(t
     assert tui.is_running is False
     assert tui.manager.current.active_task is not None
     assert tui.manager.current.active_task.status == "failed"
-    assert tui.status.text == "状态 执行失败 | 当前上下文 0.0% | 窗口 128,000"
+    assert tui.status.text == "状态 执行失败 | 当前上下文 0.0%"
     validate_tool_call_pairs(tui.manager.current.messages[:-1])
     assert any(
         message.role == "tool"
@@ -2166,7 +2196,7 @@ def test_render_progress_does_not_rewrite_output_while_user_is_reading_history(t
 
     assert tui.visible_trace_count == visible_before
     assert tui.output.text == output_before
-    assert tui.status.text == "状态 正在执行 | 当前上下文 0.0% | 窗口 128,000"
+    assert tui.status.text == "状态 正在执行 | 当前上下文 0.0%"
 
 
 def test_stream_session_keeps_tui_busy_until_artifact_stream_finishes(tmp_path: Path) -> None:

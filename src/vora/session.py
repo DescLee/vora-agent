@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from vora.config import AppConfig
 from vora.context import complete_interrupted_tool_messages, compact_messages_with_snapshot, estimate_message_tokens
 from vora.executor import sanitize_tool_args
 from vora.models import LoopLimits, Message, SessionState, ToolCall, TraceEvent
@@ -17,6 +18,7 @@ DENIAL_WORDS = {"n", "no", "cancel", "cancelled", "取消", "否", "不要"}
 COMPACT_CONTEXT_COMMANDS = {"压缩上下文", "手动压缩上下文", "/compact", "compact context"}
 SAVE_CONTEXT_COMMANDS = {"/save-context", "save context", "保存上下文"}
 HELP_COMMANDS = {"/help", "help", "帮助"}
+STATUS_COMMANDS = {"/status", "status", "状态"}
 
 
 class SessionManager:
@@ -29,23 +31,23 @@ class SessionManager:
         memory_manager: MemoryManager | None = None,
         initial_session: SessionState | None = None,
         session_store: SessionStore | None = None,
+        resolve_model_context_limit_on_init: bool = True,
     ) -> None:
         self.runtime = runtime or AgentRuntime(default_limits=default_limits, dry_run=dry_run, memory_manager=memory_manager, cwd=cwd)
         self.current = initial_session or SessionState.create(cwd=cwd)
         self.current.cwd = cwd
         self.memory_manager = memory_manager or getattr(self.runtime, "memory_manager", None)
         self.session_store = session_store or SessionStore(cwd)
-        self._ensure_session_model_context_limit()
+        if resolve_model_context_limit_on_init:
+            self._ensure_session_model_context_limit()
 
     def _ensure_session_model_context_limit(self) -> None:
         if self.current.model_context_limit is not None and self.current.model_context_limit > 0:
             return
         default_limits = getattr(self.runtime, "default_limits", None)
         fallback_limit = (default_limits or LoopLimits()).max_estimated_tokens
-        react_loop = getattr(self.runtime, "react_loop", None)
-        llm = getattr(react_loop, "llm", None)
-        context_limit_getter = getattr(llm, "context_limit", None)
-        model_context_limit = context_limit_getter() if callable(context_limit_getter) else None
+        resolver = getattr(self.runtime, "resolve_model_context_limit", None)
+        model_context_limit = resolver() if callable(resolver) else None
         self.current.model_context_limit = model_context_limit or fallback_limit
 
     def handle_user_message(self, content: str, append_user_message: bool = True) -> SessionState:
@@ -53,6 +55,10 @@ class SessionManager:
         normalized = content.strip().lower()
         if normalized in HELP_COMMANDS:
             self.current.messages.append(Message.system(format_help_text()))
+            return self._save_current(self.current)
+        if normalized in STATUS_COMMANDS:
+            self._ensure_session_model_context_limit()
+            self.current.messages.append(Message.system(format_session_status_text(self.current)))
             return self._save_current(self.current)
         if normalized in SAVE_CONTEXT_COMMANDS:
             return self._save_current(self.save_context_snapshot())
@@ -284,6 +290,7 @@ def format_help_text() -> str:
             "",
             "交互内指令",
             "- `/help`：查看当前可用指令与作用。",
+            "- `/status`：查看当前会话的模型、目录、Session ID、Token usage 和上下文窗口。",
             "- `/save-context`：在项目根目录保存当前上下文快照，目录名包含当前时间。",
             "- `/compact` / `压缩上下文`：手动压缩当前对话上下文。",
             "- `忘记 <关键词>`：删除匹配的长期记忆；只输入 `忘记` 会清空长期记忆。",
@@ -295,6 +302,29 @@ def format_help_text() -> str:
             "- `vora resume <session_id> --cwd <目录>`：恢复指定对话并继续执行。",
         ]
     )
+
+
+def format_session_status_text(session: SessionState) -> str:
+    config = AppConfig.from_env(session.cwd / ".env")
+    context_window = session.model_context_limit
+    return "\n".join(
+        [
+            "会话状态",
+            f"- Model：{config.llm_model}",
+            f"- Base URL：{config.llm_base_url or '[未配置]'}",
+            f"- 当前目录：{session.cwd}",
+            f"- Session ID：{session.session_id}",
+            "- Token usage："
+            f"input {_format_token_k(session.total_prompt_tokens)} / "
+            f"output {_format_token_k(session.total_completion_tokens)} / "
+            f"total {_format_token_k(session.total_tokens)}",
+            f"- Context window：{_format_token_k(context_window or 0)}",
+        ]
+    )
+
+
+def _format_token_k(tokens: int) -> str:
+    return f"{max(0, tokens) / 1000:.1f}K"
 
 
 def _latest_react_iteration(task) -> int | None:

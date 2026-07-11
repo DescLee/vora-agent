@@ -1,15 +1,16 @@
 from pathlib import Path
+import io
 
 from vora.context import validate_tool_call_pairs
 from vora.models import Message, PendingConfirmation, SessionState, TaskState
 from vora.runtime import AgentRuntime
-from vora.session import SessionManager
+from vora.session import SessionManager, format_session_status_text
 from vora.session_store import SessionStore
 from support import ScriptedLLM
 
 
 def test_session_manager_creates_empty_session(tmp_path: Path) -> None:
-    manager = SessionManager(cwd=tmp_path)
+    manager = SessionManager(cwd=tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
     assert manager.current.cwd == tmp_path
     assert manager.current.messages == []
@@ -37,6 +38,83 @@ def test_session_manager_resolves_model_context_limit_once(tmp_path: Path) -> No
 
     assert manager.current.model_context_limit == 777_000
     assert llm.calls == 1
+
+
+def test_session_manager_resolves_default_llm_context_limit_on_init(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    for key in ("LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "LLM_PROVIDER=openai-compatible",
+                "LLM_BASE_URL=http://localhost:1234/v1",
+                "LLM_API_KEY=test-key",
+                "LLM_MODEL=deepseek-v4-flash",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001, ARG001
+        assert request.full_url == "http://localhost:1234/v1/models/deepseek-v4-flash"
+        return io.BytesIO(b'{"id":"deepseek-v4-flash","context_window":64000}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    manager = SessionManager(cwd=tmp_path)
+
+    assert manager.current.model_context_limit == 64_000
+
+
+def test_session_manager_status_command_reports_session_info(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    for key in ("LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "LLM_PROVIDER=openai-compatible",
+                "LLM_BASE_URL=http://localhost:1234/v1",
+                "LLM_API_KEY=test-key",
+                "LLM_MODEL=deepseek-v4-flash",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime = AgentRuntime(llm=ScriptedLLM(), cwd=tmp_path)
+    manager = SessionManager(cwd=tmp_path, runtime=runtime)
+    manager.current.model_context_limit = 64_000
+    manager.current.total_prompt_tokens = 1_536
+    manager.current.total_completion_tokens = 512
+    manager.current.total_tokens = 2_048
+
+    session = manager.handle_user_message("/status")
+
+    status = session.messages[-1].content
+    assert "会话状态" in status
+    assert "Model：deepseek-v4-flash" in status
+    assert "Base URL：http://localhost:1234/v1" in status
+    assert f"当前目录：{tmp_path}" in status
+    assert f"Session ID：{session.session_id}" in status
+    assert "Token usage：input 1.5K / output 0.5K / total 2.0K" in status
+    assert "Context window：64.0K" in status
+
+
+def test_format_session_status_uses_k_units(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    session.model_context_limit = 128_000
+    session.total_prompt_tokens = 12_345
+    session.total_completion_tokens = 6_789
+    session.total_tokens = 19_134
+
+    status = format_session_status_text(session)
+
+    assert "input 12.3K" in status
+    assert "output 6.8K" in status
+    assert "total 19.1K" in status
+    assert "Context window：128.0K" in status
 
 
 def test_session_manager_handles_user_message(monkeypatch, tmp_path: Path) -> None:

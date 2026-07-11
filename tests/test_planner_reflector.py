@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from vora.llm import LLMResult
 from vora.models import AgentError, LoopLimits, PlanStep, SessionState, TaskState, TraceEvent
 from vora.planner import Planner, build_planner_system_prompt
@@ -104,6 +106,30 @@ def test_planner_uses_llm_plan_when_available(tmp_path: Path) -> None:
         "输出 Markdown 草稿",
     ]
     assert [step.intent for step in steps] == ["research", "research", "report"]
+
+
+def test_planner_records_session_token_usage(tmp_path: Path) -> None:
+    class UsageLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                content="1. 输出结果 | report",
+                source_response={
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                    }
+                },
+            )
+
+    planner = Planner(llm=UsageLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    planner.build_plan("请分析当前项目", session=session)
+
+    assert session.total_prompt_tokens == 100
+    assert session.total_completion_tokens == 20
+    assert session.total_tokens == 120
 
 
 def test_planner_rewrites_wait_for_user_choice_when_goal_delegates_choice(tmp_path: Path) -> None:
@@ -418,7 +444,7 @@ def test_reflection_regenerates_when_draft_waits_for_choice_but_user_delegated(t
     assert "自行选择" in decision.reason
 
 
-def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_worded(tmp_path: Path) -> None:
+def test_reflection_accepts_actual_code_write_after_compile_validation_even_when_goal_is_ui_worded(tmp_path: Path) -> None:
     class AcceptingLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             return LLMResult(content='{"decision":"accept","reason":"looks good"}')
@@ -449,8 +475,7 @@ def test_reflection_rejects_actual_code_write_without_test_even_when_goal_is_ui_
 
     decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
 
-    assert decision.decision == "local_update"
-    assert "测试" in decision.reason
+    assert decision.decision == "accept"
 
 
 def test_reflection_rejects_code_change_when_latest_test_failed(tmp_path: Path) -> None:
@@ -578,6 +603,100 @@ def test_reflection_accepts_js_syntax_check_after_latest_code_change(tmp_path: P
     decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改并通过 node -c 语法检查")
 
     assert decision.decision == "accept"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m py_compile src/app.py",
+        "python -m compileall src",
+        "pnpm lint",
+        "npm run typecheck",
+        "tsc --noEmit",
+        "go test ./...",
+        "go vet ./...",
+        "cargo check",
+        "cargo clippy",
+        "mvn test",
+        "./gradlew build",
+        "javac Main.java",
+        "dotnet build",
+        "php -l index.php",
+        "ruby -c app.rb",
+        "shellcheck scripts/deploy.sh",
+        "bash -n scripts/deploy.sh",
+        "make check",
+    ],
+)
+def test_reflection_accepts_common_validation_commands_after_latest_code_change(tmp_path: Path, command: str) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"验证已通过"}')
+
+    task = TaskState.create(goal="修改任意语言代码", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced source file"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={
+                    "tool_name": "run_bash",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "validation passed",
+                    "args": {"command": command},
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改并验证")
+
+    assert decision.decision == "accept"
+
+
+def test_reflection_does_not_treat_plain_search_command_as_validation(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"looks good"}')
+
+    task = TaskState.create(goal="修改代码修复 bug", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced app.py"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={
+                    "tool_name": "run_bash",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "found TODO",
+                    "args": {"command": "grep -R TODO src"},
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "local_update"
+    assert "测试" in decision.reason
 
 
 def test_reflection_rejects_code_change_when_any_test_after_latest_write_failed(tmp_path: Path) -> None:

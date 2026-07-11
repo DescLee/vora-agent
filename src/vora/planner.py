@@ -4,10 +4,11 @@ import re
 from typing import Literal, cast
 
 from vora.context import build_project_code_overview
-from vora.llm import LLMClient, LLMRequestError, get_default_llm_client, openai_messages
+from vora.llm import LLMClient, LLMRequestError, extract_usage, get_default_llm_client, openai_messages
 from vora.logging import EventLogger
 from vora.models import Message, PlanStep, SessionState
 from vora.skills import SkillSpec
+from vora.token_breakdown import record_llm_token_breakdown
 
 
 PLAN_INSTRUCTIONS = (
@@ -88,6 +89,7 @@ class Planner:
             api_request_payload=result.source_request or {},
             api_response_raw=result.source_response or result.model_dump(mode="json"),
         )
+        _record_session_usage(session, result.source_response)
         return self._parse_llm_plan(result.content), result.reasoning_content
 
     def _build_prompt_messages(
@@ -169,6 +171,15 @@ class Planner:
     ) -> None:
         if self.logger is None:
             return
+        record_llm_token_breakdown(
+            self.logger,
+            session.session_id,
+            run_id or "planner",
+            stage="planner",
+            iteration=0,
+            messages=messages,
+            tool_names=list(tool_names),
+        )
         self.logger.record(
             session.session_id,
             run_id or "planner",
@@ -206,6 +217,17 @@ class Planner:
                 "api_response_raw": api_response_raw or {},
             },
         )
+
+
+def _record_session_usage(session: SessionState, payload: dict) -> None:
+    usage = extract_usage(payload)
+    if usage is None:
+        return
+    session.record_token_usage(
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+    )
 
 
 def build_planner_system_prompt(session: SessionState, active_skill: SkillSpec | None = None) -> str:

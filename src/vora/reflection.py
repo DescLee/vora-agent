@@ -10,11 +10,13 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from vora.context import build_project_code_overview, should_include_project_code_overview
-from vora.llm import LLMClient, LLMResult, openai_messages
+from vora.llm import LLMClient, LLMResult, extract_usage, openai_messages
 from vora.logging import EventLogger
 from vora.models import Message, SessionState, TaskState, TraceEvent
 from vora.react import ReActLoop
 from vora.reflector import ReflectionDecision, Reflector
+from vora.token_breakdown import record_llm_token_breakdown
+from vora.validation import looks_like_inline_test_script, looks_like_validation_command
 
 
 class ReflectionResult(BaseModel):
@@ -22,6 +24,17 @@ class ReflectionResult(BaseModel):
     content: str
     reason: str
     decision: str = "accept"
+
+
+def _record_session_usage(session: SessionState, payload: dict) -> None:
+    usage = extract_usage(payload)
+    if usage is None:
+        return
+    session.record_token_usage(
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+    )
 
 
 class ReflectionLoop:
@@ -131,6 +144,15 @@ class ReflectionLoop:
         messages = self._build_reflection_messages(task, session, draft)
         request_payload = {"messages": openai_messages(messages), "tool_names": []}
         if self.logger is not None:
+            record_llm_token_breakdown(
+                self.logger,
+                task.session_id or session.session_id or "unknown-session",
+                task.run_id,
+                stage="reflection",
+                iteration=0,
+                messages=messages,
+                tool_names=[],
+            )
             self.logger.record(
                 task.session_id or session.session_id or "unknown-session",
                 task.run_id,
@@ -157,6 +179,7 @@ class ReflectionLoop:
                     "api_response_raw": api_response_raw,
                 },
             )
+        _record_session_usage(session, result.source_response)
         return result
 
     def _build_reflection_messages(self, task: TaskState, session: SessionState, draft: str) -> list[Message]:
@@ -349,18 +372,6 @@ CODE_TARGET_KEYWORDS = (
     "类",
     "接口",
     "测试",
-)
-TEST_COMMAND_KEYWORDS = (
-    "pytest",
-    "unittest",
-    "test",
-    "go test",
-    "cargo test",
-    "npm test",
-    "pnpm test",
-    "yarn test",
-    "ruff",
-    "node -c",
 )
 REFLECTION_PYTEST_TIMEOUT_SECONDS = 30
 
@@ -569,19 +580,16 @@ def _test_event_passed(data: dict) -> bool:
 
 
 def _looks_like_test_command(data: dict) -> bool:
+    tool_name = data.get("tool_name")
     args = data.get("args")
     if not isinstance(args, dict):
         args = {}
-    text = " ".join(
-        str(value).lower()
-        for value in [
-            *args.values(),
-            data.get("summary", ""),
-            data.get("stdout", ""),
-            data.get("stderr", ""),
-        ]
-    )
-    return any(keyword in text for keyword in TEST_COMMAND_KEYWORDS)
+    command = str(args.get("command") or args.get("script") or args.get("content") or args.get("filename") or "")
+    if looks_like_validation_command(command):
+        return True
+    if tool_name == "run_temp_script" and looks_like_inline_test_script(command):
+        return True
+    return bool(data.get("validation") is True)
 
 
 def _format_test_failure(data: dict) -> str:

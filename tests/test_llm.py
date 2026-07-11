@@ -301,3 +301,59 @@ def test_infer_model_context_limit_supports_deepseek_family() -> None:
     assert infer_model_context_limit("deepseek-v4-flash") == 1_000_000
     assert infer_model_context_limit("deepseek-v4-pro") == 1_000_000
     assert infer_model_context_limit("gpt-4o-mini") == 128_000
+
+
+def test_openai_compatible_client_context_limit_from_model_detail(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001, ARG001
+        requested_urls.append(request.full_url)
+        return io.BytesIO(b'{"id":"deepseek-v4-flash","context_window":65536}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost:1234/v1",
+            llm_api_key="test-key",
+            llm_model="deepseek-v4-flash",
+        )
+    )
+
+    assert client.context_limit() == 65_536
+    assert requested_urls == ["http://localhost:1234/v1/models/deepseek-v4-flash"]
+
+
+def test_openai_compatible_client_context_limit_from_model_list(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001, ARG001
+        requested_urls.append(request.full_url)
+        if request.full_url.endswith("/models/deepseek-v4-flash"):
+            raise urllib.error.HTTPError(
+                url=request.full_url,
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=io.BytesIO(b"{}"),
+            )
+        return io.BytesIO(
+            b'{"data":[{"id":"other-model","context_window":8192},'
+            b'{"id":"deepseek-v4-flash","max_model_len":64000}]}'
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleLLMClient(
+        AppConfig(
+            llm_provider="openai-compatible",
+            llm_base_url="http://localhost:1234/v1",
+            llm_api_key="test-key",
+            llm_model="deepseek-v4-flash",
+        )
+    )
+
+    assert client.context_limit() == 64_000
+    assert requested_urls == [
+        "http://localhost:1234/v1/models/deepseek-v4-flash",
+        "http://localhost:1234/v1/models",
+    ]

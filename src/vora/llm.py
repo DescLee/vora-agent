@@ -176,58 +176,85 @@ _MODEL_CONTEXT_LIMIT_FIELDS = (
     "max_context_length",
     "max_model_len",
     "context_window",
+    "max_position_embeddings",
+    "input_token_limit",
+    "max_input_tokens",
     "num_ctx",
     "max_tokens",
 )
+
+MODEL_CONTEXT_LOOKUP_TIMEOUT_SECONDS = 3
+
+
+def _extract_model_context_limit(payload: dict[str, Any] | None, model_name: str) -> int | None:
+    if payload is None:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    data = payload.get("data")
+    if isinstance(data, list):
+        normalized_model = model_name.strip().lower()
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            item_names = [
+                str(item.get(field, "")).strip().lower()
+                for field in ("id", "name", "model")
+                if item.get(field) is not None
+            ]
+            if normalized_model in item_names:
+                candidates.append(item)
+    elif isinstance(data, dict):
+        candidates.append(data)
+    candidates.append(payload)
+
+    for candidate in candidates:
+        for field in _MODEL_CONTEXT_LIMIT_FIELDS:
+            value = candidate.get(field) or candidate.get(f"model_{field}")
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    return None
 
 
 class OpenAICompatibleLLMClient(LLMClient):
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self._cached_context_limit: int | None = None
+        self._context_limit_fetched = False
 
     def _fetch_model_context_limit_from_api(self) -> int | None:
-        """尝试从 /v1/models/{model} 端点获取模型的上下文窗口大小"""
+        """尝试从模型信息端点获取模型的上下文窗口大小"""
         base_url = self.config.llm_base_url.rstrip("/")
         model = self.config.llm_model
-        models_url = f"{base_url}/models/{model}"
 
+        detail = self._fetch_model_metadata(f"{base_url}/models/{model}")
+        result = _extract_model_context_limit(detail, model)
+        if result is not None:
+            return result
+
+        listing = self._fetch_model_metadata(f"{base_url}/models")
+        return _extract_model_context_limit(listing, model)
+
+    def _fetch_model_metadata(self, url: str) -> dict[str, Any] | None:
         try:
             request = urllib.request.Request(
-                url=models_url,
+                url=url,
                 method="GET",
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.config.llm_api_key}",
                 },
             )
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=MODEL_CONTEXT_LOOKUP_TIMEOUT_SECONDS) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except Exception:
             return None
 
-        # 尝试从响应中提取上下文窗口大小
-        # 响应格式可能是 {"id": "...", "data": {...}} 或 {"id": "...", ...}
-        data = body if isinstance(body, dict) else {}
-
-        # 某些 API 把模型信息放在 "data" 字段中
-        if "data" in data and isinstance(data["data"], dict):
-            data = data["data"]
-        elif "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-            # 有些 API 返回模型列表，此时跳过（不是查询单个模型）
-            pass
-
-        # 查找常见字段名
-        for field in _MODEL_CONTEXT_LIMIT_FIELDS:
-            value = data.get(field) or data.get(f"model_{field}")
-            if isinstance(value, (int, float)) and value > 0:
-                return int(value)
-
-        return None
+        return body if isinstance(body, dict) else None
 
     def context_limit(self) -> int | None:
         """返回模型的上下文窗口大小（动态获取 + 模型名推断兜底）"""
-        if self._cached_context_limit is not None:
+        if self._context_limit_fetched:
             return self._cached_context_limit
 
         # 第一优先级：从 API 动态获取
@@ -237,8 +264,8 @@ class OpenAICompatibleLLMClient(LLMClient):
         if result is None:
             result = infer_model_context_limit(self.config.llm_model)
 
-        # 缓存结果（即使是 None 也缓存，避免重复 API 请求）
         self._cached_context_limit = result
+        self._context_limit_fetched = True
         return result
 
     def complete_with_tools(self, messages: list[Any], tool_names: list[str]) -> LLMResult:
