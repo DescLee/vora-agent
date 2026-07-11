@@ -618,7 +618,7 @@ def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
     assert "工具结果: 等待" in process
 
 
-def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path: Path) -> None:
+def test_format_process_keeps_reasoning_content_visible_without_placeholder(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="总结项目", cwd=tmp_path)
     task.trace_events.append(
@@ -627,7 +627,7 @@ def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path
             message="LLM requested 1 tool call(s)",
             data={
                 "iteration": 1,
-                "reasoning_content": "Now I have a good overview of the project. Let me also check context.py and executor.py for more understanding.",
+                "reasoning_content": "现在已经看到了项目概况，接下来需要继续检查 context.py 和 executor.py。",
                 "tool_calls": [{"id": "call-read", "name": "read_file", "args": {"path": "README.md"}}],
             },
         )
@@ -636,7 +636,7 @@ def test_format_process_shows_english_reasoning_content_directly_in_tui(tmp_path
 
     process = format_process(session)
 
-    assert "Now I have a good overview of the project" in process
+    assert "现在已经看到了项目概况" in process
     assert "模型已生成推理内容" not in process
 
 
@@ -1678,7 +1678,7 @@ def test_send_current_input_outputs_command_directly_without_background_turn(mon
     assert "MCP 配置" in tui.output.text
     assert "Skills 管理" in tui.output.text
     assert "执行与安全" in tui.output.text
-    assert "写入文件前会展示 diff 并等待确认" in tui.output.text
+    assert "read_file、write_file、replace_in_file 按用户要求直接执行" in tui.output.text
     assert "运行限制" in tui.output.text
     assert "Enter：发送" in tui.output.text
     assert "/save-context" in tui.output.text

@@ -162,6 +162,9 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
     assert "修改、删除和生成" in prompt
     assert "文档写作" in prompt
     assert "深度行业研究报告" in prompt
+    assert "reasoning_content" in prompt
+    assert "必须使用中文" in prompt
+    assert "不要输出英文思考句" in prompt
     assert "工具使用要克制" in prompt
     assert "不要规划等待用户选择" in prompt
     assert "计划最多 4 步" in prompt
@@ -538,6 +541,41 @@ def test_reflection_accepts_code_change_when_latest_test_passed(tmp_path: Path) 
     session = SessionState.create(cwd=tmp_path)
 
     decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改代码")
+
+    assert decision.decision == "accept"
+
+
+def test_reflection_accepts_js_syntax_check_after_latest_code_change(tmp_path: Path) -> None:
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"语法检查已通过"}')
+
+    task = TaskState.create(goal="修改小程序 JS 代码", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改实现", intent="code")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "summary": "replaced pages/practice/practice.js"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={
+                    "tool_name": "run_bash",
+                    "ok": True,
+                    "summary": "command exited 0",
+                    "exit_code": 0,
+                    "stdout": "✓ pages/practice/practice.js",
+                    "args": {"command": "node -c pages/practice/practice.js"},
+                },
+            ),
+        ]
+    )
+    session = SessionState.create(cwd=tmp_path)
+
+    decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改并通过 node -c 语法检查")
 
     assert decision.decision == "accept"
 

@@ -80,7 +80,7 @@ python evals/run_evals.py: 7 passed
 | Research Pack | P1 | 已完成 | 已提供 `collect_local_docs`、`summarize_text`、`generate_markdown_report`。 |
 | Code Pack | P1 | 已完成 | 已提供 `scan_project`、`read_code_file`、`propose_patch`、`apply_text_edit`。 |
 | Automation Pack | P2 | 已完成 | 已提供 `extract_todos`、`organize_notes`、`generate_checklist`。 |
-| 文件写入确认 UI | P0 | 已完成 | 已接入确认预览与用户确认流程，不会绕过确认直接写入。 |
+| 文件写入 diff UI | P0 | 已完成 | `write_file` / `replace_in_file` 按用户要求直接执行；已接入非阻塞 diff 预览和 trace 审计。 |
 | 用户拒绝写入后的替代流程 | P0 | 已完成 | 已接入拒绝确认后的状态回写和替代回复。 |
 | `dry-run` 模式 | P0 | 已完成 | 已接入 dry-run 参数和写入拒绝策略。 |
 | 路径逃逸限制 | P3 | 已完成 | `resolve_workspace_path()` 限制 workspace 内路径，测试覆盖。 |
@@ -106,7 +106,7 @@ python evals/run_evals.py: 7 passed
 | 三层最大循环次数展示 demo | P2 | 已完成 | 欢迎页集中展示工程、ReAct 和 Reflection 上限，执行过程区不再重复展示固定上限。 |
 | 记住用户偏好并在后续回复使用 demo | P1 | 已完成 | 已能保存记忆并在后续轮次注入上下文。 |
 | 长会话压缩 demo | P2 | 已完成 | 已有长会话压缩和系统消息回写测试。 |
-| 写入确认 demo | P0 | 已完成 | 已有确认/拒绝/继续的完整演示路径。 |
+| 文件修改审计 demo | P0 | 已完成 | 已有直接写入、diff 预览、dry-run 不落盘和路径拒绝的演示路径。 |
 | Runtime 最大步数内正常结束 | P3 | 已完成 | 有测试覆盖。 |
 | Runtime 达到最大步数时输出部分结果 | P1 | 已完成 | 已在超出外层工程步数时保留当前最佳结果，并提示下一步建议。 |
 | ReAct 达到最大工具循环次数时抛出可重试错误 | P3 | 已完成 | 有测试覆盖。 |

@@ -35,9 +35,9 @@
     "target": "文件工具拒绝 workspace 外路径"
   },
   {
-    "id": "write_requires_confirmation",
+    "id": "write_file_executes_directly_with_preview",
     "category": "security",
-    "target": "文件写入在执行前必须生成人工确认预览"
+    "target": "write_file 按用户要求直接执行，并保留预览能力"
   },
   {
     "id": "dangerous_command_is_rejected",
@@ -52,7 +52,7 @@
   {
     "id": "pending_confirmation_blocks_unrelated_messages",
     "category": "session",
-    "target": "待确认写入期间，普通消息不能开启新任务"
+    "target": "待确认高风险命令期间，普通消息不能开启新任务"
   },
   {
     "id": "shell_pathlib_write_bytes_requires_test_first",

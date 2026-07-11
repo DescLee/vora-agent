@@ -435,6 +435,21 @@
   - 对空内容显式写出 `[empty]`，避免模型误以为工具消息丢失。
 - 验证：补充测试覆盖大规模工具结果会被截断，且截断后的内容仍能让 ReAct 正常收敛，不再持续循环追问。
 
+### 5.8.1 `read_file` 原文常驻上下文导致占比膨胀
+
+- 现象：连续读取多个项目文件后，TUI 状态栏的 `当前上下文` 占比会明显上涨；即使单个文件不大，多轮 `read_file` 结果也会在 `session.messages` 中累计。
+- 根因：旧链路把 `read_file` 的原始内容直接格式化为 `tool` message，工具原始数据和模型上下文没有解耦；上下文压缩属于事后补救，不能阻止前几轮 prompt 被大段文件内容污染。
+- 修复：
+  - 非定向 `read_file` 不再把全文写入模型上下文，只返回 `content_ref`、path、字符数和定向读取提示。
+  - 完整原文仍保留在 `Observation.content` 和工具日志中，保证审计、fallback 和去重能力不丢。
+  - 带 `query`、`start_line/limit_lines` 或 `start_index/max_bytes` 的定向读取仍可把目标片段放入上下文。
+  - 修正 `read_file` 去重 key，将 `query/start_line/limit_lines` 纳入判断，避免整文件读取后误拦截定向读取。
+- 验证：
+  - `tests/test_runtime.py` 覆盖 tool message 只含 `content_ref`，不含非定向读取原文。
+  - 测试覆盖完整原文仍保留在 `Observation.content`。
+  - 日志测试覆盖 LLM request payload 不含原文，工具结果日志仍保留完整内容。
+  - 项目概览测试覆盖模型看到 `content_ref` 后继续使用按行定向读取。
+
 ### 5.9 想法/建议类项目请求会触发过多文件读取
 
 - 现象：用户只是让 Agent “看下项目提优化建议”时，LLM 可能一次性请求大量 `read_file`，把源码全文持续塞入上下文，导致上下文膨胀和工具调用频繁。
@@ -504,7 +519,8 @@
 - 现象：用户请求“在工作目录下新建 helloworld.py 文件”时，最终产物显示 `执行失败：'workspace'`。
 - 根因：`write_file` 在调度阶段需要调用 `resource_keys()` 判断资源冲突，但调度发生在真正执行工具之前，当时还没有注入 `workspace`。
 - 修复：ReAct 在调度前为已知工具调用注入真实 `session.cwd`，同时继续清理 LLM 传入的伪造 `workspace`。
-- 额外处理：Agent 路径中的 `write_file` 自动补 `confirmed=True`，否则真实 LLM schema 不会传确认字段，文件不会写入。
+- 历史额外处理：旧确认策略下 Agent 路径中的 `write_file` 自动补 `confirmed=True`，否则真实 LLM schema 不会传确认字段，文件不会写入。
+- 当前策略：`write_file` 已按用户要求改为直接执行，不再依赖 `confirmed` 参数。
 - 验证：
   - 回归测试覆盖 write_file 调度前注入 workspace。
   - 手工复现同类请求成功创建 `helloworld.py`，内容为 `print('hello world')`。
@@ -535,8 +551,8 @@
   - 拒绝二进制文件读取。
   - 拒绝过大文件读取或写入。
   - 拒绝写入 `.env` 等敏感路径。
-  - 写工具底层仍要求确认，防止直接调用绕过安全保护。
-- 验证：`tests/test_tools.py` 覆盖路径逃逸、二进制、超大内容、敏感路径和确认逻辑。
+  - `read_file`、`write_file`、`replace_in_file` 按用户要求直接执行，但仍保留 workspace/protected path、大小限制、large rewrite guard 和精确替换保护。
+- 验证：`tests/test_tools.py` 覆盖路径逃逸、二进制、超大内容、敏感路径和直执行逻辑。
 
 ### 6.3.1 已有文件支持精确局部替换
 
@@ -569,6 +585,23 @@
   - TUI 工具活动区识别 `diff_preview` trace，在对应 tool call 下展示“变更预览”及 diff 内容。
   - 该预览只展示，不阻塞执行；`replace_in_file` 仍保持无需人工确认。
 - 验证：测试覆盖 `replace_in_file` 执行前记录 diff preview，且 TUI process 区会渲染该 diff。
+
+### 6.3.4 文件工具按用户要求直接执行
+
+- 现象：当前产品定位下，`read_file`、`write_file`、`replace_in_file` 是核心文件工具；写入每次都进入人工确认会打断 TUI 连续执行，也和用户明确要求不一致。
+- 决策：
+  - `read_file`、`write_file`、`replace_in_file` 改为直接执行，不再等待人工确认。
+  - 这是用户明确要求，后续不要改回确认模式，除非用户再次明确要求。
+- 保留保护：
+  - `write_file` / `replace_in_file` 执行前仍写入非阻塞 diff preview trace，TUI 和日志可审计。
+  - `--dry-run` 模式只记录预览和 `DRY_RUN` observation，不真实落盘。
+  - workspace 外路径、受保护路径、已有大文件全量覆盖、生产代码修改前置测试门禁仍会拦截。
+  - `replace_in_file` 仍依赖精确旧文本、上下文校验和替换次数控制。
+  - 命令类工具的高风险确认不变。
+- 验证：
+  - `tests/test_tools.py` 覆盖 `write_file` / `replace_in_file` 无确认执行。
+  - `tests/test_runtime.py` 覆盖 ReAct 直接写入、直接替换、dry-run 不落盘、diff trace 和越界拒绝。
+  - `tests/test_prompt_tui.py` 覆盖 `/help` 展示新的执行策略。
 
 ### 6.4 list_files 未尊重 `.gitignore`
 
@@ -1103,6 +1136,27 @@
   - 推理行使用更亮的 `process.reasoning` 样式，和普通过程文本区分。
 - 验证：`tests/test_prompt_tui.py` 覆盖 reasoning_content 展示、占位行移除和推理行高亮样式。
 
+### 9.37 推理过程内容必须使用中文
+
+- 现象：TUI 执行过程会直接展示模型返回的 `reasoning_content`，如果模型用英文思考，页面会出现大段英文过程说明，和中文产品体验不一致。
+- 修复：
+  - Planner、ReAct 执行阶段和 Reflection 审查阶段的 system prompt 都明确要求：所有对用户可见或会进入 trace/TUI 的内容必须使用中文。
+  - 约束范围包含 `reasoning_content`、计划描述、过程说明、原因说明和最终答复。
+  - TUI 仍负责展示模型真实返回内容，不做前端硬翻译，避免掩盖模型输出问题。
+- 验证：
+  - 测试覆盖 Planner/ReAct 提示词包含中文 reasoning 约束。
+  - TUI reasoning 展示测试改为中文内容，不再把英文推理作为期望展示路径。
+
+### 9.38 Reflection 不识别 `node -c` 语法检查
+
+- 现象：小程序项目修改 `.js` 文件后，Agent 已执行 `node -c pages/.../*.js` 并全部退出 0，但 Reflection 仍反复返回 `local_update`，最终外层循环耗尽并标记 failed。
+- 根因：Reflection gate 只把命令文本里包含 `pytest`、`test`、`go test`、`ruff` 等关键词的 `run_bash` / `run_temp_script` 视为测试事件；`node -c` 不在识别列表里，导致 `has_passing_test_after_latest_code_change=false`。
+- 修复：
+  - 将 `node -c` 纳入 Reflection 测试命令关键词。
+  - 保持原有通过条件不变：工具执行必须 `ok=True`、`exit_code=0`，且输出中不能出现失败标记。
+- 验证：
+  - 新增回归测试覆盖：最新 `replace_in_file` 后执行 `node -c pages/practice/practice.js`，Reflection 可以接受。
+
 ### 9.37 TUI 多轮对话展示不再清空
 
 - 现象：每次发起新对话时，TUI 会用当前轮 transcript 重画主输出区，上一轮的用户问题、执行过程和最终产物会从界面上消失。
@@ -1491,7 +1545,7 @@ Agent：
 - 现象：当前项目是本地单用户 Agent Runtime MVP，但缺少清晰文档说明“如果生产化还差什么”。这会影响高级岗位面试中的系统设计追问。
 - 修复：新增中文治理文档：
   - `docs/production-readiness.zh.md`：任务队列、执行隔离、幂等恢复、观测性、配置治理和故障处理策略。
-  - `docs/security-model.zh.md`：文件权限、写入确认、命令执行边界、敏感信息处理和生产化权限模型。
+  - `docs/security-model.zh.md`：文件权限、文件读写直执行策略、命令执行边界、敏感信息处理和生产化权限模型。
   - `docs/testing-strategy.zh.md`：单元测试、集成测试、eval、CI 建议和后续评测方向。
   - `docs/demo-scenarios.zh.md`：面试固定 demo 场景和常见追问回答。
 - 价值：

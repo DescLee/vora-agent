@@ -2,7 +2,7 @@
 
 ## 目标
 
-项目讲解不要临场随机输入。建议准备固定场景，分别展示架构理解、工具治理、安全确认和质量门禁。
+项目讲解不要临场随机输入。建议准备固定场景，分别展示架构理解、工具治理、文件修改审计和质量门禁。
 
 ## Demo 0：快速自检
 
@@ -41,7 +41,7 @@ python evals/run_evals.py
 - `ToolScheduler` 对只读工具做批次调度。
 - `Reporter` 输出 Markdown 产物。
 
-## Demo 2：写入确认
+## Demo 2：文件修改与 diff 审计
 
 建议在临时分支或临时目录中演示。
 
@@ -54,15 +54,15 @@ python evals/run_evals.py
 预期展示：
 
 - Agent 准备写文件。
-- TUI 弹出确认面板。
-- 展示 diff preview。
-- 用户确认后才执行写入。
+- `write_file` / `replace_in_file` 按用户要求直接执行。
+- TUI 和 trace 展示 diff preview。
+- dry-run 模式只预览不落盘。
 
 讲解重点：
 
-- 模型不能直接写文件，执行层会二次确认。
-- `PendingConfirmation` 将待确认动作纳入会话状态。
-- 用户拒绝不视为系统错误，而是作为 observation 回流。
+- 文件工具不是裸奔执行：执行层仍校验 workspace、protected path、large rewrite guard 和精确替换。
+- 这次策略是用户明确要求：`read_file`、`write_file`、`replace_in_file` 不再等待人工确认，后续不要改回。
+- 命令类高风险操作仍保留确认和拒绝路径。
 
 ## Demo 3：代码任务 Reflection pytest gate
 

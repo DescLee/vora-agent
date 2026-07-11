@@ -138,12 +138,23 @@ EXPLICIT_WRITE_INTENT_KEYWORDS = (
 )
 
 
-def format_tool_result_message(tool_result) -> str:
+def format_tool_result_message(tool_result, content_ref: str | None = None) -> str:
     parts = [tool_result.summary]
     if tool_result.paths:
         parts.append(_format_paths(tool_result.paths))
     if tool_result.written_path:
         parts.append(f"written_path: {tool_result.written_path}")
+    if (
+        tool_result.tool_name == "read_file"
+        and tool_result.ok
+        and tool_result.content
+        and content_ref
+        and not _is_targeted_read_file_result(tool_result)
+    ):
+        parts.append(_format_read_file_content_ref(tool_result, content_ref))
+        return "\n\n".join(parts)
+    if tool_result.tool_name == "read_file" and tool_result.ok and tool_result.content and content_ref:
+        parts.append(_format_read_file_content_ref(tool_result, content_ref))
     if tool_result.content:
         parts.append(_format_content(tool_result.content))
     elif tool_result.ok:
@@ -151,6 +162,32 @@ def format_tool_result_message(tool_result) -> str:
     if tool_result.error_code:
         parts.append(f"error_code: {tool_result.error_code}")
     return "\n\n".join(parts)
+
+
+def _is_targeted_read_file_result(tool_result) -> bool:
+    return any(key in tool_result.data for key in ("query", "start_line", "start_index"))
+
+
+def _format_read_file_content_ref(tool_result, content_ref: str) -> str:
+    lines = [
+        "content_ref: " + content_ref,
+        f"content_chars: {len(tool_result.content)}",
+        "content_note: 原文已保存在本地工具观察中，模型上下文只保留引用；需要更多原文时请用 read_file 的 query/start_line/limit_lines 定向读取。",
+    ]
+    path = tool_result.data.get("path")
+    if path:
+        lines.insert(1, f"path: {path}")
+    start_line = tool_result.data.get("start_line")
+    end_line = tool_result.data.get("end_line")
+    total_lines = tool_result.data.get("total_lines")
+    if start_line and end_line:
+        suffix = f" of {total_lines}" if total_lines else ""
+        lines.append(f"lines: {start_line}-{end_line}{suffix}")
+    elif total_lines:
+        lines.append(f"total_lines: {total_lines}")
+    if tool_result.data.get("truncated"):
+        lines.append("truncated: true")
+    return "\n".join(lines)
 
 
 def _format_paths(paths: list[str]) -> str:
@@ -351,14 +388,16 @@ class ReActLoop:
                         data=event_data,
                     )
                 )
-                task.observations.append(
-                    self.observer.observe(call, tool_result)
+                observation = self.observer.observe(call, tool_result)
+                task.observations.append(observation)
+                tool_message = Message.tool(
+                    format_tool_result_message(tool_result, content_ref=observation.id),
+                    tool_call_id=call.id,
                 )
-                tool_message = Message.tool(format_tool_result_message(tool_result), tool_call_id=call.id)
                 messages.append(tool_message)
                 session.messages.append(tool_message)
 
-            if any(result.error_code in {"WRITE_REQUIRES_CONFIRMATION", "DRY_RUN"} for result in tool_results.values()):
+            if any(result.error_code == "WRITE_REQUIRES_CONFIRMATION" for result in tool_results.values()):
                 pending = session.pending_confirmation
                 if pending is not None:
                     return pending.prompt or pending.summary or "需要用户确认写入"
@@ -703,6 +742,7 @@ class ReActLoop:
                 "你专门负责代码项目的查看、总结、诊断和优化建议；"
                 "也具备代码能力，可以对项目代码进行查看、总结、修改、删除和生成。"
                 "除此以外，你还可以进行文档写作、文档总结，以及深度行业研究报告撰写。"
+                "所有对用户可见或会进入 trace/TUI 的内容都必须使用中文，包括 reasoning_content、过程说明和最终答复；不要输出英文思考句。"
                 "对于闲聊、问候、名字和自我介绍类轻量问题，请基于这个身份直接回复，不要调用工具。"
             )
         plan_text = self._format_execution_plan(task)
@@ -710,11 +750,12 @@ class ReActLoop:
             "你是 vora 的执行阶段 Agent。请遵循 Planner 已制定的计划和已有上下文。",
             f"当前任务：{task.goal}",
             f"当前工作目录：{task.cwd}",
+            "所有对用户可见或会进入 trace/TUI 的内容都必须使用中文，包括 reasoning_content、工具调用前后的过程说明、总结和最终答复；不要输出英文思考句。",
             "用户说“当前项目”“这个项目”“这个工程”时，指的就是当前工作目录；不要要求用户再提供项目描述、链接或代码。",
             "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
             "开始执行前先定位目标模块和最小相关文件；已有上下文足够时直接推进，不要为了确认而重复读取。",
             "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
-            "读取大文件或定位代码片段时，优先给 read_file 传 query 或 start_line/limit_lines 获取目标上下文窗口，不要整文件读取。",
+            "未带 query/start_line/start_index 的 read_file 只会把原文保存在本地工具观察里，并向模型上下文返回 content_ref；如果需要引用原文或修改代码，请继续用 query 或 start_line/limit_lines 获取目标上下文窗口。",
             "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要只给选项并等待用户选择；请自行选择保守方案并继续执行。",
             "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
             "没有读取原文件前，不要凭空改写已有文件；需要修改时先确认当前内容和精确替换位置。",
@@ -795,18 +836,18 @@ class ReActLoop:
             )
         if any(keyword in compact_focus for keyword in CAPABILITY_GOAL_KEYWORDS):
             return (
-                "核心能力包括：任务规划、ReAct 工具调用、会话持久化、上下文压缩、写入确认、"
+                "核心能力包括：任务规划、ReAct 工具调用、会话持久化、上下文压缩、文件读写直执行、"
                 "Reflection 质量门禁和结构化运行日志。项目讲解时可以按“目标 -> 计划 -> 工具 -> 验证 -> 会话恢复”这条链路讲。"
             )
         if any(keyword in compact_focus for keyword in TOOL_PERMISSION_SCOPE_GOAL_KEYWORDS):
             return (
                 "工具权限范围由 `ToolSpec` 描述，包含 schema、risk 和是否需要确认。执行层还会校验 cwd 边界，"
-                "文件写入、敏感命令和高 risk 工具会被拒绝或进入确认流程。"
+                "read_file、write_file、replace_in_file 按用户要求直接执行；敏感命令和高 risk 命令仍会被拒绝或进入确认流程。"
             )
         if any(keyword in compact_focus for keyword in SECURITY_GOAL_KEYWORDS):
             return (
-                "安全设计主要靠工作区边界、写入确认、命令风险识别、敏感信息脱敏和会话文件路径校验。"
-                "文件工具默认限制在 cwd 内，危险命令和写入动作会进入确认或拒绝路径。"
+                "安全设计主要靠工作区边界、命令风险识别、敏感信息脱敏和会话文件路径校验。"
+                "文件工具默认限制在 cwd 内，并按用户要求直接执行；危险命令仍会进入确认或拒绝路径。"
             )
         if any(keyword in compact_focus for keyword in REFLECTION_GATE_GOAL_KEYWORDS):
             return (
@@ -822,10 +863,10 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in FILE_EDIT_GOAL_KEYWORDS):
             return (
                 "修改文件通常是先用 `read_file` 看上下文，再用 `replace_in_file` 做局部替换；"
-                "涉及写入时会进入写入确认，确认后才真正落盘。"
+                "当前策略下 `write_file` 和 `replace_in_file` 直接落盘，同时记录 diff 预览；dry-run 模式只预览不落盘。"
             )
         if any(keyword in compact_focus for keyword in WRITE_CONFIRMATION_GOAL_KEYWORDS):
-            return "写入确认会展示 diff 和目标路径，用户输入确认才执行；输入取消或其它内容会拒绝本次写入。"
+            return "当前文件工具策略已改为直接执行：read_file、write_file、replace_in_file 不再等待人工确认；写入仍会记录 diff，命令类高风险操作仍保留确认。"
         if any(keyword in compact_focus for keyword in WORKSPACE_BOUNDARY_GOAL_KEYWORDS):
             return "不能修改工作区外的文件。文件工具会校验路径边界，越界访问会返回 `PATH_OUT_OF_WORKSPACE`。"
         if any(keyword in compact_focus for keyword in CODE_QUALITY_GOAL_KEYWORDS):
@@ -877,8 +918,8 @@ class ReActLoop:
             )
         if any(keyword in compact_focus for keyword in DRY_RUN_GOAL_KEYWORDS):
             return (
-                "`--dry-run` 是写入和命令执行的预演模式：工具会返回确认预览和计划动作，但不落盘、不真正执行有副作用操作。"
-                "讲解时可以用它展示安全边界和确认流。"
+                "`--dry-run` 是写入和命令执行的预演模式：工具会返回 diff 预览和计划动作，但不落盘、不真正执行有副作用操作。"
+                "讲解时可以用它展示安全边界。"
             )
         if any(keyword in compact_focus for keyword in COMMAND_TIMEOUT_GOAL_KEYWORDS):
             return (
@@ -888,7 +929,7 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in COMMAND_RISK_GOAL_KEYWORDS):
             return (
                 "命令执行通过 `run_bash` 和 `run_temp_script` 接入，执行前会做命令风险判断。"
-                "危险命令、写文件、读取敏感文件或生产代码修改会被拒绝或进入确认流程，普通只读命令才直接执行。"
+                "危险命令、读取敏感文件或生产代码修改会被拒绝或进入确认流程；文件工具 read_file/write_file/replace_in_file 按用户要求直接执行。"
             )
         if any(keyword in compact_focus for keyword in TOOL_SCHEDULER_GOAL_KEYWORDS):
             return (
@@ -898,7 +939,7 @@ class ReActLoop:
         if any(keyword in compact_focus for keyword in EVAL_GOAL_KEYWORDS):
             return (
                 "项目级 eval 用 `python evals/run_evals.py` 运行，当前覆盖 9 个关键约束，包括 Reflection、"
-                "tool exchange 完整性、并行调度、写入确认和安全边界。"
+                "tool exchange 完整性、并行调度、文件工具直执行和安全边界。"
             )
         if any(keyword in compact_focus for keyword in ARCHITECTURE_GOAL_KEYWORDS):
             return (
@@ -922,7 +963,7 @@ class ReActLoop:
             )
         if any(keyword in compact_focus for keyword in DEMO_GOAL_KEYWORDS):
             return (
-                "面试演示建议走三段：先做项目分析展示规划和工具读取，再做一次写入确认展示安全边界，"
+                "面试演示建议走三段：先做项目分析展示规划和工具读取，再做一次文件修改展示 diff 记录和直执行策略，"
                 "最后讲 Reflection/pytest gate 和会话恢复，说明它不是一次 LLM 调用。"
             )
         if any(keyword in compact_focus for keyword in TOOL_EXTENSION_GOAL_KEYWORDS):
@@ -1089,7 +1130,7 @@ class ReActLoop:
         known_tool_calls = []
         tool_results: dict[str, ToolResult] = {}
         tool_call_count = 0
-        planned_read_file_keys: set[tuple[str, str, int | None, int | None]] = set()
+        planned_read_file_keys: set[tuple[str, str, int | None, int | None, str | None, int | None, int | None]] = set()
         planned_read_fragment_counts: dict[tuple[str, str], int] = {}
         planned_fingerprints: dict[str, str] = {}
         for call in tool_calls:
@@ -1241,7 +1282,9 @@ class ReActLoop:
         read_key = _read_file_key(call)
         if read_key is None:
             return None
-        path, encoding, start_index, max_bytes = read_key
+        path, encoding, start_index, max_bytes, query, start_line, limit_lines = read_key
+        if query is not None or start_line is not None or limit_lines is not None:
+            return None
         for event in reversed(task.trace_events):
             if event.phase != "tool":
                 continue
@@ -1278,12 +1321,12 @@ class ReActLoop:
     def _duplicate_planned_read_file_result(
         self,
         call,
-        planned_read_file_keys: set[tuple[str, str, int | None, int | None]],
+        planned_read_file_keys: set[tuple[str, str, int | None, int | None, str | None, int | None, int | None]],
     ) -> ToolResult | None:
         read_key = _read_file_key(call)
         if read_key is None or read_key not in planned_read_file_keys:
             return None
-        path, _, _, _ = read_key
+        path, _, _, _, _, _, _ = read_key
         return ToolResult(
             tool_name="read_file",
             ok=True,
@@ -1452,7 +1495,7 @@ def _compression_target_label(strategies: list[str]) -> str:
     return "过长工具输出"
 
 
-def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:
+def _read_file_key(call) -> tuple[str, str, int | None, int | None, str | None, int | None, int | None] | None:
     if call.name != "read_file":
         return None
     path = _normalize_relative_path(str(call.args.get("path", "")))
@@ -1461,14 +1504,19 @@ def _read_file_key(call) -> tuple[str, str, int | None, int | None] | None:
     encoding = str(call.args.get("encoding", "utf-8"))
     start_index = _optional_int_arg(call.args, "start_index")
     max_bytes = _optional_int_arg(call.args, "max_bytes")
-    return path, encoding, start_index, max_bytes
+    query = str(call.args.get("query", "")).strip() or None
+    start_line = _optional_int_arg(call.args, "start_line")
+    limit_lines = _optional_int_arg(call.args, "limit_lines")
+    return path, encoding, start_index, max_bytes, query, start_line, limit_lines
 
 
 def _read_file_fragment_key(call) -> tuple[str, str] | None:
     read_key = _read_file_key(call)
     if read_key is None:
         return None
-    path, encoding, start_index, max_bytes = read_key
+    path, encoding, start_index, max_bytes, query, start_line, limit_lines = read_key
+    if query is not None or start_line is not None or limit_lines is not None:
+        return None
     if start_index is None and max_bytes is None:
         return None
     return path, encoding

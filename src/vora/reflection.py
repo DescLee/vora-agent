@@ -164,6 +164,7 @@ class ReflectionLoop:
             "你是 vora 的反思审查器，负责判断上一轮草稿是否真正满足用户任务。",
             "必须只返回 JSON，不要返回 Markdown，不要解释 JSON 之外的内容。",
             'JSON 结构：{"decision":"accept|local_update|regenerate|replan","reason":"简短原因"}',
+            "reason 必须使用中文；如果模型产生 reasoning_content，也必须使用中文，不要输出英文思考句。",
             "",
             "决策含义：",
             "- accept：草稿已经满足用户目标，可以作为最终答案。",
@@ -359,6 +360,7 @@ TEST_COMMAND_KEYWORDS = (
     "pnpm test",
     "yarn test",
     "ruff",
+    "node -c",
 )
 REFLECTION_PYTEST_TIMEOUT_SECONDS = 30
 

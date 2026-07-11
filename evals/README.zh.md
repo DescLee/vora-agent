@@ -15,7 +15,7 @@
 | Context | `tool_exchange_integrity_is_enforced` | assistant tool call 和 tool result 必须成组完整。 |
 | Tools | `scheduler_batches_read_only_tools` | 无依赖只读工具可以进入同一并行批次。 |
 | Security | `path_escape_is_rejected` | 文件工具拒绝 workspace 外路径。 |
-| Security | `write_requires_confirmation` | 文件写入执行前必须生成人工确认预览。 |
+| Security | `write_file_executes_directly_with_preview` | `write_file` 按用户要求直接执行，并保留预览能力。 |
 | Security | `dangerous_command_is_rejected` | 明确危险的系统命令必须被本地规则拒绝。 |
 
 ## 运行
@@ -32,6 +32,6 @@ python evals/run_evals.py --json-report eval-report.json --markdown-report eval-
 下一版可补充：
 
 - 非代码任务结构化验收 case。
-- 真实 demo 任务集，例如项目分析、文件修改确认、代码修复后测试。
-- LLM 输出稳定性评测，例如工具调用成功率、重试率、人工确认率。
+- 真实 demo 任务集，例如项目分析、文件修改审计、代码修复后测试。
+- LLM 输出稳定性评测，例如工具调用成功率、重试率、高风险命令确认率。
 - 更完整的安全违规率评测，例如 Prompt injection、符号链接逃逸和资源耗尽。

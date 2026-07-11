@@ -123,11 +123,12 @@ class SessionManager:
                 data=event_data,
             )
         )
-        task.observations.append(self.runtime.react_loop.observer.observe(original_call, tool_result))
+        observation = self.runtime.react_loop.observer.observe(original_call, tool_result)
+        task.observations.append(observation)
         _replace_or_append_tool_message(
             self.current,
             original_call.id,
-            format_tool_result_message(tool_result),
+            format_tool_result_message(tool_result, content_ref=observation.id),
         )
 
         if not tool_result.ok:
@@ -269,7 +270,7 @@ def format_help_text() -> str:
             "",
             "执行与安全",
             "- 会读取项目文件、调用工具、展示执行过程和最终产物。",
-            "- 写入文件前会展示 diff 并等待确认；dry-run 模式只预览不落盘。",
+            "- read_file、write_file、replace_in_file 按用户要求直接执行；写入会记录 diff 预览，dry-run 模式只预览不落盘。",
             "- 会话、日志和产物默认保存在 `~/.vora/projects/<project_key>`。",
             "",
             "运行限制",

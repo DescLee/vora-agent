@@ -2,7 +2,7 @@
 
 ## 定位
 
-当前项目是本地单用户 Agent Runtime MVP。它已经具备 Agent 核心链路、工具治理、确认写入、上下文压缩、结构化日志和测试体系，但还不是多租户生产平台。
+当前项目是本地单用户 Agent Runtime MVP。它已经具备 Agent 核心链路、工具治理、文件读写直执行策略、上下文压缩、结构化日志和测试体系，但还不是多租户生产平台。
 
 本文说明如果要把它演进为可上线系统，需要补齐哪些工程能力。
 
@@ -15,7 +15,8 @@
 | 结构化日志 | `EventLogger` 记录 LLM 请求、工具结果、上下文预算和最终摘要。 |
 | 工具超时 | 工具执行支持 timeout 和协作式取消；shell 超时会终止整个进程组。 |
 | 工具重试 | retryable tool error 会按上限执行指数退避重试。 |
-| 写入确认 | 写入和高风险命令需要 preview + 用户确认。 |
+| 文件读写策略 | `read_file`、`write_file`、`replace_in_file` 按用户要求直接执行；写入保留 diff preview、workspace 边界和 dry-run 不落盘。 |
+| 命令确认 | 高风险命令需要 preview + 用户确认。 |
 | 质量门禁 | 代码任务 Reflection 阶段执行 pytest gate。 |
 
 ## 上线前必须补齐
@@ -53,7 +54,7 @@ API / CLI
 需要把所有副作用分成两阶段：
 
 1. preview：生成 diff、命令计划或写入计划。
-2. commit：确认后执行。
+2. commit：按策略执行；当前 `write_file` / `replace_in_file` 直接执行，高风险命令仍需确认。
 
 恢复时必须能判断：
 
@@ -70,7 +71,7 @@ API / CLI
 | task_success_rate | 任务最终成功率。 |
 | reflection_reject_rate | Reflection 拒绝率，过高说明模型或工具链不稳定。 |
 | tool_error_rate | 工具失败率。 |
-| confirmation_rate | 需要人工确认的比例。 |
+| confirmation_rate | 命令等高风险动作需要人工确认的比例。 |
 | command_reject_rate | 高风险命令拒绝比例。 |
 | context_compression_rate | 上下文压缩触发比例。 |
 | avg_prompt_tokens / avg_completion_tokens | token 成本。 |
@@ -93,7 +94,7 @@ API / CLI
 | 工具超时 | 设置协作式取消信号；shell 会终止进程组 | 第三方 Python 工具若不响应取消信号，线程仍不能被安全强杀；生产环境需使用进程/容器隔离。 |
 | 测试失败 | Reflection 回流继续执行 | 增加失败分类和自动生成最小复现。 |
 | 上下文超限 | 压缩或硬裁剪 | 增加 artifact 引用化和分层摘要。 |
-| 用户拒绝写入 | 记录取消并继续 | 增加审批记录和审计日志。 |
+| 用户拒绝高风险命令 | 记录取消并继续 | 增加审批记录和审计日志。 |
 
 ## 面试表达重点
 

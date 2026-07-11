@@ -297,6 +297,7 @@ class ReadFileTool(BaseTool):
                 summary=f"read {path} from byte {start_index}",
                 content=content,
                 data={
+                    "path": str(path),
                     "start_index": start_index,
                     "bytes_read": len(raw),
                     "file_size": size,
@@ -329,6 +330,7 @@ class ReadFileTool(BaseTool):
             ok=True,
             summary=f"read {path}",
             content=content,
+            data={"path": str(path), "file_size": size, "bytes_read": len(raw)},
         )
 
     def resource_keys(self, **kwargs: Any) -> list[str]:
@@ -370,6 +372,7 @@ def _read_file_line_window(target: Path, *, path: str, start_line: int, limit_li
         summary=f"read {path} lines {start_line}-{end_line}",
         content=content,
         data={
+            "path": path,
             "start_line": start_line,
             "end_line": end_line,
             "total_lines": total_lines,
@@ -431,6 +434,7 @@ def _read_file_query_window(target: Path, *, path: str, query: str, encoding: st
         summary=f"found {total_matches} match(es) for query in {path}",
         content="".join(chunks),
         data={
+            "path": path,
             "query": query,
             "matches": selected_matches,
             "total_matches": total_matches,
@@ -463,6 +467,7 @@ def _read_large_file_summary(target: Path, *, path: str, max_bytes: int, encodin
         summary=f"file too large; returned summary for {path}",
         content="".join(preview_lines),
         data={
+            "path": path,
             "file_size": size,
             "max_bytes": max_bytes,
             "total_lines": total_lines,
@@ -628,7 +633,7 @@ class WriteFileTool(BaseTool):
     name = "write_file"
     description = "Write a file inside the workspace."
     risk_level = "write"
-    requires_confirmation = True
+    requires_confirmation = False
     is_read_only = False
 
     def describe_preview(self, **kwargs: Any) -> str:
@@ -679,10 +684,6 @@ class WriteFileTool(BaseTool):
                 summary="missing required argument: content",
                 error_code="INVALID_TOOL_PARAMS",
             )
-        confirmed = bool(kwargs.get("confirmed", False))
-        if not confirmed:
-            raise PermissionError("WRITE_REQUIRES_CONFIRMATION")
-
         try:
             target = _resolve_tool_path(self.name, workspace, path)
         except _ToolPathError as error:
@@ -752,7 +753,7 @@ class ReplaceInFileTool(BaseTool):
     name = "replace_in_file"
     description = "Replace exact text inside an existing workspace file."
     risk_level = "write"
-    requires_confirmation = True
+    requires_confirmation = False
     is_read_only = False
 
     def describe_preview(self, **kwargs: Any) -> str:

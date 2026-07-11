@@ -9,7 +9,7 @@
 当前版本重点体现：
 
 - Agent 运行编排：`Runtime -> Planner -> ReAct -> ToolScheduler -> Executor -> Observer -> Reflection -> Reporter`
-- 工具调用治理：工具 schema、批次调度、依赖处理、写入确认、命令风险判断。
+- 工具调用治理：工具 schema、批次调度、依赖处理、文件读写直执行策略、命令风险判断。
 - Skills 能力包：按任务触发项目分析、代码修改、面试演示等流程约束，并收窄可用工具范围。
 - MCP 配置管理：通过 CLI 管理项目级或用户级 MCP server 配置，为后续接入 MCP 工具适配层预留入口。
 - 状态化会话：会话历史、任务状态、工具观察、产物、待确认动作统一建模。
@@ -29,7 +29,7 @@
 | 工具调度 | 已实现 | 只读工具可批量并行，敏感/写入/命令工具串行。 |
 | Skills 能力包 | 已实现 | 支持内置、本地项目和用户全局 Skill；命中后注入 Planner/ReAct，并限制工具候选范围。 |
 | MCP 配置管理 | 已实现 | `vora mcp list/add/remove` 可管理 MCP server 配置；当前版本先保存配置，尚未动态注入 MCP 工具。 |
-| 文件工具 | 已实现 | list/read/write/replace/append/mkdir，含路径限制和写入确认。 |
+| 文件工具 | 已实现 | list/read/write/replace/append/mkdir；`read_file`、`write_file`、`replace_in_file` 按用户要求直接执行，写入保留路径限制、diff 记录和 dry-run 不落盘。 |
 | 命令工具 | 已实现 | bash/temp script，含禁用模式、风险判断、确认和超时。 |
 | 长期记忆 | 已实现 | SQLite 存储，敏感信息过滤，关键词检索。 |
 | 会话持久化 | 已实现 | list/resume/delete/clear，支持中断后修复 tool message。 |
@@ -158,7 +158,7 @@ python evals/run_evals.py
 推荐展示三条路径：
 
 1. 项目分析：让 Agent 扫描当前项目并生成结构化总结。
-2. 写入确认：让 Agent 修改一个文件，展示 diff preview 和人工确认。
+2. 文件修改审计：让 Agent 修改一个文件，展示 diff preview；`read_file`、`write_file`、`replace_in_file` 按用户要求直接执行。
 3. 代码门禁：让 Agent 做代码修改，说明 Reflection 会生成 pytest 验收 case，不通过则回流继续执行。
 
 对外讲解时应明确：这是本地单用户 Agent Runtime MVP，核心价值在于 Agent 工程治理，而不是完整生产平台。

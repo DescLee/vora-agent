@@ -93,16 +93,12 @@ def test_demo_code_flow_confirms_write_and_modifies_previous_artifact(tmp_path: 
     manager.runtime.reflection_loop.react_loop.llm = manager.runtime.react_loop.llm
 
     first_turn = manager.handle_user_message("新建 notes.txt")
-    assert first_turn.pending_confirmation is not None
-    assert not (tmp_path / "notes.txt").exists()
-
-    manager.handle_user_message("确认")
+    assert first_turn.pending_confirmation is None
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "version-1"
 
-    third_turn = manager.handle_user_message("把上一轮产物改成第二版")
-    assert third_turn.pending_confirmation is not None
-    fourth_turn = manager.handle_user_message("确认")
-    assert fourth_turn.active_task is not None
+    second_turn = manager.handle_user_message("把上一轮产物改成第二版")
+    assert second_turn.pending_confirmation is None
+    assert second_turn.active_task is not None
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "version-2"
 
 

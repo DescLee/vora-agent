@@ -161,12 +161,14 @@ def eval_path_escape_is_rejected() -> None:
         assert result.error_code == "PATH_OUT_OF_WORKSPACE"
 
 
-def eval_write_requires_confirmation() -> None:
+def eval_write_file_executes_directly_with_preview() -> None:
     with tempfile.TemporaryDirectory() as directory:
         cwd = Path(directory)
         preview = WriteFileTool().preview(workspace=cwd, path="result.md", content="draft")
-        assert preview.requires_confirmation is True
-        assert not (cwd / "result.md").exists()
+        assert preview.requires_confirmation is False
+        result = WriteFileTool().run(workspace=cwd, path="result.md", content="draft")
+        assert result.ok is True
+        assert (cwd / "result.md").read_text(encoding="utf-8") == "draft"
 
 
 def eval_dangerous_command_is_rejected() -> None:
@@ -198,17 +200,17 @@ def eval_pending_confirmation_blocks_unrelated_messages() -> None:
         cwd = Path(directory)
         manager = SessionManager(cwd)
         manager.current.pending_confirmation = PendingConfirmation(
-            tool_name="write_file",
-            tool_call_id="call-write",
-            tool_args={"path": "note.md"},
-            summary="write note.md",
-            prompt="confirm write",
+            tool_name="run_bash",
+            tool_call_id="call-command",
+            tool_args={"command": "touch note.md"},
+            summary="command modifies workspace files: touch",
+            prompt="confirm command",
         )
 
         session = manager.handle_user_message("再问一个问题")
 
         assert session.pending_confirmation is not None
-        assert session.pending_confirmation.tool_call_id == "call-write"
+        assert session.pending_confirmation.tool_call_id == "call-command"
         assert session.active_task is None
         assert any(message.role == "system" for message in session.messages)
 
@@ -240,7 +242,7 @@ CASE_RUNNERS: dict[str, Callable[[], None]] = {
     "tool_exchange_integrity_is_enforced": eval_tool_exchange_integrity_is_enforced,
     "scheduler_batches_read_only_tools": eval_scheduler_batches_read_only_tools,
     "path_escape_is_rejected": eval_path_escape_is_rejected,
-    "write_requires_confirmation": eval_write_requires_confirmation,
+    "write_file_executes_directly_with_preview": eval_write_file_executes_directly_with_preview,
     "dangerous_command_is_rejected": eval_dangerous_command_is_rejected,
     "report_write_requires_explicit_file_request": eval_report_write_requires_explicit_file_request,
     "pending_confirmation_blocks_unrelated_messages": eval_pending_confirmation_blocks_unrelated_messages,

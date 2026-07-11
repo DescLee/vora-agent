@@ -70,6 +70,12 @@ def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> 
     assert "tool" in roles
     tool_messages = [message for message in result.messages if message.role == "tool" and message.tool_call_id == "call-read-readme"]
     assert len(tool_messages) == 1
+    assert "hello world" not in tool_messages[0].content
+    assert "content_ref:" in tool_messages[0].content
+    assert any(
+        observation.tool_call_id == "call-read-readme" and observation.content == "hello world"
+        for observation in result.active_task.observations
+    )
 
 
 def test_runtime_small_talk_does_not_call_file_tools(tmp_path: Path) -> None:
@@ -144,7 +150,29 @@ def test_runtime_identity_question_uses_vora_system_identity(tmp_path: Path) -> 
     assert runtime.react_loop.llm.tool_names[0] == []
     assert any("你叫 vora" in prompt for prompt in runtime.react_loop.llm.system_prompts)
     assert any("个人助理" in prompt for prompt in runtime.react_loop.llm.system_prompts)
-    assert "vora" in result.messages[-1].content
+    assert any("reasoning_content" in prompt and "必须使用中文" in prompt for prompt in runtime.react_loop.llm.system_prompts)
+
+
+def test_react_loop_system_prompt_requires_chinese_visible_reasoning(tmp_path: Path) -> None:
+    class PromptRecordingLLM:
+        def __init__(self) -> None:
+            self.system_prompts: list[str] = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.system_prompts.extend(message.content for message in messages if message.role == "system")
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="总结项目", cwd=tmp_path)
+    llm = PromptRecordingLLM()
+
+    result = ReActLoop(llm, ToolRegistry()).run(task, session)
+
+    assert result == "完成"
+    joined = "\n".join(llm.system_prompts)
+    assert "reasoning_content" in joined
+    assert "必须使用中文" in joined
+    assert "不要输出英文思考句" in joined
 
 
 def test_runtime_scripted_llm_answers_identity_question_with_vora(tmp_path: Path) -> None:
@@ -363,7 +391,7 @@ def test_react_loop_preserves_assistant_reasoning_content_between_tool_rounds(tm
             if len(self.calls) == 1:
                 return LLMResult(
                     content="我需要读取 README。",
-                    reasoning_content="Need project docs.",
+                    reasoning_content="需要先读取项目文档。",
                     tool_calls=[
                         ToolCall(
                             id="call-read-readme",
@@ -375,7 +403,7 @@ def test_react_loop_preserves_assistant_reasoning_content_between_tool_rounds(tm
                 )
             assistant_messages = [message for message in messages if message.role == "agent" and message.tool_call_ids]
             assert assistant_messages
-            assert assistant_messages[-1].metadata["reasoning_content"] == "Need project docs."
+            assert assistant_messages[-1].metadata["reasoning_content"] == "需要先读取项目文档。"
             assert assistant_messages[-1].metadata["tool_call_arguments"]["call-read-readme"] == '{"path":"README.md"}'
             return LLMResult(content="总结完成")
 
@@ -1067,8 +1095,10 @@ def test_react_loop_allows_overview_task_to_read_targeted_source_files(tmp_path:
                     ]
                 )
             tool_messages = {message.tool_call_id: message.content for message in messages if message.role == "tool"}
-            assert "# demo" in tool_messages["call-read-readme"]
-            assert "SECRET = 'can be read when targeted'" in tool_messages["call-read-deep"]
+            assert "# demo" not in tool_messages["call-read-readme"]
+            assert "SECRET = 'can be read when targeted'" not in tool_messages["call-read-deep"]
+            assert "content_ref:" in tool_messages["call-read-readme"]
+            assert "content_ref:" in tool_messages["call-read-deep"]
             return LLMResult(content="overview handled")
 
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
@@ -1957,18 +1987,12 @@ def test_react_loop_sanitizes_llm_supplied_workspace_argument(tmp_path: Path) ->
     assert "workspace" not in llm_events[0].data["tool_calls"][0]["args"]
 
 
-def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) -> None:
+def test_react_loop_writes_file_without_confirmation(tmp_path: Path) -> None:
     manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=ScriptedLLM()))
 
-    first_turn = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
+    second_turn = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
 
-    assert first_turn.pending_confirmation is not None
-    assert first_turn.active_task is not None
-    assert first_turn.active_task.status == "waiting_confirmation"
-    assert not (tmp_path / "helloworld.py").exists()
-
-    second_turn = manager.handle_user_message("确认")
-
+    assert second_turn.pending_confirmation is None
     assert second_turn.active_task is not None
     assert second_turn.active_task.status == "done"
     assert (tmp_path / "helloworld.py").read_text(encoding="utf-8") == "print('hello world')\n"
@@ -1976,9 +2000,11 @@ def test_react_loop_requires_confirmation_before_writing_file(tmp_path: Path) ->
     assert any(observation.ok and observation.summary == "command exited 0" for observation in second_turn.active_task.observations)
 
 
-def test_react_loop_requires_confirmation_before_replacing_file(tmp_path: Path) -> None:
+def test_react_loop_replaces_file_without_confirmation(tmp_path: Path) -> None:
     class ReplaceLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            if any(message.role == "tool" for message in messages):
+                return LLMResult(content="替换完成")
             return LLMResult(
                 tool_calls=[
                     ToolCall(
@@ -1990,20 +2016,23 @@ def test_react_loop_requires_confirmation_before_replacing_file(tmp_path: Path) 
             )
 
     (tmp_path / "note.md").write_text("# Note\n\nold line\n", encoding="utf-8")
-    manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=ReplaceLLM()))
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请把 note.md 里的 old line 改成 new line", cwd=tmp_path)
 
-    first_turn = manager.handle_user_message("请把 note.md 里的 old line 改成 new line")
+    result = ReActLoop(ReplaceLLM(), ToolRegistry()).run(task, session)
 
-    assert first_turn.pending_confirmation is not None
-    assert first_turn.pending_confirmation.tool_name == "replace_in_file"
-    assert first_turn.active_task is not None
-    assert first_turn.active_task.status == "waiting_confirmation"
-    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "# Note\n\nold line\n"
-    assert "-old line" in first_turn.pending_confirmation.diff_preview
-    assert "+new line" in first_turn.pending_confirmation.diff_preview
+    assert result == "替换完成"
+    assert session.pending_confirmation is None
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "# Note\n\nnew line\n"
+    assert any(
+        event.data.get("message_type") == "diff_preview"
+        and "-old line" in str(event.data.get("diff_preview") or "")
+        and "+new line" in str(event.data.get("diff_preview") or "")
+        for event in task.trace_events
+    )
 
 
-def test_confirm_pending_confirmation_executes_stored_tool_call_before_follow_up(tmp_path: Path) -> None:
+def test_write_file_executes_stored_tool_call_without_confirmation(tmp_path: Path) -> None:
     class WriteOnceThenAnswerLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
             if not tool_names:
@@ -2023,19 +2052,13 @@ def test_confirm_pending_confirmation_executes_stored_tool_call_before_follow_up
 
     manager = SessionManager(tmp_path, runtime=AgentRuntime(llm=WriteOnceThenAnswerLLM()))
 
-    first_turn = manager.handle_user_message("创建 notes.txt")
-
-    assert first_turn.pending_confirmation is not None
-    pending_tool_call_id = first_turn.pending_confirmation.tool_call_id
-    assert not (tmp_path / "notes.txt").exists()
-
-    second_turn = manager.handle_user_message("确认")
+    second_turn = manager.handle_user_message("创建 notes.txt")
 
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "confirmed write\n"
     assert second_turn.pending_confirmation is None
     assert any(
         message.role == "tool"
-        and message.tool_call_id == pending_tool_call_id
+        and message.tool_call_id == "call-write-notes"
         and "wrote notes.txt" in message.content
         for message in second_turn.messages
     )
@@ -2046,15 +2069,16 @@ def test_dry_run_does_not_write_files(tmp_path: Path) -> None:
 
     session = manager.handle_user_message("在工作目录下新建 helloworld.py 文件")
 
-    assert session.pending_confirmation is not None
+    assert session.pending_confirmation is None
     assert session.active_task is not None
-    assert session.active_task.status == "waiting_confirmation"
     assert not (tmp_path / "helloworld.py").exists()
     assert session.active_task.observations[-1].summary.startswith("dry-run preview")
     assert any(event.data.get("dry_run") is True for event in session.active_task.trace_events)
-    assert session.pending_confirmation is not None
-    assert "--- a/helloworld.py" in session.pending_confirmation.diff_preview
-    assert "+++ b/helloworld.py" in session.pending_confirmation.diff_preview
+    assert any(
+        "--- a/helloworld.py" in str(event.data.get("diff_preview") or "")
+        and "+++ b/helloworld.py" in str(event.data.get("diff_preview") or "")
+        for event in session.active_task.trace_events
+    )
 
 
 def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) -> None:
@@ -2099,13 +2123,14 @@ def test_react_loop_records_diff_preview_before_replace_in_file(tmp_path: Path) 
 
     result = ReActLoop(ReplaceThenAnswerLLM(), ToolRegistry()).run(task, session)
 
-    assert result == "即将修改: Replace text in app.py"
-    assert session.pending_confirmation is not None
-    assert session.pending_confirmation.tool_name == "replace_in_file"
-    assert session.pending_confirmation.tool_call_id == "call-replace"
-    assert "--- a/app.py" in session.pending_confirmation.diff_preview
-    assert "-    return 'old'" in session.pending_confirmation.diff_preview
-    assert "+    return 'new'" in session.pending_confirmation.diff_preview
+    assert result == "ok"
+    assert session.pending_confirmation is None
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "def value():\n    return 'new'\n"
+    diff_events = [event for event in task.trace_events if event.data.get("message_type") == "diff_preview"]
+    assert diff_events
+    assert "--- a/app.py" in str(diff_events[-1].data.get("diff_preview") or "")
+    assert "-    return 'old'" in str(diff_events[-1].data.get("diff_preview") or "")
+    assert "+    return 'new'" in str(diff_events[-1].data.get("diff_preview") or "")
 
 
 def test_executor_confirmation_diff_preview_does_not_read_outside_workspace(tmp_path: Path) -> None:
@@ -2121,13 +2146,12 @@ def test_executor_confirmation_diff_preview_does_not_read_outside_workspace(tmp_
 
     result = Executor(ToolRegistry()).execute(call, session, task)
 
-    assert result.error_code == "WRITE_REQUIRES_CONFIRMATION"
-    assert session.pending_confirmation is not None
-    assert "OUTSIDE_SECRET" not in session.pending_confirmation.diff_preview
+    assert result.error_code == "PATH_OUT_OF_WORKSPACE"
+    assert session.pending_confirmation is None
     assert not any("OUTSIDE_SECRET" in str(event.data.get("diff_preview") or "") for event in task.trace_events)
 
 
-def test_executor_confirmation_diff_preview_redacts_sensitive_values(tmp_path: Path) -> None:
+def test_executor_write_diff_preview_redacts_sensitive_values(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="write config", cwd=tmp_path)
     call = ToolCall(
@@ -2142,10 +2166,12 @@ def test_executor_confirmation_diff_preview_redacts_sensitive_values(tmp_path: P
 
     result = Executor(ToolRegistry()).execute(call, session, task)
 
-    assert result.error_code == "WRITE_REQUIRES_CONFIRMATION"
-    assert session.pending_confirmation is not None
-    assert "plain-secret" not in session.pending_confirmation.diff_preview
-    assert "CLIENT_SECRET=[REDACTED]" in session.pending_confirmation.diff_preview
+    assert result.ok is True
+    assert session.pending_confirmation is None
+    diff_previews = [str(event.data.get("diff_preview") or "") for event in task.trace_events]
+    assert diff_previews
+    assert all("plain-secret" not in diff for diff in diff_previews)
+    assert any("CLIENT_SECRET=[REDACTED]" in diff for diff in diff_previews)
 
 
 def test_executor_replace_diff_trace_does_not_read_outside_workspace(tmp_path: Path) -> None:
@@ -2661,7 +2687,7 @@ def test_runtime_fallback_for_startup_question_is_useful(tmp_path: Path) -> None
     ("prompt", "expected_terms"),
     [
         ("这个项目有哪些核心能力？", ["任务规划", "工具调用", "会话持久化", "质量门禁"]),
-        ("这个项目怎么保证安全？", ["工作区边界", "写入确认", "敏感信息脱敏", "命令风险"]),
+        ("这个项目怎么保证安全？", ["工作区边界", "直接执行", "敏感信息脱敏", "命令风险"]),
         ("这个项目测试怎么跑？", ["pytest -q", "ruff check", "mypy", "python evals/run_evals.py"]),
     ],
 )
@@ -2686,8 +2712,8 @@ def test_runtime_fallback_answers_interview_project_questions(tmp_path: Path, pr
 @pytest.mark.parametrize(
     ("prompt", "expected_terms"),
     [
-        ("怎么修改文件？", ["read_file", "replace_in_file", "写入确认"]),
-        ("写入确认是怎么做的？", ["diff", "确认", "取消"]),
+        ("怎么修改文件？", ["read_file", "replace_in_file", "直接落盘"]),
+        ("写入确认是怎么做的？", ["直接执行", "diff", "命令类高风险"]),
         ("能不能修改工作区外的文件？", ["不能", "工作区", "PATH_OUT_OF_WORKSPACE"]),
         ("如果要改代码，怎么保证改完是对的？", ["测试", "Reflection", "pytest"]),
         ("怎么恢复刚才的会话继续修改？", ["vora list", "vora resume", "session_id"]),
@@ -2747,7 +2773,7 @@ def test_runtime_fallback_answers_interview_engineering_questions(
 @pytest.mark.parametrize(
     ("prompt", "expected_terms"),
     [
-        ("dry-run 是怎么工作的？", ["--dry-run", "不落盘", "确认预览"]),
+        ("dry-run 是怎么工作的？", ["--dry-run", "不落盘", "diff 预览"]),
         ("命令执行怎么控制风险？", ["run_bash", "run_temp_script", "命令风险", "确认"]),
         ("工具并行调度是怎么做的？", ["ToolScheduler", "只读工具", "并行", "写入工具"]),
         ("Reflection 质量门禁怎么设计的？", ["Reflection", "pytest gate", "accept", "replan"]),
@@ -2783,7 +2809,7 @@ def test_runtime_fallback_answers_interview_runtime_mechanics_questions(
     [
         ("这个项目有哪些边界和不足？", ["本地单用户", "非生产级", "向量检索", "容器沙箱"]),
         ("和真正的 Manus 比差在哪里？", ["不是完整 Manus", "浏览器自动化", "多租户", "远程沙箱"]),
-        ("面试时应该怎么演示这个项目？", ["项目分析", "写入确认", "Reflection", "会话恢复"]),
+        ("面试时应该怎么演示这个项目？", ["项目分析", "文件修改", "Reflection", "会话恢复"]),
         ("怎么扩展一个新工具？", ["ToolSpec", "ToolRegistry", "ToolResult", "测试"]),
         ("这个项目生产化还缺什么？", ["多租户", "容器隔离", "权限审计", "可观测性"]),
         ("出问题时怎么排障？", ["session_id", "logs", "trace_events", "summary"]),
@@ -3034,8 +3060,8 @@ def test_report_query_allows_explicit_write_to_file_phrase(tmp_path: Path) -> No
     result = ReActLoop(ExplicitReportWriteLLM()).run(task, session)
 
     assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" not in result
-    assert session.pending_confirmation is not None
-    assert session.pending_confirmation.tool_name == "write_file"
+    assert session.pending_confirmation is None
+    assert (tmp_path / "docs" / "report.md").read_text(encoding="utf-8") == "# report\n"
 
 
 def test_report_query_allows_production_code_write_after_test_evidence(tmp_path: Path) -> None:
@@ -3065,9 +3091,8 @@ def test_report_query_allows_production_code_write_after_test_evidence(tmp_path:
     result = ReActLoop(CodeWriteLLM()).run(task, session)
 
     assert "REPORT_WRITE_REQUIRES_EXPLICIT_REQUEST" not in result
-    assert session.pending_confirmation is not None
-    assert session.pending_confirmation.tool_name == "write_file"
-    assert session.pending_confirmation.tool_args["path"] == "src/vora/skills/registry.py"
+    assert session.pending_confirmation is None
+    assert (tmp_path / "src" / "vora" / "skills" / "registry.py").read_text(encoding="utf-8") == "BUILTIN_SKILLS = []\n"
 
 
 def test_react_loop_adds_disclaimer_when_web_search_has_no_results(tmp_path: Path) -> None:
@@ -3368,6 +3393,25 @@ def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
     assert "truncated" in message
 
 
+def test_format_tool_result_message_summarizes_read_file_content_by_ref() -> None:
+    from vora.tools.base import ToolResult
+
+    result = ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary="read README.md",
+        content="full file content should stay outside model context",
+        data={"path": "README.md", "file_size": 47},
+    )
+
+    message = format_tool_result_message(result, content_ref="obs-123")
+
+    assert "read README.md" in message
+    assert "content_ref: obs-123" in message
+    assert "path: README.md" in message
+    assert "full file content" not in message
+
+
 def test_react_loop_finishes_when_large_tool_results_are_summarized(tmp_path: Path) -> None:
     from vora.tools.base import ToolResult
 
@@ -3440,7 +3484,9 @@ def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path:
     payload_messages = request_rows[-1]["request"]["messages"]
     assert any(message["role"] == "tool" for message in payload_messages)
     assert any(message["role"] == "assistant" and message.get("tool_calls") for message in payload_messages)
-    assert any("hello world" in message.get("content", "") for message in payload_messages if message["role"] == "tool")
+    read_tool_messages = [message for message in payload_messages if message["role"] == "tool"]
+    assert any("content_ref:" in message.get("content", "") for message in read_tool_messages)
+    assert not any("hello world" in message.get("content", "") for message in read_tool_messages)
 
 
 def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -> None:

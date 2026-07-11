@@ -102,7 +102,7 @@ class ScriptedLLM:
                 ]
             )
 
-        if project_query and "read_file" in tool_names and "paths:" in tool_text and "# vora" not in tool_text:
+        if project_query and "read_file" in tool_names and "paths:" in tool_text and "content_ref:" not in tool_text and "# vora" not in tool_text:
             return LLMResult(
                 tool_calls=[
                     ToolCall(
@@ -123,6 +123,27 @@ class ScriptedLLM:
                 ]
             )
 
+        if project_query and "read_file" in tool_names and "content_ref:" in tool_text and "# vora" not in tool_text:
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call-read-readme-lines",
+                        name="read_file",
+                        args={"path": "README.md", "start_line": 1, "limit_lines": 80},
+                    ),
+                    ToolCall(
+                        id="call-read-pyproject-lines",
+                        name="read_file",
+                        args={"path": "pyproject.toml", "start_line": 1, "limit_lines": 80},
+                    ),
+                    ToolCall(
+                        id="call-read-technical-design-lines",
+                        name="read_file",
+                        args={"path": "docs/v1-technical-design.md", "start_line": 1, "limit_lines": 80},
+                    ),
+                ]
+            )
+
         if project_query and "# vora" in tool_text:
             return LLMResult(
                 content=(
@@ -137,6 +158,18 @@ class ScriptedLLM:
             )
 
         if tool_text:
+            if "a.md" in user_text and "content_ref:" in tool_text and "hello world" not in tool_text:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read-a-lines",
+                            name="read_file",
+                            args={"path": "a.md", "start_line": 1, "limit_lines": 80},
+                        )
+                    ],
+                    source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},
+                    source_response={"mode": "scripted", "content": "tool_call: read_file targeted"},
+                )
             return LLMResult(
                 content=f"已根据工具结果生成草稿：{tool_text}",
                 source_request={"messages": openai_messages(messages), "tool_names": list(tool_names)},

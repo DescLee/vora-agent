@@ -155,6 +155,20 @@ class Executor:
                     },
                 )
             )
+        if self.dry_run and self._is_dry_run_write_tool(call.name):
+            task.trace_events.append(
+                TraceEvent(
+                    phase="tool",
+                    message="Dry-run skipped write tool",
+                    data={
+                        "tool_call_id": call.id,
+                        "tool_name": call.name,
+                        "dry_run": True,
+                    },
+                )
+            )
+            summary = preview.summary if preview is not None else f"dry-run preview: {call.name}"
+            return ToolResult(tool_name=call.name, ok=False, summary=f"dry-run preview: {summary}", error_code="DRY_RUN")
 
         for attempt in range(1, max_attempts + 1):
             if cancel_event.is_set():
@@ -220,6 +234,9 @@ class Executor:
             diff_preview=diff_preview,
         )
 
+    def _is_dry_run_write_tool(self, tool_name: str) -> bool:
+        return tool_name in {"write_file", "replace_in_file", "append_file", "make_directory"}
+
     def _build_diff_preview(self, tool_name: str, args: dict, workspace: Path) -> str:
         path = str(args.get("path", "")).strip()
         if not path:
@@ -259,7 +276,7 @@ class Executor:
         return f"{truncated}\n... [truncated {remaining} more char(s)]\n"
 
     def _build_nonblocking_diff_preview(self, tool_name: str, args: dict, workspace: Path) -> str:
-        if tool_name != "replace_in_file":
+        if tool_name not in {"write_file", "replace_in_file"}:
             return ""
         return self._build_diff_preview(tool_name, args, workspace)
 

@@ -348,22 +348,18 @@ def test_read_file_rejects_start_index_beyond_file_size(tmp_path: Path) -> None:
     assert "start_index" in result.summary
 
 
-def test_write_file_preview_requires_confirmation(tmp_path: Path) -> None:
+def test_write_file_executes_without_confirmation(tmp_path: Path) -> None:
     tool = WriteFileTool()
 
     preview = tool.preview(workspace=tmp_path, path="draft.txt", content="hello")
 
-    assert preview.requires_confirmation is True
+    assert preview.requires_confirmation is False
     assert preview.risk_level == "write"
-
-    with pytest.raises(PermissionError):
-        tool.run(workspace=tmp_path, path="draft.txt", content="hello")
 
     result = tool.run(
         workspace=tmp_path,
         path="draft.txt",
         content="hello",
-        confirmed=True,
     )
 
     assert result.ok is True
@@ -463,7 +459,7 @@ def test_write_file_allows_large_existing_file_rewrite_when_explicitly_allowed(t
     assert target.read_text(encoding="utf-8") == "y" * 5000
 
 
-def test_replace_in_file_replaces_unique_text_with_confirmation(tmp_path: Path) -> None:
+def test_replace_in_file_replaces_unique_text_without_confirmation(tmp_path: Path) -> None:
     target = tmp_path / "app.py"
     target.write_text("def hello():\n    return 'old'\n", encoding="utf-8")
     tool = ReplaceInFileTool()
@@ -645,7 +641,8 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
     assert isinstance(registry.get("replace_in_file"), ReplaceInFileTool)
-    assert registry.get("replace_in_file").requires_confirmation is True
+    assert registry.get("write_file").requires_confirmation is False
+    assert registry.get("replace_in_file").requires_confirmation is False
     assert isinstance(registry.get("append_file"), AppendFileTool)
     assert isinstance(registry.get("make_directory"), MakeDirectoryTool)
     assert isinstance(registry.get("web_search"), WebSearchTool)

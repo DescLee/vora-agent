@@ -952,15 +952,15 @@ class ToolResourceSpec(BaseModel):
 
 - 默认只能访问 `cwd` 内文件。
 - 所有路径必须 normalize 后校验，禁止 `../` 逃逸工作区。
-- 写入工具必须展示 preview 并等待确认。
+- `read_file`、`write_file`、`replace_in_file` 按用户要求直接执行；写入工具必须记录 preview/diff，但不等待人工确认。
 - 命令工具可执行受控 bash 或临时脚本，但必须经过风险判断、确认流程、禁用模式和 dry-run 约束。
 - `dry-run` 模式下不允许真实写入。
 - 每次写入前保存原内容摘要，方便第二版扩展回滚。
 
-文件写入确认流程：
+文件写入执行流程：
 
 ```text
-prepare -> preview diff/summary -> user confirm -> write -> observe
+prepare -> preview diff/summary -> write -> observe
 ```
 
 ## 10. 日志与产物
@@ -1138,6 +1138,6 @@ ruff check .
 - 至少一个 demo 能展示当前运行阶段、最新动作和上下文占比。
 - 至少一个 demo 能记住用户偏好，并在后续回复中使用。
 - 至少一个长会话 demo 能触发上下文压缩，并展示压缩摘要。
-- 至少一个 demo 会触发文件写入确认。
+- 至少一个 demo 会展示文件直写、diff 预览和 dry-run 不落盘。
 - `logs/<session_id>/pipeline.jsonl`、`node.jsonl` 和 `summary.jsonl` 可解释每一步发生了什么。
 - 测试能证明权限确认、路径限制、记忆写入过滤和压缩触发有效。
