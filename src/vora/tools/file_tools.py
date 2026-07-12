@@ -351,6 +351,18 @@ class ReadFileTool(BaseTool):
                 encoding=str(kwargs.get("encoding", "utf-8")),
             )
         has_start_index = "start_index" in kwargs
+        if not has_start_index and _is_dependency_file_path(relative_path):
+            result = _read_large_file_summary(
+                target,
+                path=str(path),
+                max_bytes=max_bytes,
+                encoding=str(kwargs.get("encoding", "utf-8")),
+            )
+            if result.ok:
+                result.summary = f"dependency file summary for {path}"
+                result.data["dependency_file_policy"] = True
+                result.data["suggestion"] = "Use query or start_line with limit_lines for dependency files; avoid reading the whole file."
+            return result
         if not has_start_index and _should_summarize_large_file_by_policy(relative_path, size):
             result = _read_large_file_summary(
                 target,
@@ -614,6 +626,10 @@ def _should_summarize_large_file_by_policy(relative_path: str, size: int) -> boo
         or normalized.endswith(".generated.ts")
     )
     return generated_or_data_file and size >= GENERATED_DATA_FILE_SUMMARY_BYTES
+
+
+def _is_dependency_file_path(relative_path: str) -> bool:
+    return "node_modules/" in relative_path.replace("\\", "/")
 
 
 def _count_text_lines(target: Path) -> int:

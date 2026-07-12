@@ -132,6 +132,10 @@ class RunBashTool(BaseTool):
             return _confirmation_required_result(self.name, risk)
         timeout_seconds = _optional_positive_int(kwargs.get("timeout_seconds"))
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
+        output_capped_for_file_dump = False
+        if _looks_like_file_dump_command(command) and output_limit > 2_000:
+            output_limit = 2_000
+            output_capped_for_file_dump = True
         result = _run_command(
             tool_name=self.name,
             command=["bash", "-lc", command],
@@ -142,6 +146,8 @@ class RunBashTool(BaseTool):
         )
         if command != raw_command:
             result.data["normalized_command"] = command
+        if output_capped_for_file_dump:
+            result.data["output_capped_for_file_dump"] = True
         return result
 
 
@@ -256,6 +262,19 @@ def _normalize_read_only_shell_command(command: str) -> str:
         lambda match: f"{match.group(1)}{match.group(2)} -n {match.group(3)}",
         command,
     )
+
+
+def _looks_like_file_dump_command(command: str) -> bool:
+    compact = " ".join(command.split())
+    if re.search(r"(^|[;&|]\s*)(cat|nl)\s+(-[A-Za-z]+\s+)*[^;&|]+", compact):
+        return True
+    if re.search(r"(^|[;&|]\s*)(awk|sed)\b[^;&|]*(NR|p['\"]?$)", compact):
+        return True
+    if re.search(r"\bpython(?:3)?\b.*\bopen\s*\([^)]*\).*\.read\s*\(\).*print\s*\(", compact):
+        return True
+    if re.search(r"\bpython(?:3)?\b.*readlines\s*\(\).*print\s*\(", compact):
+        return True
+    return False
 
 
 def _run_command(

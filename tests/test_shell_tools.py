@@ -81,6 +81,17 @@ def test_run_bash_normalizes_head_count_in_pipeline(tmp_path: Path) -> None:
     assert result.content == "stdout:\na\n"
 
 
+def test_run_bash_caps_obvious_file_dump_output(tmp_path: Path) -> None:
+    (tmp_path / "big.txt").write_text("x" * 6000, encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="cat big.txt", output_limit=50000)
+
+    assert result.ok is True
+    assert result.data["output_capped_for_file_dump"] is True
+    assert len(result.data["stdout"]) < 3000
+    assert "truncated" in result.content
+
+
 def test_run_bash_timeout_terminates_child_process_group(tmp_path: Path) -> None:
     marker = tmp_path / "child-finished.txt"
 

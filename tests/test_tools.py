@@ -50,6 +50,19 @@ def test_read_file_treats_leading_slash_project_path_as_workspace_relative(tmp_p
     assert result.data["path"] == "/src/api/http.ts"
 
 
+def test_read_file_summarizes_dependency_file_without_targeted_window(tmp_path: Path) -> None:
+    target = tmp_path / "node_modules" / "pkg" / "src" / "index.ts"
+    target.parent.mkdir(parents=True)
+    target.write_text("export const value = 1\n" * 20, encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="node_modules/pkg/src/index.ts")
+
+    assert result.ok is True
+    assert result.summary == "dependency file summary for node_modules/pkg/src/index.ts"
+    assert result.data["dependency_file_policy"] is True
+    assert "Use query or start_line" in result.data["suggestion"]
+
+
 def test_format_tool_result_message_truncates_content_in_the_middle() -> None:
     result = ToolResult(
         tool_name="run_bash",
