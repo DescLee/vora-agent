@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Any, Literal, Protocol, Sequence
 
+from vora.logging import project_cache_dir
 from vora.models import Artifact, CompressionSnapshot, ContextBundle, ContextSegment, MemoryItem, Message, Observation, SessionState
 from vora.redaction import redact_sensitive_text
 
@@ -24,6 +27,27 @@ MAX_TOOL_MESSAGE_CHARS = 800
 RECENT_HISTORY_MESSAGE_COUNT = 4
 
 
+@dataclass(frozen=True)
+class ContextFragment:
+    marker: str
+    body: str
+    role: str = "system"
+    max_tokens: int = 1_000
+
+    def render(self) -> str:
+        return f"[vora-context:{self.marker}]\n{_truncate_middle_to_token_budget(self.body, self.max_tokens)}"
+
+    def to_message(self) -> Message:
+        role = self.role if self.role in {"user", "agent", "system", "tool"} else "system"
+        if role == "user":
+            return Message.user(self.render())
+        if role == "agent":
+            return Message.agent(self.render())
+        if role == "tool":
+            return Message.tool(self.render(), tool_call_id=f"context-{self.marker}")
+        return Message.system(self.render())
+
+
 class CompressionPipelineResult(BaseModel):
     messages: list[Message]
     snapshots: list[CompressionSnapshot] = Field(default_factory=list)
@@ -36,6 +60,8 @@ class CompressionPipelineResult(BaseModel):
 
 
 PROJECT_OVERVIEW_HINT = "project_code_overview"
+PROJECT_OVERVIEW_CACHE_VERSION = 1
+PROJECT_OVERVIEW_CACHE_FILENAME = "project-overview.json"
 PROJECT_OVERVIEW_TOP_LEVEL_DESCRIPTIONS = {
     "README.md": "项目说明、安装方式和使用入口",
     "pyproject.toml": "Python 项目配置、依赖和脚本入口",
@@ -239,6 +265,37 @@ def compact_messages(messages: Sequence[Message], token_budget: int) -> list[Mes
 
 def estimate_message_tokens(messages: Sequence[Message]) -> int:
     return sum(max(1, len(message.content) // 2) for message in messages)
+
+
+def build_context_budget_message(messages: Sequence[Message], token_limit: int | None) -> Message | None:
+    if token_limit is None or token_limit <= 0:
+        return None
+    estimated_tokens = estimate_message_tokens(messages)
+    remaining_tokens = max(0, token_limit - estimated_tokens)
+    usage_percent = min(999.9, estimated_tokens / token_limit * 100)
+    body = "\n".join(
+        [
+            "当前上下文预算",
+            f"- 上下文窗口：{token_limit} tokens",
+            f"- 已估算使用：{estimated_tokens} tokens（{usage_percent:.1f}%）",
+            f"- 剩余预算：{remaining_tokens} tokens",
+            "- 指令：优先使用定向读取和简短工具输出；避免重复读取已观察过的大块内容。",
+        ]
+    )
+    return ContextFragment(marker="token-budget", body=body, max_tokens=200).to_message()
+
+
+def _truncate_middle_to_token_budget(text: str, token_budget: int) -> str:
+    if token_budget <= 0:
+        return ""
+    if estimate_tokens(text, "mixed") <= token_budget:
+        return text
+    max_chars = max(20, token_budget * 2)
+    if len(text) <= max_chars:
+        return text
+    marker = f"\n... [omitted {len(text) - max_chars} char(s)]\n"
+    edge_chars = max(1, (max_chars - len(marker)) // 2)
+    return text[:edge_chars].rstrip() + marker + text[-edge_chars:].lstrip()
 
 
 def estimate_context_usage(messages: Sequence[Message], token_limit: int | None) -> tuple[int, float | None]:
@@ -527,6 +584,20 @@ def build_project_code_overview(workspace: Path, max_depth: int = 2) -> str:
     return "\n".join(lines).rstrip()
 
 
+def build_cached_project_code_overview(workspace: Path, max_depth: int = 2) -> str:
+    root = workspace.expanduser().resolve()
+    if not root.exists():
+        return build_project_code_overview(workspace, max_depth=max_depth)
+    signature = _project_overview_signature(root, max_depth=max_depth)
+    cache_path = project_cache_dir(root) / PROJECT_OVERVIEW_CACHE_FILENAME
+    cached = _read_project_overview_cache(cache_path, signature=signature, max_depth=max_depth)
+    if cached is not None:
+        return cached
+    overview = build_project_code_overview(root, max_depth=max_depth)
+    _write_project_overview_cache(cache_path, overview=overview, signature=signature, max_depth=max_depth)
+    return overview
+
+
 def build_context_bundle(
     current_user_message: Message,
     recent_messages: Sequence[Message],
@@ -763,6 +834,38 @@ def _project_overview_top_level_entries(root: Path) -> list[Path]:
     return sorted(entries, key=lambda item: (preferred_order.get(item.name, 100), not item.is_dir(), item.name.lower()))
 
 
+def _project_overview_signature(root: Path, max_depth: int) -> str:
+    entries: list[dict[str, Any]] = []
+    for child in _project_overview_top_level_entries(root):
+        _append_project_overview_signature_entry(child, root, depth=0, max_depth=max_depth, entries=entries)
+    return json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _append_project_overview_signature_entry(
+    path: Path,
+    root: Path,
+    depth: int,
+    max_depth: int,
+    entries: list[dict[str, Any]],
+) -> None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return
+    entries.append(
+        {
+            "path": path.relative_to(root).as_posix(),
+            "dir": path.is_dir(),
+            "size": 0 if path.is_dir() else stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    )
+    if not path.is_dir() or depth >= max_depth:
+        return
+    for child in _project_overview_children(path):
+        _append_project_overview_signature_entry(child, root, depth + 1, max_depth, entries)
+
+
 def _format_overview_entry(path: Path, root: Path, depth: int, max_depth: int) -> list[str]:
     relative = path.relative_to(root).as_posix()
     name = path.name + ("/" if path.is_dir() else "")
@@ -849,8 +952,40 @@ def _is_noise_entry(path: Path) -> bool:
     return name.startswith(".") and name not in {".env.example", ".gitignore"}
 
 
+def _read_project_overview_cache(cache_path: Path, *, signature: str, max_depth: int) -> str | None:
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("version") != PROJECT_OVERVIEW_CACHE_VERSION:
+        return None
+    if raw.get("max_depth") != max_depth or raw.get("signature") != signature:
+        return None
+    overview = raw.get("overview")
+    return overview if isinstance(overview, str) and overview.strip() else None
+
+
+def _write_project_overview_cache(cache_path: Path, *, overview: str, signature: str, max_depth: int) -> None:
+    payload = {
+        "version": PROJECT_OVERVIEW_CACHE_VERSION,
+        "max_depth": max_depth,
+        "signature": signature,
+        "overview": overview,
+    }
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return
+
+
 __all__ = [
+    "ContextFragment",
     "ContextIntegrityError",
+    "build_cached_project_code_overview",
+    "build_context_budget_message",
     "build_project_code_overview",
     "build_segments",
     "build_context_bundle",

@@ -194,6 +194,8 @@ class SessionState(BaseModel):
     run_ids: list[str] = Field(default_factory=list)
     model_context_limit: int | None = None
     total_prompt_tokens: int = 0
+    total_cached_prompt_tokens: int = 0
+    total_non_cached_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     total_tokens: int = 0
 
@@ -201,11 +203,27 @@ class SessionState(BaseModel):
     def create(cls, cwd: Path) -> "SessionState":
         return cls(cwd=cwd)
 
-    def record_token_usage(self, prompt_tokens: int | None = None, completion_tokens: int | None = None, total_tokens: int | None = None) -> None:
+    def record_token_usage(
+        self,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        total_tokens: int | None = None,
+        cached_prompt_tokens: int | None = None,
+        non_cached_prompt_tokens: int | None = None,
+    ) -> None:
         prompt = prompt_tokens if isinstance(prompt_tokens, int) and prompt_tokens > 0 else 0
         completion = completion_tokens if isinstance(completion_tokens, int) and completion_tokens > 0 else 0
         total = total_tokens if isinstance(total_tokens, int) and total_tokens > 0 else prompt + completion
+        cached = cached_prompt_tokens if isinstance(cached_prompt_tokens, int) and cached_prompt_tokens > 0 else 0
+        cached = min(cached, prompt) if prompt > 0 else cached
+        non_cached = (
+            non_cached_prompt_tokens
+            if isinstance(non_cached_prompt_tokens, int) and non_cached_prompt_tokens > 0
+            else max(0, prompt - cached)
+        )
         self.total_prompt_tokens += prompt
+        self.total_cached_prompt_tokens += cached
+        self.total_non_cached_prompt_tokens += non_cached
         self.total_completion_tokens += completion
         self.total_tokens += total
 

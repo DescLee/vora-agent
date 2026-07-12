@@ -107,8 +107,35 @@ def format_process(
     process = format_llm_tool_rounds(task, trace_events, limit=None if full_history else 5)
     if process == "工具活动\n- 暂无工具调用。" and not task.result and task.status not in {"done", "failed"}:
         process = PENDING_PROCESS_TEXT
-    sections = [process]
+    sections = [format_active_skill_notice(task, trace_events), process]
     return "\n\n".join(section for section in sections if section)
+
+
+def format_active_skill_notice(task: TaskState, events: list[TraceEvent]) -> str:
+    raw_skill = task.metadata.get("active_skill")
+    skill_name = ""
+    description = ""
+    if isinstance(raw_skill, dict):
+        raw_name = raw_skill.get("name")
+        raw_description = raw_skill.get("description")
+        skill_name = raw_name if isinstance(raw_name, str) else ""
+        description = raw_description if isinstance(raw_description, str) else ""
+    for event in events:
+        if event.data.get("message_type") != "skill_activated":
+            continue
+        raw_name = event.data.get("skill_name")
+        raw_description = event.data.get("description")
+        if isinstance(raw_name, str) and raw_name:
+            skill_name = raw_name
+        if isinstance(raw_description, str) and raw_description:
+            description = raw_description
+        break
+    if not skill_name:
+        return ""
+    line = f"启用 Skill：{redact_sensitive_text(skill_name)}"
+    if description:
+        line += f"（{_short_text(redact_sensitive_text(description), limit=80)}）"
+    return line
 
 
 def format_task_overview(task: TaskState) -> str:
@@ -327,7 +354,6 @@ def format_tool_batch_lines(
     for call_index, call in enumerate(tool_calls, start=start_index):
         tool_call_id = str(call.get("id", "unknown"))
         name = str(call.get("name", "unknown"))
-        args = format_inline_args(call.get("args", {}))
         prefix = prefixes.get(tool_call_id, f"{iteration}.{call_index}" if iteration else str(call_index))
         event = event_by_call_id.get(tool_call_id)
         diff_preview = str(event.data.get("diff_preview") or "").strip() if event is not None else ""
@@ -342,8 +368,7 @@ def format_tool_batch_lines(
                 status = "成功" if observation.ok else "失败"
                 summary = redact_sensitive_text(observation.summary)
         lines.append(f"● {format_ran_tool_label(prefix, name, tool_call_id, call.get('args', {}))}")
-        lines.append(f"  参数: {args or '-'}")
-        lines.append(f"  工具结果: {_format_tool_result_text(status, summary)}")
+        lines.append(f"  └ {_format_tool_result_text(status, summary)}")
         if diff_preview:
             lines.append("  变更预览:")
             lines.extend(f"  {line}" for line in diff_preview.splitlines())
@@ -361,12 +386,10 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
                 continue
             tool_call_id = call.get("id", "unknown")
             name = call.get("name", "unknown")
-            args = format_inline_args(call.get("args", {}))
             tool_call_lines.extend(
                 [
                     f"● {format_ran_tool_label(None, str(name), str(tool_call_id), call.get('args', {}))}",
-                    f"  参数: {args or '-'}",
-                    "  工具结果: 等待",
+                    "  └ waiting",
                 ]
             )
 
@@ -390,12 +413,10 @@ def format_tool_activity(task: TaskState, visible_events: list[TraceEvent] | Non
         tool_call_id = event.data.get("tool_call_id", "unknown")
         status = format_tool_return_status(event.data)
         summary = event.data.get("summary") or event.message
-        args = format_inline_args(event.data.get("args", {}))
         tool_return_lines.extend(
             [
                 f"● {format_ran_tool_label(None, str(tool_name), str(tool_call_id), event.data.get('args', {}))}",
-                f"  参数: {args or '-'}",
-                f"  工具结果: {_format_tool_result_text(status, redact_sensitive_text(str(summary)))}",
+                f"  └ {_format_tool_result_text(status, redact_sensitive_text(str(summary)))}",
             ]
         )
 
@@ -423,17 +444,29 @@ def format_observation_return_lines(observations: list[Observation]) -> list[str
         lines.extend(
             [
                 f"● Ran unknown({tool_call_id})",
-                "  参数: -",
-                f"  工具结果: {_format_tool_result_text(status, summary)}",
+                f"  └ {_format_tool_result_text(status, summary)}",
             ]
         )
     return lines
 
 
 def _format_tool_result_text(status: str, summary: str = "") -> str:
+    if status == "等待":
+        return "waiting"
     if not summary:
-        return status
-    return f"{status}，{summary}"
+        return _format_compact_status(status)
+    if status in {"成功", "已返回"}:
+        return summary
+    return f"{_format_compact_status(status)}，{summary}"
+
+
+def _format_compact_status(status: str) -> str:
+    labels = {
+        "成功": "done",
+        "失败": "failed",
+        "已返回": "returned",
+    }
+    return labels.get(status, status)
 
 
 def format_ran_tool_label(prefix: object, name: str, tool_call_id: str, args: object) -> str:
@@ -442,7 +475,27 @@ def format_ran_tool_label(prefix: object, name: str, tool_call_id: str, args: ob
         command = str(args.get("command") or args.get("content") or "").strip()
         if command:
             return f"Ran {call_ref}{_short_text(command, limit=96)}"
+    if isinstance(args, dict):
+        primary = _format_primary_tool_arg(name, args)
+        if primary:
+            return f"Ran {call_ref}{name} {primary}"
     return f"Ran {call_ref}{name}({tool_call_id})"
+
+
+def _format_primary_tool_arg(name: str, args: dict) -> str:
+    primary_keys_by_tool = {
+        "read_file": ("path",),
+        "list_files": ("path",),
+        "search_files": ("query", "path"),
+        "grep": ("pattern", "path"),
+        "write_file": ("path",),
+        "replace_in_file": ("path",),
+    }
+    for key in primary_keys_by_tool.get(name, ("path", "query")):
+        value = args.get(key)
+        if value not in (None, ""):
+            return format_display_value(value, limit=80)
+    return ""
 
 
 def format_tool_return_status(data: dict) -> str:
@@ -923,6 +976,17 @@ def style_output_fragments(text: str) -> list[tuple[str, str]]:
             elif stripped_line.endswith("变更预览:"):
                 in_reasoning = False
                 in_process_diff = True
+            elif stripped_line.startswith("● Ran "):
+                in_reasoning = False
+                style = "class:process.tool"
+            elif stripped_line.startswith("└ ") or stripped_line.startswith("│ "):
+                in_reasoning = False
+                if stripped_line == "└ waiting":
+                    style = "class:process.tool.waiting"
+                elif stripped_line.startswith("└ failed"):
+                    style = "class:process.tool.failed"
+                else:
+                    style = "class:process.tool.result"
             elif in_process_diff:
                 if bare_line.startswith("  "):
                     style = _diff_line_style(stripped_line)

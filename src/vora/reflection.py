@@ -9,11 +9,11 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from vora.context import build_project_code_overview, should_include_project_code_overview
+from vora.context import build_cached_project_code_overview, should_include_project_code_overview
 from vora.llm import LLMClient, LLMResult, extract_usage, openai_messages
 from vora.logging import EventLogger
 from vora.models import Message, SessionState, TaskState, TraceEvent
-from vora.react import ReActLoop
+from vora.react import ReActLoop, _format_execution_event_summary
 from vora.reflector import ReflectionDecision, Reflector
 from vora.token_breakdown import record_llm_token_breakdown
 from vora.validation import looks_like_inline_test_script, looks_like_validation_command
@@ -34,6 +34,8 @@ def _record_session_usage(session: SessionState, payload: dict) -> None:
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         total_tokens=usage.get("total_tokens"),
+        cached_prompt_tokens=usage.get("cached_prompt_tokens"),
+        non_cached_prompt_tokens=usage.get("non_cached_prompt_tokens"),
     )
 
 
@@ -215,7 +217,7 @@ class ReflectionLoop:
             lines.append("- [empty]")
         recent_observations = [
             observation.summary
-            for observation in task.observations[-8:]
+            for observation in task.observations[-16:]
             if observation.summary.strip()
         ]
         lines.extend(["", "最近工具观察："])
@@ -223,15 +225,18 @@ class ReflectionLoop:
             lines.extend(f"- {summary}" for summary in recent_observations)
         else:
             lines.append("- [empty]")
+        event_summary = _format_execution_event_summary(task)
+        if event_summary:
+            lines.extend(["", event_summary])
         if should_include_project_code_overview(task.goal):
-            lines.extend(["", build_project_code_overview(task.cwd)])
+            lines.extend(["", build_cached_project_code_overview(task.cwd)])
         lines.extend(["", "待审查草稿：", draft])
         return [Message.system("\n".join(lines))]
 
     def _build_follow_up_context(self, task: TaskState, draft: str, reason: str) -> str:
         recent_observations = [
             observation.summary
-            for observation in task.observations[-5:]
+            for observation in task.observations[-16:]
             if observation.summary.strip()
         ]
         lines = [
@@ -247,7 +252,7 @@ class ReflectionLoop:
                 [
                     "",
                     "当前项目上下文：",
-                    build_project_code_overview(task.cwd),
+                    build_cached_project_code_overview(task.cwd),
                     "",
                     "纠偏要求：用户提到“当前项目/这个项目/这个工程”时，指的就是当前工作目录。不要要求用户再提供项目描述、链接或代码；请基于目录结构决定是否继续调用工具。",
                 ]

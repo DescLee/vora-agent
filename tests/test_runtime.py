@@ -15,9 +15,9 @@ from vora.reflection import ReflectionLoop, ReflectionResult
 from vora.logging import EventLogger
 from vora.reporter import Reporter
 from vora.logging import project_outputs_dir
-from vora.runtime import AgentRuntime
+from vora.runtime import AgentRuntime, _apply_read_efficiency_limits
 from vora.session import SessionManager
-from vora.tools.base import ToolResult
+from vora.tools.base import ToolPreview, ToolResult
 from vora.tools.file_tools import ReplaceInFileTool
 from vora.tools.registry import ToolRegistry
 from support import ScriptedLLM
@@ -379,6 +379,24 @@ def test_react_loop_forces_final_answer_when_budget_is_zero(tmp_path: Path) -> N
         event.phase == "react" and "forcing final answer" in event.message
         for event in task.trace_events
     )
+
+
+def test_react_loop_fails_when_forced_final_answer_still_requests_tools(tmp_path: Path) -> None:
+    class ToolOnlyLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                tool_calls=[
+                    ToolCall(id="call-read", name="read_file", args={"path": "README.md"}),
+                ]
+            )
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取 README.md", cwd=tmp_path, limits=LoopLimits(max_react_iterations=0))
+
+    with pytest.raises(RuntimeError, match="MAX_REACT_ITERATIONS_REACHED"):
+        ReActLoop(ToolOnlyLLM(), ToolRegistry()).run(task, session)
+
+    assert any("ignored tool calls" in event.message for event in task.trace_events)
 
 
 def test_react_loop_preserves_assistant_reasoning_content_between_tool_rounds(tmp_path: Path) -> None:
@@ -1225,7 +1243,7 @@ def test_react_loop_trims_old_conversation_context_before_llm_request(tmp_path: 
     class InspectingLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             text = "\n".join(message.content for message in messages)
-            assert "很早以前的大段历史" not in text
+            assert "很早以前的大段历史 0" not in text
             assert "最近结论：保留这个重点" in text
             assert "请继续优化" in text
             return LLMResult(content="已继续")
@@ -1264,10 +1282,10 @@ def test_react_loop_limits_tool_schema_for_research_task(tmp_path: Path) -> None
     assert result == "分析完成"
 
 
-def test_react_loop_uses_read_only_tools_for_code_review_task(tmp_path: Path) -> None:
+def test_react_loop_allows_read_only_bash_for_code_review_task(tmp_path: Path) -> None:
     class InspectingToolNamesLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
-            assert set(tool_names) == {"list_files", "read_file"}
+            assert set(tool_names) == {"list_files", "read_file", "run_bash"}
             return LLMResult(content="审查完成")
 
     task = TaskState.create(goal="看看当前项目代码还有哪些问题，列清单", cwd=tmp_path)
@@ -1280,6 +1298,62 @@ def test_react_loop_uses_read_only_tools_for_code_review_task(tmp_path: Path) ->
     result = ReActLoop(InspectingToolNamesLLM(), ToolRegistry()).run(task, session)
 
     assert result == "审查完成"
+
+
+def test_react_loop_code_review_prompt_guides_read_only_bash(tmp_path: Path) -> None:
+    class InspectingPromptLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            system_text = "\n".join(message.content for message in messages if message.role == "system")
+            assert "run_bash 执行只读搜索" in system_text
+            assert "不要用它修改文件、安装依赖、删除文件" in system_text
+            return LLMResult(content="审查完成")
+
+    task = TaskState.create(goal="看看当前项目代码还有哪些问题，列清单", cwd=tmp_path)
+    task.plan = [
+        PlanStep(description="定位关键代码模块并审查风险", intent="code_review"),
+        PlanStep(description="输出问题清单", intent="report"),
+    ]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(InspectingPromptLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "审查完成"
+
+
+def test_runtime_injects_frontend_code_review_strategy(tmp_path: Path) -> None:
+    package_json = {
+        "scripts": {"lint": "eslint .", "build:UAT": "vite build", "test": "vitest"},
+        "dependencies": {"react": "^18.0.0"},
+        "devDependencies": {"vite": "^5.0.0"},
+    }
+    (tmp_path / "package.json").write_text(json.dumps(package_json), encoding="utf-8")
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
+    class InspectingStrategyLLM:
+        def __init__(self) -> None:
+            self.system_prompts: list[str] = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.system_prompts.append("\n".join(message.content for message in messages if message.role == "system"))
+            return LLMResult(content="审查完成")
+
+    runtime = AgentRuntime(llm=ScriptedLLM(), cwd=tmp_path)
+    llm = InspectingStrategyLLM()
+    runtime.react_loop.llm = llm
+    session = SessionState.create(cwd=tmp_path)
+
+    result = runtime.on_user_message("请你看看当前项目还有哪些问题，跟我说下并列一个清单给我", session)
+
+    assert result.active_task is not None
+    strategy = result.active_task.metadata["strategy"]
+    assert strategy["name"] == "frontend_code_review"
+    system_prompt = llm.system_prompts[0]
+    assert "当前任务策略：frontend_code_review" in system_prompt
+    assert "验证优先" in system_prompt
+    assert "git status --short" in system_prompt
+    assert "build:UAT" in system_prompt
+    assert "发布阻塞" in system_prompt
+    assert "安全/密钥" in system_prompt
 
 
 def test_react_loop_keeps_write_and_shell_tools_for_code_task(tmp_path: Path) -> None:
@@ -1305,22 +1379,22 @@ def test_code_review_prompt_keeps_only_recent_tool_working_set(tmp_path: Path) -
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             text = "\n".join(message.content for message in messages)
             tool_messages = [message for message in messages if message.role == "tool"]
-            assert len(tool_messages) <= 4
+            assert len(tool_messages) <= 8
             assert "old tool payload 0" not in text
-            assert "old tool payload 5" in text
+            assert "old tool payload 9" in text
             assert "代码审查 Findings Ledger" in text
             return LLMResult(content="已基于工作集完成审查")
 
     session = SessionState.create(cwd=tmp_path)
     session.messages.append(Message.user("看看代码问题"))
-    for index in range(6):
+    for index in range(10):
         call_id = f"call-old-{index}"
         session.messages.append(Message.agent("读取文件", tool_call_ids=[call_id]))
         session.messages[-1].metadata["tool_call_names"] = {call_id: "read_file"}
         session.messages.append(Message.tool(f"old tool payload {index}", tool_call_id=call_id))
     task = TaskState.create(goal="继续审查代码问题", cwd=tmp_path)
     task.plan = [PlanStep(description="继续代码审查", intent="code_review")]
-    for index in range(6):
+    for index in range(10):
         task.observations.append(
             Observation(
                 tool_call_id=f"call-old-{index}",
@@ -1389,9 +1463,10 @@ def test_react_loop_skips_duplicate_successful_read_file_calls(tmp_path: Path) -
     ]
     assert [event.data.get("summary") for event in read_events] == [
         "read README.md",
-        "read_file skipped: already read README.md",
+        "read_file skipped: already read README.md; previous result was content_ref-only, use query or start_line/limit_lines for exact content",
     ]
     assert read_events[1].data.get("deduplicated") is True
+    assert read_events[1].data.get("requires_targeted_read") is True
     assert task.observations[-1].content == ""
 
 
@@ -1429,6 +1504,156 @@ def test_react_loop_skips_duplicate_read_file_calls_in_same_iteration(tmp_path: 
     assert read_events[1].data.get("deduplicated") is True
 
 
+def test_react_loop_skips_read_file_line_range_already_covered(tmp_path: Path) -> None:
+    class CoveredRangeReadLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read-wide",
+                            name="read_file",
+                            args={"path": "pages/practice/practice.js", "start_line": 1, "limit_lines": 214},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read-narrow",
+                            name="read_file",
+                            args={"path": "pages/practice/practice.js", "start_line": 46, "limit_lines": 165},
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    target = tmp_path / "pages" / "practice"
+    target.mkdir(parents=True)
+    (target / "practice.js").write_text("\n".join("x" for _ in range(1, 260)) + "\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="看看当前项目还有哪些问题，列一个清单", cwd=tmp_path)
+
+    result = ReActLoop(CoveredRangeReadLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert [event.data.get("summary") for event in read_events] == [
+        "read pages/practice/practice.js lines 1-214",
+        "read_file skipped: requested range already covered for pages/practice/practice.js",
+    ]
+    assert read_events[0].data.get("model_content_inlined") is True
+    assert read_events[1].data.get("already_covered") is True
+    assert task.observations[-1].content == ""
+
+
+def test_react_loop_does_not_skip_covered_read_file_range_when_prior_content_was_not_inlined(tmp_path: Path) -> None:
+    class CoveredButCompressedRangeReadLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read-wide",
+                            name="read_file",
+                            args={"path": "pages/practice/practice.js", "start_line": 1, "limit_lines": 214},
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-read-narrow",
+                            name="read_file",
+                            args={"path": "pages/practice/practice.js", "start_line": 46, "limit_lines": 20},
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    target = tmp_path / "pages" / "practice"
+    target.mkdir(parents=True)
+    (target / "practice.js").write_text("\n".join(f"line {index}" for index in range(1, 260)) + "\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="读取代码片段", cwd=tmp_path)
+
+    result = ReActLoop(CoveredButCompressedRangeReadLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file"
+    ]
+    assert [event.data.get("summary") for event in read_events] == [
+        "read pages/practice/practice.js lines 1-214",
+        "read pages/practice/practice.js lines 46-65",
+    ]
+    assert read_events[0].data.get("model_content_inlined") is False
+    assert read_events[1].data.get("model_content_inlined") is True
+    assert read_events[1].data.get("already_covered") is not True
+
+
+def test_react_loop_limits_repeated_reads_per_file_for_code_review(tmp_path: Path) -> None:
+    class RepeatedLineReadsLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls <= 4:
+                start_line = 1 + ((self.calls - 1) * 10)
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call-read-{self.calls}",
+                            name="read_file",
+                            args={"path": "pages/practice/practice.js", "start_line": start_line, "limit_lines": 5},
+                        )
+                    ]
+                )
+            return LLMResult(content="ok")
+
+    target = tmp_path / "pages" / "practice"
+    target.mkdir(parents=True)
+    (target / "practice.js").write_text("\n".join(f"line {index}" for index in range(1, 80)) + "\n", encoding="utf-8")
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="看看当前项目还有哪些问题，列一个清单", cwd=tmp_path)
+    task.plan = [PlanStep(description="审查代码问题", intent="code_review")]
+
+    result = ReActLoop(RepeatedLineReadsLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "ok"
+    read_events = [
+        event for event in task.trace_events
+        if event.phase == "tool" and event.data.get("tool_name") == "read_file" and "ok" in event.data
+    ]
+    assert [event.data.get("ok") for event in read_events] == [True, True, True, False]
+    assert read_events[-1].data.get("error_code") == "READ_FILE_AUDIT_BUDGET_EXCEEDED"
+
+
+def test_runtime_keeps_large_react_limit_for_code_review_tasks(tmp_path: Path) -> None:
+    task = TaskState.create(goal="请你看看当前项目还有哪些问题，列一个清单", cwd=tmp_path)
+    task.plan = [PlanStep(description="审查项目问题", intent="code_review")]
+
+    _apply_read_efficiency_limits(task)
+
+    assert task.limits.max_react_iterations == 99
+    assert task.metadata["read_efficiency_limits"]["reason"] == "broad_code_review"
+
+
 def test_react_loop_skips_duplicate_list_files_calls_across_iterations(tmp_path: Path) -> None:
     class RepeatingListLLM:
         def __init__(self) -> None:
@@ -1458,7 +1683,7 @@ def test_react_loop_skips_duplicate_list_files_calls_across_iterations(tmp_path:
     assert list_events[1].data.get("deduplicated") is True
 
 
-def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: Path) -> None:
+def test_react_loop_reuses_duplicate_bash_result_for_code_review_across_iterations(tmp_path: Path) -> None:
     class RepeatingCommandLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -1471,18 +1696,42 @@ def test_react_loop_blocks_duplicate_command_calls_across_iterations(tmp_path: P
                 return LLMResult(tool_calls=[ToolCall(id="call-bash-2", name="run_bash", args={"command": "printf x"})])
             return LLMResult(content="ok")
 
-    session = SessionState.create(cwd=tmp_path)
-    task = TaskState.create(goal="重复执行命令", cwd=tmp_path)
+    class CountingRunBashTool:
+        name = "run_bash"
+        risk_level = "command"
+        requires_confirmation = False
+        is_read_only = True
 
-    result = ReActLoop(RepeatingCommandLLM(), ToolRegistry()).run(task, session)
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def preview(self, **kwargs):  # noqa: ANN001, ANN201
+            return ToolPreview(tool_name="run_bash", summary=str(kwargs.get("command", "")))
+
+        def resource_keys(self, **kwargs):  # noqa: ANN001, ANN201
+            return []
+
+        def run(self, **kwargs):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            return ToolResult(tool_name="run_bash", ok=True, summary="command exited 0", content="x")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="看看当前项目代码还有哪些问题，列清单", cwd=tmp_path)
+    task.plan = [PlanStep(description="审查项目问题", intent="code_review")]
+    tool = CountingRunBashTool()
+
+    result = ReActLoop(RepeatingCommandLLM(), ToolRegistry(tools=[tool])).run(task, session)
 
     assert result == "ok"
+    assert tool.calls == 1
     command_events = [
         event for event in task.trace_events
         if event.phase == "tool" and event.data.get("tool_name") == "run_bash"
     ]
-    assert [event.data.get("error_code") for event in command_events] == [None, "DUPLICATE_TOOL_CALL_BLOCKED"]
-    assert command_events[1].data.get("blocked_duplicate") is True
+    assert [event.data.get("ok") for event in command_events] == [True, True]
+    assert command_events[1].data.get("summary") == "run_bash skipped: duplicate command result reused"
+    assert command_events[1].data.get("deduplicated") is True
+    assert command_events[1].data.get("source_tool_call_id") == "call-bash-1"
 
 
 def test_react_loop_requires_confirmation_when_llm_marks_command_high_risk(tmp_path: Path) -> None:
@@ -1662,6 +1911,111 @@ def test_react_loop_path_rewrite_ignores_noise_directories(tmp_path: Path) -> No
     read_event = next(event for event in task.trace_events if event.phase == "tool" and event.data.get("tool_name") == "read_file")
     assert read_event.data["ok"] is True
     assert read_event.data["args"]["path"] == "src/target.py"
+
+
+def test_code_review_prompt_prefers_bash_before_file_tools(tmp_path: Path) -> None:
+    class InspectPromptLLM:
+        def __init__(self) -> None:
+            self.messages = []
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201
+            self.messages.append(messages)
+            self.tool_names.append(tool_names)
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="请看看当前项目还有哪些问题，并列一个清单", cwd=tmp_path)
+    task.plan = [PlanStep(description="审查项目问题并输出清单", intent="code_review")]
+    llm = InspectPromptLLM()
+
+    result = ReActLoop(llm, ToolRegistry()).run(task, session)
+
+    assert result == "完成"
+    system_prompt = llm.messages[0][0].content
+    assert "验证优先、证据优先、风险优先" in system_prompt
+    assert "工具优先级是 run_bash > read_file > list_files" in system_prompt
+    assert "run_bash 用于批量定位和验证" in system_prompt
+    assert "read_file 用于精读证据文件" in system_prompt
+    assert "只有 bash 不足或被拒绝时才用 list_files 补充" in system_prompt
+    assert "run_bash 输出必须主动限量" in system_prompt
+    assert llm.tool_names[0] == ["run_bash", "read_file", "list_files"]
+
+
+def test_mixed_review_and_edit_plan_exposes_code_write_tools(tmp_path: Path) -> None:
+    class InspectToolsLLM:
+        def __init__(self) -> None:
+            self.tool_names = []
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.tool_names.append(list(tool_names))
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="优化 API 封装错误处理", cwd=tmp_path)
+    task.plan = [
+        PlanStep(description="读取 src/api/http.ts 分析错误处理", intent="code_review"),
+        PlanStep(description="重构 http.ts 中的错误处理", intent="code_edit"),
+    ]
+    llm = InspectToolsLLM()
+
+    result = ReActLoop(llm, ToolRegistry()).run(task, session)
+
+    assert result == "完成"
+    assert "replace_in_file" in llm.tool_names[0]
+    assert "write_file" in llm.tool_names[0]
+
+
+def test_code_edit_prompt_requires_batching_related_file_reads(tmp_path: Path) -> None:
+    class InspectPromptLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            system_text = "\n".join(message.content for message in messages if message.role == "system")
+            assert "同一阶段需要多个文件时，一次性并行请求多个 read_file" in system_text
+            assert "不要一轮只读取一个相关文件" in system_text
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="优化 API 封装错误处理", cwd=tmp_path)
+    task.plan = [
+        PlanStep(description="读取 src/api/http.ts 分析错误处理", intent="code_review"),
+        PlanStep(description="重构 http.ts 中的错误处理", intent="code_edit"),
+    ]
+
+    result = ReActLoop(InspectPromptLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "完成"
+
+
+def test_react_prompt_includes_execution_event_summary(tmp_path: Path) -> None:
+    class InspectPromptLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            system_text = "\n".join(message.content for message in messages if message.role == "system")
+            assert "关键执行事件" in system_text
+            assert "最近成功写入：replace_in_file src/api/http.ts" in system_text
+            assert "最近通过验证：run_bash pnpm run build" in system_text
+            return LLMResult(content="完成")
+
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="优化 API 封装错误处理", cwd=tmp_path)
+    task.plan = [PlanStep(description="重构 http.ts", intent="code_edit")]
+    task.trace_events.extend(
+        [
+            TraceEvent(
+                phase="tool",
+                message="Tool replace_in_file finished: ok",
+                data={"tool_name": "replace_in_file", "ok": True, "written_path": "src/api/http.ts", "summary": "replaced 1 occurrence"},
+            ),
+            TraceEvent(
+                phase="tool",
+                message="Tool run_bash finished: ok",
+                data={"tool_name": "run_bash", "ok": True, "exit_code": 0, "summary": "command exited 0", "args": {"command": "pnpm run build"}},
+            ),
+        ]
+    )
+
+    result = ReActLoop(InspectPromptLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "完成"
 
 
 def test_react_loop_forces_final_answer_after_code_change_and_passing_test(tmp_path: Path) -> None:

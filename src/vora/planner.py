@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import cast
 
-from vora.context import build_project_code_overview
+from vora.context import build_cached_project_code_overview
 from vora.llm import LLMClient, LLMRequestError, extract_usage, get_default_llm_client, openai_messages
 from vora.logging import EventLogger
 from vora.models import Message, PlanIntent, PlanStep, SessionState
@@ -23,6 +23,7 @@ PLAN_INSTRUCTIONS = (
     "涉及项目或代码时，先基于下方目录结构判断需要查看的范围；只有信息不足时才计划调用工具。"
     "先定位目标模块，再决定是否读取文件；不要把“查看项目”默认扩成全仓库扫描。"
     "工具使用要克制：优先复用已有上下文，优先少量关键文件，避免重复 list_files/read_file，避免无目的地全量扫描。"
+    "代码审查、问题清单、项目诊断类任务应先规划用只读 shell 命令批量定位线索，再按证据读取少量文件。"
     "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要规划等待用户选择；"
     "应自行选择保守方案并继续执行。"
     "计划最多 4 步，每一步必须带可验证产出，例如定位范围、读取依据、修改点、测试或最终结论。"
@@ -228,6 +229,8 @@ def _record_session_usage(session: SessionState, payload: dict) -> None:
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         total_tokens=usage.get("total_tokens"),
+        cached_prompt_tokens=usage.get("cached_prompt_tokens"),
+        non_cached_prompt_tokens=usage.get("non_cached_prompt_tokens"),
     )
 
 
@@ -240,7 +243,7 @@ def build_planner_system_prompt(session: SessionState, active_skill: SkillSpec |
         f"- 项目名：{workspace.name}",
         f"- 工作目录：{workspace}",
         "",
-        build_project_code_overview(workspace),
+        build_cached_project_code_overview(workspace),
     ]
     if active_skill is not None:
         parts.extend(["", format_skill_for_planner(active_skill)])

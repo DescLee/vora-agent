@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from vora.llm import LLMResult
-from vora.models import AgentError, LoopLimits, PlanStep, SessionState, TaskState, TraceEvent
+from vora.models import AgentError, LoopLimits, Observation, PlanStep, SessionState, TaskState, TraceEvent
 from vora.planner import Planner, build_planner_system_prompt
 from vora.reflection import ReflectionLoop
 from vora.reflector import Reflector
@@ -210,6 +210,7 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
     assert "必须使用中文" in prompt
     assert "不要输出英文思考句" in prompt
     assert "工具使用要克制" in prompt
+    assert "只读 shell 命令批量定位线索" in prompt
     assert "不要规划等待用户选择" in prompt
     assert "计划最多 4 步" in prompt
     assert "每一步必须带可验证产出" in prompt
@@ -630,6 +631,7 @@ def test_reflection_accepts_js_syntax_check_after_latest_code_change(tmp_path: P
         "python -m compileall src",
         "pnpm lint",
         "npm run typecheck",
+        "npx vite build --mode uat",
         "tsc --noEmit",
         "go test ./...",
         "go vet ./...",
@@ -679,6 +681,27 @@ def test_reflection_accepts_common_validation_commands_after_latest_code_change(
     decision = ReflectionLoop(llm=AcceptingLLM())._decide(task, session, "已修改并验证")
 
     assert decision.decision == "accept"
+
+
+def test_reflection_prompt_includes_recent_sixteen_observations(tmp_path: Path) -> None:
+    task = TaskState.create(goal="修改代码", cwd=tmp_path)
+    for index in range(20):
+        task.observations.append(
+            Observation(
+                tool_call_id=f"call-{index}",
+                ok=True,
+                summary=f"obs-{index}",
+                content="",
+            )
+        )
+    session = SessionState.create(cwd=tmp_path)
+
+    messages = ReflectionLoop()._build_reflection_messages(task, session, "草稿")
+    prompt = messages[0].content
+
+    assert "obs-4" in prompt
+    assert "obs-19" in prompt
+    assert "obs-3" not in prompt
 
 
 def test_reflection_does_not_treat_plain_search_command_as_validation(tmp_path: Path) -> None:

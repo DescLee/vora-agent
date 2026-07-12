@@ -172,6 +172,17 @@ def test_run_bash_redacts_sensitive_values_from_output(tmp_path: Path) -> None:
     assert "access_token=[REDACTED]" in result.data["stderr"]
 
 
+def test_run_bash_keeps_token_header_code_expressions_in_output(tmp_path: Path) -> None:
+    source = "token: localStorage.getItem('console_token') || '',"
+    (tmp_path / "http.ts").write_text(source, encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="cat http.ts")
+
+    assert result.ok is True
+    assert result.content.strip() == f"stdout:\n{source}"
+    assert result.data["stdout"].strip() == source
+
+
 def test_run_bash_preview_redacts_sensitive_values(tmp_path: Path) -> None:
     preview = RunBashTool().preview(
         workspace=tmp_path,
@@ -206,47 +217,50 @@ def test_run_bash_pathlib_open_write_requires_confirmation(tmp_path: Path) -> No
     assert not (tmp_path / "note.md").exists()
 
 
-def test_run_bash_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_sensitive_file_read_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="cat .env")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
+    assert "secret" not in result.content
 
 
-def test_run_bash_grep_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_grep_sensitive_file_is_allowed(tmp_path: Path) -> None:
     (tmp_path / "private.pem").write_text("secret pem", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="grep secret private.pem")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "secret pem" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "secret pem" in result.content
 
 
-def test_run_bash_nested_shell_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_nested_shell_sensitive_file_read_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="echo ok; bash -c 'echo nested; cat .env'")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "nested" in result.content
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_temp_script_nested_shell_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_nested_shell_sensitive_file_read_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     result = RunTempScriptTool().run(workspace=tmp_path, content="sh -c 'echo nested; head -n 1 .env.test'\n")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "nested" in result.content
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_sensitive_input_redirection_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_sensitive_input_redirection_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(
@@ -254,12 +268,12 @@ def test_run_bash_sensitive_input_redirection_requires_confirmation(tmp_path: Pa
         command='python -c "import sys; print(sys.stdin.read())" < .env',
     )
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_temp_script_nested_sensitive_input_redirection_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_nested_sensitive_input_redirection_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     result = RunTempScriptTool().run(
@@ -267,62 +281,62 @@ def test_run_temp_script_nested_sensitive_input_redirection_requires_confirmatio
         content="bash -c 'python -c \"import sys; print(sys.stdin.read())\" < .env.test'\n",
     )
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_sensitive_command_substitution_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_sensitive_command_substitution_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="echo $(cat .env)")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_temp_script_nested_sensitive_command_substitution_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_nested_sensitive_command_substitution_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     result = RunTempScriptTool().run(workspace=tmp_path, content="bash -c 'echo $(cat .env.test)'\n")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_source_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_source_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="set -a; source .env; env")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_temp_script_dot_source_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_dot_source_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     result = RunTempScriptTool().run(workspace=tmp_path, content="set -a\n. .env.test\nenv\n")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_python_open_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_python_open_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="python -c \"print(open('.env').read())\"")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_python_pathlib_read_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_python_pathlib_read_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(
@@ -330,9 +344,9 @@ def test_run_bash_python_pathlib_read_sensitive_file_requires_confirmation(tmp_p
         command="python -c \"from pathlib import Path; print(Path('.env').read_text())\"",
     )
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
 def test_run_bash_python_pathlib_read_env_example_is_allowed(tmp_path: Path) -> None:
@@ -426,31 +440,31 @@ def test_run_bash_gzip_sensitive_file_requires_confirmation(tmp_path: Path) -> N
     assert "sensitive workspace files" in preview.summary
 
 
-def test_run_bash_base64_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_base64_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
-    preview = RunBashTool().preview(workspace=tmp_path, command="base64 .env")
+    preview = RunBashTool().preview(workspace=tmp_path, command="cat .env | base64")
+    result = RunBashTool().run(workspace=tmp_path, command="cat .env | base64")
 
-    assert preview.requires_confirmation is True
-    assert "sensitive workspace files" in preview.summary
+    assert preview.requires_confirmation is False
+    assert result.ok is True
 
 
-def test_run_bash_wc_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_wc_sensitive_file_is_allowed(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="wc -c .env")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
+    assert result.ok is True
+    assert result.error_code is None
 
 
-def test_run_bash_openssl_input_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_openssl_input_sensitive_file_is_allowed(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     preview = RunBashTool().preview(workspace=tmp_path, command="openssl base64 -in .env")
 
-    assert preview.requires_confirmation is True
-    assert "sensitive workspace files" in preview.summary
+    assert preview.requires_confirmation is False
 
 
 def test_run_bash_python_shutil_copy_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
@@ -466,17 +480,17 @@ def test_run_bash_python_shutil_copy_sensitive_file_requires_confirmation(tmp_pa
     assert not (tmp_path / "leaked.txt").exists()
 
 
-def test_run_bash_python_variable_open_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_python_variable_open_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(workspace=tmp_path, command="python -c \"p='.env'; print(open(p).read())\"")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_bash_python_variable_pathlib_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_bash_python_variable_pathlib_sensitive_file_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LLM_API_KEY=secret", encoding="utf-8")
 
     result = RunBashTool().run(
@@ -484,18 +498,17 @@ def test_run_bash_python_variable_pathlib_sensitive_file_requires_confirmation(t
         command="python -c \"from pathlib import Path; p=Path('.env'); print(p.read_text())\"",
     )
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
-def test_run_temp_script_base64_sensitive_file_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_base64_sensitive_file_is_allowed(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     preview = RunTempScriptTool().preview(workspace=tmp_path, content="base64 .env.test\n")
 
-    assert preview.requires_confirmation is True
-    assert "sensitive workspace files" in preview.summary
+    assert preview.requires_confirmation is False
 
 
 def test_run_bash_fd_redirection_to_workspace_file_requires_confirmation(tmp_path: Path) -> None:
@@ -534,14 +547,14 @@ def test_run_temp_script_uses_llm_risk_judgement_for_confirmation(tmp_path: Path
     assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
 
 
-def test_run_temp_script_sensitive_file_read_requires_confirmation(tmp_path: Path) -> None:
+def test_run_temp_script_sensitive_file_read_is_allowed_and_redacted(tmp_path: Path) -> None:
     (tmp_path / ".env.test").write_text("LLM_API_KEY=test", encoding="utf-8")
 
     result = RunTempScriptTool().run(workspace=tmp_path, content="head -n 1 .env.test\n")
 
-    assert result.ok is False
-    assert result.error_code == "COMMAND_REQUIRES_CONFIRMATION"
-    assert "LLM_API_KEY" not in result.content
+    assert result.ok is True
+    assert result.error_code is None
+    assert "LLM_API_KEY=[REDACTED]" in result.content
 
 
 def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:
@@ -556,6 +569,19 @@ def test_run_temp_script_deletes_script_after_execution(tmp_path: Path) -> None:
     assert "script:" in result.content
     script_path = Path(result.data["script_path"])
     assert not script_path.exists()
+
+
+def test_run_temp_script_respects_shebang_interpreter(tmp_path: Path) -> None:
+    result = RunTempScriptTool().run(
+        workspace=tmp_path,
+        content="#!/usr/bin/env node\nconsole.log('node-ok')\n",
+        filename="agent-check.js",
+        is_test=True,
+    )
+
+    assert result.ok is True
+    assert result.data["exit_code"] == 0
+    assert "node-ok" in result.content
 
 
 def test_run_temp_script_deletes_script_after_failure(tmp_path: Path) -> None:

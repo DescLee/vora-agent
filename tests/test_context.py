@@ -1,7 +1,11 @@
+import json
 from pathlib import Path
 
 from vora.context import (
     ContextIntegrityError,
+    ContextFragment,
+    build_cached_project_code_overview,
+    build_context_budget_message,
     build_project_code_overview,
     build_segments,
     compact_messages,
@@ -14,6 +18,7 @@ from vora.context import (
     validate_tool_call_pairs,
 )
 from vora.llm import LLMResult
+from vora.logging import project_cache_dir
 from vora.models import Message
 
 
@@ -22,6 +27,25 @@ def test_estimate_tokens_uses_v1_rules() -> None:
     assert estimate_tokens("中文", "zh") == 2
     assert estimate_tokens("one two", "en") == 2
     assert estimate_tokens("print('hello')", "code") == 4
+
+
+def test_context_fragment_caps_model_visible_body() -> None:
+    fragment = ContextFragment(marker="token-budget", body="A" * 1000, max_tokens=20)
+
+    rendered = fragment.render()
+
+    assert rendered.startswith("[vora-context:token-budget]")
+    assert "... [omitted " in rendered
+    assert estimate_tokens(rendered, "mixed") < 80
+
+
+def test_build_context_budget_message_reports_remaining_tokens() -> None:
+    message = build_context_budget_message([Message.user("hello" * 20)], token_limit=100)
+
+    assert message is not None
+    assert message.role == "system"
+    assert "[vora-context:token-budget]" in message.content
+    assert "剩余预算" in message.content
 
 
 def test_validate_tool_call_pairs_accepts_complete_tool_exchange() -> None:
@@ -299,6 +323,32 @@ def test_build_project_code_overview_includes_structure_and_notes(tmp_path: Path
     assert "docs/：设计文档、问题记录和优化说明" in overview
     assert "tests/：自动化测试" in overview
     assert "建议优先查看" in overview
+
+
+def test_build_cached_project_code_overview_reuses_project_cache(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+
+    first = build_cached_project_code_overview(tmp_path)
+    cache_path = project_cache_dir(tmp_path) / "project-overview.json"
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["overview"] = "项目代码目录结构\n- CACHED"
+    cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    second = build_cached_project_code_overview(tmp_path)
+
+    assert "README.md：项目说明、安装方式和使用入口" in first
+    assert second == "项目代码目录结构\n- CACHED"
+    assert not (tmp_path / ".vora" / "cache" / "project-overview.json").exists()
+
+
+def test_build_cached_project_code_overview_invalidates_when_structure_changes(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
+    build_cached_project_code_overview(tmp_path)
+    (tmp_path / "src").mkdir()
+
+    overview = build_cached_project_code_overview(tmp_path)
+
+    assert "src/：核心实现代码" in overview
 
 
 def test_should_include_project_code_overview_matches_code_related_requests() -> None:

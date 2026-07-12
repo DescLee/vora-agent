@@ -542,6 +542,10 @@ class PromptTui:
                 "panel": "bg:#172026 #d7dedb",
                 "process": "bg:#172026 #74827e",
                 "process.reasoning": "bg:#172026 #d7dedb",
+                "process.tool": "bg:#172026 #d7dedb",
+                "process.tool.result": "bg:#172026 #7f8d89",
+                "process.tool.waiting": "bg:#172026 #6f7a77",
+                "process.tool.failed": "bg:#172026 #fca5a5",
                 "process.diff": "bg:#172026 #d7dedb",
                 "process.diff.header": "bg:#172026 #8fa19c",
                 "process.diff.add": "bg:#123625 #9ff2c2",
@@ -614,16 +618,27 @@ class PromptTui:
     def run_direct_command(self, content: str) -> None:
         self.manager.current = self.manager.handle_user_message(content)
         self.visible_trace_count = 0
-        self.set_output_text(self.format_command_output(self.manager.current), force_follow=True)
+        if content.strip().lower() in STATUS_COMMANDS:
+            output_text = self.format_status_command_output(self.manager.current)
+        else:
+            output_text = self.format_command_output(self.manager.current)
+        self.set_output_text(output_text, force_follow=True)
         self.is_running = False
         self.status.text = format_status(self.manager.current)
         self.app.layout.focus(self.input)
         self.app.invalidate()
 
     def format_command_output(self, session: SessionState) -> str:
-        current = format_section("当前会话", format_messages(session))
-        blocks = [*self.completed_transcript_blocks, current]
-        return "\n\n".join(block for block in blocks if block)
+        latest = session.messages[-1].content if session.messages else ""
+        return latest.strip()
+
+    def format_status_command_output(self, session: SessionState) -> str:
+        latest = self.format_command_output(session)
+        current_output = self.output.text.strip()
+        if current_output and not current_output.startswith("欢迎使用 Vora TUI"):
+            return "\n\n".join(part for part in (current_output, latest) if part)
+        transcript = self.format_transcript_with_history(session, show_process=False)
+        return "\n\n".join(part for part in (transcript, latest) if part)
 
     def confirm_pending_confirmation(self) -> None:
         if self.manager.current.pending_confirmation is None:

@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 from time import monotonic
 
 from vora.context import (
+    build_context_budget_message,
     build_segments,
     compact_messages_with_snapshot,
     estimate_message_tokens,
@@ -40,16 +41,19 @@ MAX_TOOL_RESULT_PATHS = 20
 MAX_TOOL_RESULT_CONTENT_CHARS = 4000
 MAX_INLINE_TOOL_RESULT_CONTENT_CHARS = 1200
 TOOL_RESULT_PREVIEW_EDGE_CHARS = 500
-REACT_PROMPT_RECENT_SEGMENTS = 8
-CODE_REVIEW_RECENT_TOOL_EXCHANGES = 4
+REACT_PROMPT_RECENT_SEGMENTS = 16
+CODE_REVIEW_RECENT_TOOL_EXCHANGES = 8
 CODE_REVIEW_FINDINGS_LIMIT = 8
+READ_FILE_DEFAULT_LIMIT_LINES = 200
+CODE_REVIEW_MAX_READ_FILE_CALLS = 200
+CODE_REVIEW_MAX_READ_FILE_CALLS_PER_PATH = 3
 RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
 SHELL_CODE_WRITE_TOOLS = {"run_bash", "run_temp_script"}
 READ_ONLY_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "web_search", "fetch_webpage"}
-CODE_REVIEW_TOOL_SCHEMA_NAMES = {"list_files", "read_file"}
+CODE_REVIEW_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "run_bash"}
 FILE_OUTPUT_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "write_file", "append_file", "make_directory"}
 CODE_FILE_SUFFIXES = {
     ".c",
@@ -191,6 +195,14 @@ def _is_targeted_read_file_result(tool_result) -> bool:
     return any(key in tool_result.data for key in ("query", "start_line", "start_index"))
 
 
+def _read_file_model_content_inlined(tool_result) -> bool:
+    if not tool_result.content:
+        return False
+    if not _is_targeted_read_file_result(tool_result):
+        return False
+    return len(tool_result.content) <= MAX_INLINE_TOOL_RESULT_CONTENT_CHARS
+
+
 def _format_read_file_content_ref(tool_result, content_ref: str) -> str:
     lines = [
         "content_ref: " + content_ref,
@@ -253,13 +265,16 @@ def _format_paths(paths: list[str]) -> str:
 def _format_content(content: str) -> str:
     if len(content) <= MAX_TOOL_RESULT_CONTENT_CHARS:
         return "content:\n" + content
-    truncated = content[:MAX_TOOL_RESULT_CONTENT_CHARS]
-    remaining = len(content) - MAX_TOOL_RESULT_CONTENT_CHARS
+    edge_chars = max(1, MAX_TOOL_RESULT_CONTENT_CHARS // 2)
+    head = content[:edge_chars].rstrip()
+    tail = content[-edge_chars:].lstrip()
+    remaining = max(0, len(content) - len(head) - len(tail))
     return "\n".join(
         [
             "content:",
-            truncated,
-            f"... [truncated {remaining} more char(s)]",
+            head,
+            f"... [omitted {remaining} char(s)]",
+            tail,
         ]
     )
 
@@ -381,6 +396,74 @@ def _format_code_review_findings_ledger(task: TaskState) -> str:
     return "\n".join(lines)
 
 
+def _format_task_strategy_for_react(task: TaskState) -> str:
+    raw_strategy = task.metadata.get("strategy")
+    if not isinstance(raw_strategy, dict):
+        return ""
+    name = str(raw_strategy.get("name") or "").strip()
+    if not name:
+        return ""
+    description = str(raw_strategy.get("description") or "").strip()
+    lines = [f"当前任务策略：{name}"]
+    if description:
+        lines.append(f"说明：{description}")
+    for title, key in (("基本原则", "principles"), ("优先证据", "first_evidence"), ("最终风险排序", "risk_order")):
+        values = raw_strategy.get(key)
+        if not isinstance(values, list) or not values:
+            continue
+        lines.append(f"{title}：")
+        for value in values[:8]:
+            value_text = str(value).strip()
+            if value_text:
+                lines.append(f"- {value_text}")
+    return "\n".join(lines)
+
+
+def _format_execution_event_summary(task: TaskState) -> str:
+    latest_write: str | None = None
+    latest_validation: str | None = None
+    latest_failure: str | None = None
+    written_paths: list[str] = []
+    for event in task.trace_events:
+        if event.phase != "tool":
+            continue
+        data = event.data
+        tool_name = str(data.get("tool_name") or "")
+        if not tool_name:
+            continue
+        if data.get("ok") is False or data.get("error_code"):
+            latest_failure = f"{tool_name} {data.get('summary') or data.get('error_code')}"
+        if tool_name in {"write_file", "replace_in_file", "append_file", "make_directory"} and data.get("ok") is True:
+            path = str(data.get("written_path") or data.get("path") or data.get("args", {}).get("path") or "").strip()
+            if path:
+                latest_write = f"{tool_name} {path}"
+                if path not in written_paths:
+                    written_paths.append(path)
+            else:
+                latest_write = f"{tool_name} {data.get('summary') or 'ok'}"
+        if tool_name in {"run_bash", "run_temp_script"} and _is_test_tool_event(data) and data.get("ok") is True:
+            args = data.get("args") if isinstance(data.get("args"), dict) else {}
+            command = str(args.get("command") or args.get("content") or "").strip()
+            latest_validation = f"{tool_name} {_short_command(command) or data.get('summary') or 'validation passed'}"
+    lines = ["关键执行事件："]
+    if written_paths:
+        lines.append(f"- 已修改文件：{', '.join(written_paths[-8:])}")
+    if latest_write:
+        lines.append(f"- 最近成功写入：{latest_write}")
+    if latest_validation:
+        lines.append(f"- 最近通过验证：{latest_validation}")
+    if latest_failure:
+        lines.append(f"- 最近失败工具：{latest_failure}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _short_command(command: str, limit: int = 120) -> str:
+    compact = " ".join(command.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
+
+
 def _compact_observation_evidence(content: str, limit: int = 180) -> str:
     compact = " ".join(line.strip() for line in content.splitlines() if line.strip())
     if len(compact) <= limit:
@@ -389,8 +472,10 @@ def _compact_observation_evidence(content: str, limit: int = 180) -> str:
 
 
 def _default_tool_names_for_task(task: TaskState, available_names: list[str]) -> list[str]:
+    if _task_plan_needs_code_tools(task):
+        return list(available_names)
     if _task_is_code_review(task):
-        return [name for name in available_names if name in CODE_REVIEW_TOOL_SCHEMA_NAMES]
+        return [name for name in ("run_bash", "read_file", "list_files") if name in available_names]
     if _task_is_code_validate(task):
         return [name for name in available_names if name in {"list_files", "read_file", "run_bash", "run_temp_script"}]
     if _task_needs_code_tools(task):
@@ -400,8 +485,12 @@ def _default_tool_names_for_task(task: TaskState, available_names: list[str]) ->
     return [name for name in available_names if name in READ_ONLY_TOOL_SCHEMA_NAMES]
 
 
+def _task_plan_needs_code_tools(task: TaskState) -> bool:
+    return any(step.intent in {"code", "code_edit"} for step in task.plan)
+
+
 def _task_needs_code_tools(task: TaskState) -> bool:
-    if any(step.intent in {"code", "code_edit"} for step in task.plan):
+    if _task_plan_needs_code_tools(task):
         return True
     goal = task.goal.lower()
     if any(suffix in goal for suffix in CODE_FILE_SUFFIXES):
@@ -415,15 +504,23 @@ def _task_needs_code_tools(task: TaskState) -> bool:
             "测试",
             "replace",
             "修改",
+            "新建",
+            "创建",
             "删除",
             "重构",
             "生成代码",
         ]
+    ) or (
+        "优化" in goal
+        and "建议" not in goal
+        and any(keyword in goal for keyword in ["api", "接口", "封装", "错误处理", "代码", "函数", "模块"])
     )
 
 
 def _task_is_code_review(task: TaskState) -> bool:
     if task.plan:
+        if any(step.intent in {"code", "code_edit"} for step in task.plan):
+            return False
         return any(step.intent == "code_review" for step in task.plan)
     normalized = task.goal.lower()
     if any(keyword in normalized for keyword in ["修改", "修复", "新增", "删除", "生成代码", "重构", "测试", "验证"]):
@@ -615,6 +712,8 @@ class ReActLoop:
             prompt_tokens=task.last_prompt_tokens,
             completion_tokens=task.last_completion_tokens,
             total_tokens=task.last_total_tokens,
+            cached_prompt_tokens=usage.get("cached_prompt_tokens"),
+            non_cached_prompt_tokens=usage.get("non_cached_prompt_tokens"),
         )
 
     def _conversation_context(self, task: TaskState, session: SessionState) -> list[Message]:
@@ -646,6 +745,11 @@ class ReActLoop:
         trimmed = _trim_react_prompt_history(compacted)
         if _task_is_code_review(task):
             trimmed = _build_code_review_working_set(trimmed, task)
+        budget_message = build_context_budget_message(trimmed, context_limit)
+        if budget_message is not None:
+            if trimmed and trimmed[0].role == "system":
+                return [trimmed[0], budget_message, *trimmed[1:]]
+            return [budget_message, *trimmed]
         return trimmed
 
     def _context_limit(self, task: TaskState) -> int:
@@ -754,6 +858,15 @@ class ReActLoop:
             data["deduplicated"] = True
             data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
             data["fingerprint"] = tool_result.data.get("fingerprint") or fingerprint
+            if "content_reused" in tool_result.data:
+                data["content_reused"] = tool_result.data.get("content_reused")
+            if tool_result.data.get("requires_targeted_read"):
+                data["requires_targeted_read"] = True
+        if tool_result.data.get("already_covered"):
+            data["already_covered"] = True
+            data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
+            data["requested_coverage"] = tool_result.data.get("requested_coverage")
+            data["covered_coverage"] = tool_result.data.get("covered_coverage")
         if tool_result.data.get("blocked_duplicate"):
             data["blocked_duplicate"] = True
             data["source_tool_call_id"] = tool_result.data.get("source_tool_call_id")
@@ -764,7 +877,11 @@ class ReActLoop:
             data["stderr"] = tool_result.data.get("stderr", "")[:500]
             data["timed_out"] = tool_result.data.get("timed_out", False)
         if call.name == "read_file" and tool_result.ok:
+            read_metadata = _read_file_trace_metadata(tool_result)
+            if read_metadata:
+                data.update(read_metadata)
             data["content_omitted"] = True
+            data["model_content_inlined"] = _read_file_model_content_inlined(tool_result)
             return data
         if tool_result.content:
             data["content_preview"] = tool_result.content[:500]
@@ -797,6 +914,21 @@ class ReActLoop:
             has_passing_test = True
         return has_passing_test
 
+    def _successful_write_without_later_failures(self, task: TaskState) -> bool:
+        latest_write_index = -1
+        for index, event in enumerate(task.trace_events):
+            if event.phase != "tool":
+                continue
+            data = event.data
+            if data.get("tool_name") in {"write_file", "replace_in_file", "append_file", "make_directory"} and data.get("ok") is True:
+                latest_write_index = index
+        if latest_write_index < 0:
+            return False
+        return not any(
+            event.phase == "tool" and _tool_event_failed(event.data) and not event.data.get("blocked_duplicate")
+            for event in task.trace_events[latest_write_index + 1:]
+        )
+
     def _force_final_answer(
         self,
         messages: list[Message],
@@ -819,7 +951,7 @@ class ReActLoop:
             *messages,
             Message.system(system_instruction),
         ]
-        llm_result = self._complete_with_rule_fallback(final_messages, task, session.session_id)
+        llm_result = self._complete_with_rule_fallback(final_messages, task, session.session_id, tool_names=[])
         llm_result = self._normalize_tool_call_ids(llm_result, task.limits.max_react_iterations + 1)
         task.trace_events.append(
             TraceEvent(
@@ -841,6 +973,14 @@ class ReActLoop:
                     data={"tool_call_count": len(llm_result.tool_calls)},
                 )
             )
+            if not llm_result.content:
+                if fallback:
+                    content = fallback
+                elif self._successful_write_without_later_failures(task):
+                    content = "已完成文件写入，但模型在收口时仍请求工具；已停止继续调用工具。"
+                else:
+                    raise RuntimeError("MAX_REACT_ITERATIONS_REACHED")
+                return self._finalize_answer_content(task, content)
         content = llm_result.content or fallback or "已达到工具循环上限，保留当前最佳结果。"
         return self._finalize_answer_content(task, content)
 
@@ -956,6 +1096,7 @@ class ReActLoop:
             "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
             "开始执行前先定位目标模块和最小相关文件；已有上下文足够时直接推进，不要为了确认而重复读取。",
             "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
+            "同一阶段需要多个文件时，一次性并行请求多个 read_file/list_files/glob；不要一轮只读取一个相关文件再等待下一轮。",
             "未带 query/start_line/start_index 的 read_file 只会把原文保存在本地工具观察里，并向模型上下文返回 content_ref；如果需要引用原文或修改代码，请继续用 query 或 start_line/limit_lines 获取目标上下文窗口。",
             "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要只给选项并等待用户选择；请自行选择保守方案并继续执行。",
             "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
@@ -970,10 +1111,24 @@ class ReActLoop:
             parts.extend(
                 [
                     "当前是代码审查任务：只读取最小必要文件、沉淀问题证据并输出清单，不要修改文件。",
-                    "代码审查阶段不要请求写入工具、临时脚本或泛化 shell；如需验证某个发现，优先使用 read_file 的 query/start_line/limit_lines 获取精确证据。",
+                    "代码审查阶段采用验证优先、证据优先、风险优先：先运行可用的状态/验证/风险搜索命令，再精读能支撑结论的文件。",
+                    "代码审查阶段工具优先级是 run_bash > read_file > list_files：run_bash 用于批量定位和验证，read_file 用于精读证据文件，只有 bash 不足或被拒绝时才用 list_files 补充。",
+                    "代码审查阶段不要请求写入工具或临时脚本；优先使用 run_bash 执行只读搜索、文件统计、lint/build 验证命令，例如 rg --files、rg、find、ls、sed、nl、wc、head、tail、pnpm run lint、pnpm run build。",
+                    "run_bash 只用于只读审查和验证；不要用它修改文件、安装依赖、删除文件、切换分支或执行网络/部署类命令。",
+                    "run_bash 输出必须主动限量，例如使用 --max-count、--max-filesize、head/tail、find -maxdepth 或定向路径；不要 cat 大文件或输出全仓库长结果。",
+                    "先批量定位关键文件，再一次读取较大的连续区间；同一文件不要反复读取重叠区间，已读过的范围要基于现有观察总结。",
+                    "遇到 data、generated 或超大文件时，只看文件规模、结构摘要、query 命中或小样本，不要整文件读取。",
+                    "最终 findings 按风险顺序输出：发布/运行/安全等高影响问题在前，低价值清理项靠后或省略。",
+                    f"本轮代码审查 read_file 预算：总计最多 {CODE_REVIEW_MAX_READ_FILE_CALLS} 次，同一文件最多 {CODE_REVIEW_MAX_READ_FILE_CALLS_PER_PATH} 次；接近预算时直接输出当前证据清单。",
                     "后续请求会携带代码审查 Findings Ledger；请基于 ledger 收敛，不要重复读取已覆盖文件。",
                 ]
             )
+        strategy_prompt = _format_task_strategy_for_react(task)
+        if strategy_prompt:
+            parts.extend(["", strategy_prompt])
+        event_summary = _format_execution_event_summary(task)
+        if event_summary:
+            parts.extend(["", event_summary])
         skill_prompt = _format_active_skill_for_react(task)
         if skill_prompt:
             parts.extend(["", skill_prompt])
@@ -1367,6 +1522,10 @@ class ReActLoop:
             if duplicate_read is not None:
                 tool_results[call.id] = duplicate_read
                 continue
+            covered_read = self._covered_read_file_result(call, task)
+            if covered_read is not None:
+                tool_results[call.id] = covered_read
+                continue
             duplicate_planned_read = self._duplicate_planned_read_file_result(call, planned_read_file_keys)
             if duplicate_planned_read is not None:
                 tool_results[call.id] = duplicate_planned_read
@@ -1374,6 +1533,11 @@ class ReActLoop:
             repeat_result = self._repeat_tool_call_result(call, task, planned_fingerprints)
             if repeat_result is not None:
                 tool_results[call.id] = repeat_result
+                continue
+            audit_budget_error = self._code_review_read_budget_error(call, task)
+            if audit_budget_error is not None:
+                tool_results[call.id] = audit_budget_error
+                self._record_tool_rejection(task, call, audit_budget_error)
                 continue
 
             tool_call_count += 1
@@ -1513,6 +1677,22 @@ class ReActLoop:
                 or previous_max_bytes != max_bytes
             ):
                 continue
+            if event.data.get("model_content_inlined") is not True:
+                return ToolResult(
+                    tool_name="read_file",
+                    ok=True,
+                    summary=(
+                        f"read_file skipped: already read {path}; previous result was content_ref-only, "
+                        "use query or start_line/limit_lines for exact content"
+                    ),
+                    data={
+                        "deduplicated": True,
+                        "path": path,
+                        "source_tool_call_id": event.data.get("tool_call_id"),
+                        "content_reused": False,
+                        "requires_targeted_read": True,
+                    },
+                )
             return ToolResult(
                 tool_name="read_file",
                 ok=True,
@@ -1522,6 +1702,82 @@ class ReActLoop:
                     "path": path,
                     "source_tool_call_id": event.data.get("tool_call_id"),
                     "content_reused": True,
+                },
+            )
+        return None
+
+    def _covered_read_file_result(self, call, task: TaskState) -> ToolResult | None:
+        requested = _requested_read_file_coverage(call)
+        if requested is None:
+            return None
+        path = requested["path"]
+        encoding = requested["encoding"]
+        for event in reversed(task.trace_events):
+            if event.phase != "tool":
+                continue
+            if event.data.get("tool_name") != "read_file" or event.data.get("ok") is not True:
+                continue
+            if event.data.get("path") != path or event.data.get("encoding", "utf-8") != encoding:
+                continue
+            if event.data.get("deduplicated") or event.data.get("already_covered"):
+                continue
+            if _read_file_event_covers_request(event.data, requested):
+                if event.data.get("model_content_inlined") is not True:
+                    continue
+                return ToolResult(
+                    tool_name="read_file",
+                    ok=True,
+                    summary=f"read_file skipped: requested range already covered for {path}",
+                    data={
+                        "already_covered": True,
+                        "path": path,
+                        "source_tool_call_id": event.data.get("tool_call_id"),
+                        "requested_coverage": requested,
+                        "covered_coverage": _read_file_event_coverage(event.data),
+                        "content_reused": True,
+                    },
+                )
+        return None
+
+    def _code_review_read_budget_error(self, call, task: TaskState) -> ToolResult | None:
+        if call.name != "read_file" or not _task_is_code_review(task):
+            return None
+        path = _normalize_relative_path(str(call.args.get("path", "")))
+        if not path:
+            return None
+        total_reads = 0
+        path_reads = 0
+        for event in task.trace_events:
+            if event.phase != "tool":
+                continue
+            if event.data.get("tool_name") != "read_file" or event.data.get("ok") is not True:
+                continue
+            if event.data.get("deduplicated") or event.data.get("already_covered"):
+                continue
+            total_reads += 1
+            if event.data.get("path") == path:
+                path_reads += 1
+        if path_reads >= CODE_REVIEW_MAX_READ_FILE_CALLS_PER_PATH:
+            return ToolResult(
+                tool_name="read_file",
+                ok=False,
+                summary=f"read_file rejected: code review budget already read {path} {path_reads} time(s)",
+                error_code="READ_FILE_AUDIT_BUDGET_EXCEEDED",
+                data={
+                    "path": path,
+                    "limit": CODE_REVIEW_MAX_READ_FILE_CALLS_PER_PATH,
+                    "reason": "summarize with current evidence or read a different high-value file",
+                },
+            )
+        if total_reads >= CODE_REVIEW_MAX_READ_FILE_CALLS:
+            return ToolResult(
+                tool_name="read_file",
+                ok=False,
+                summary="read_file rejected: code review read budget exhausted",
+                error_code="READ_FILE_AUDIT_BUDGET_EXCEEDED",
+                data={
+                    "limit": CODE_REVIEW_MAX_READ_FILE_CALLS,
+                    "reason": "stop scanning and produce the issue list from current evidence",
                 },
             )
         return None
@@ -1718,6 +1974,103 @@ def _read_file_key(call) -> tuple[str, str, int | None, int | None, str | None, 
     return path, encoding, start_index, max_bytes, query, start_line, limit_lines
 
 
+def _read_file_trace_metadata(tool_result: ToolResult) -> dict:
+    result_data = tool_result.data
+    metadata: dict = {}
+    path = result_data.get("path")
+    if isinstance(path, str) and path:
+        metadata["path"] = _normalize_relative_path(path)
+    metadata["encoding"] = result_data.get("encoding", "utf-8")
+    for key in (
+        "file_size",
+        "bytes_read",
+        "start_line",
+        "end_line",
+        "total_lines",
+        "truncated",
+        "query",
+        "matches",
+        "windows",
+        "start_index",
+        "large_file_policy",
+    ):
+        if key in result_data:
+            metadata[key] = result_data[key]
+    return metadata
+
+
+def _requested_read_file_coverage(call) -> dict | None:
+    read_key = _read_file_key(call)
+    if read_key is None:
+        return None
+    path, encoding, start_index, _max_bytes, query, start_line, limit_lines = read_key
+    if start_index is not None:
+        return None
+    if query is not None:
+        return {"path": path, "encoding": encoding, "kind": "query", "query": query}
+    if start_line is not None:
+        limit = limit_lines or READ_FILE_DEFAULT_LIMIT_LINES
+        return {
+            "path": path,
+            "encoding": encoding,
+            "kind": "lines",
+            "start_line": start_line,
+            "end_line": start_line + limit - 1,
+        }
+    return {"path": path, "encoding": encoding, "kind": "full"}
+
+
+def _read_file_event_coverage(data: dict) -> dict:
+    path = str(data.get("path", ""))
+    encoding = str(data.get("encoding", "utf-8"))
+    windows = _read_file_event_windows(data)
+    if _read_file_event_is_full_coverage(data):
+        return {"path": path, "encoding": encoding, "kind": "full"}
+    if windows:
+        return {"path": path, "encoding": encoding, "kind": "windows", "windows": windows}
+    return {"path": path, "encoding": encoding, "kind": "unknown"}
+
+
+def _read_file_event_covers_request(data: dict, requested: dict) -> bool:
+    if _read_file_event_is_full_coverage(data):
+        return requested.get("kind") == "full"
+    if requested.get("kind") == "full":
+        return False
+    if requested.get("kind") == "query":
+        return False
+    if requested.get("kind") != "lines":
+        return False
+    requested_start = int(requested["start_line"])
+    requested_end = int(requested["end_line"])
+    return any(start <= requested_start and end >= requested_end for start, end in _read_file_event_windows(data))
+
+
+def _read_file_event_is_full_coverage(data: dict) -> bool:
+    if data.get("truncated") is True:
+        return False
+    if data.get("query") or data.get("start_line") or data.get("start_index") is not None:
+        return False
+    return bool(data.get("path")) and data.get("file_size") is not None
+
+
+def _read_file_event_windows(data: dict) -> list[tuple[int, int]]:
+    windows: list[tuple[int, int]] = []
+    start_line = _optional_int_arg(data, "start_line")
+    end_line = _optional_int_arg(data, "end_line")
+    if start_line is not None and end_line is not None:
+        windows.append((start_line, end_line))
+    raw_windows = data.get("windows")
+    if isinstance(raw_windows, list):
+        for item in raw_windows:
+            if not isinstance(item, dict):
+                continue
+            window_start = _optional_int_arg(item, "start_line")
+            window_end = _optional_int_arg(item, "end_line")
+            if window_start is not None and window_end is not None:
+                windows.append((window_start, window_end))
+    return windows
+
+
 def _read_file_fragment_key(call) -> tuple[str, str] | None:
     read_key = _read_file_key(call)
     if read_key is None:
@@ -1779,6 +2132,22 @@ def _duplicate_tool_result(
     scope: str,
     task: TaskState | None = None,
 ) -> ToolResult | None:
+    if call.name == "run_bash" and scope == "previous_iteration":
+        observation = _find_successful_observation(task, source_tool_call_id)
+        if observation is not None:
+            return ToolResult(
+                tool_name=call.name,
+                ok=True,
+                summary="run_bash skipped: duplicate command result reused",
+                content=observation.content,
+                data={
+                    "deduplicated": True,
+                    "fingerprint": fingerprint,
+                    "source_tool_call_id": source_tool_call_id,
+                    "scope": scope,
+                    "content_reused": True,
+                },
+            )
     if call.name in REPEAT_CACHEABLE_TOOLS:
         return ToolResult(
             tool_name=call.name,

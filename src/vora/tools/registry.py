@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import cast
 
 from vora.tools.base import ToolProtocol
-from vora.tools.file_tools import AppendFileTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
+from vora.tools.file_tools import AppendFileTool, GlobTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
 from vora.tools.search_tools import FetchWebpageTool, WebSearchTool
 from vora.tools.shell_tools import RunBashTool, RunTempScriptTool
 
@@ -14,6 +14,7 @@ class ToolRegistry:
         self._tools: dict[str, ToolProtocol] = {}
         default_tools = tools if tools is not None else (
             ListFilesTool(),
+            GlobTool(),
             ReadFileTool(),
             WriteFileTool(),
             ReplaceInFileTool(),

@@ -15,7 +15,11 @@ SECRET_VALUE_PATTERNS = [
         r"(?i)(?P<prefix>\b[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET)[A-Z0-9_.-]*\b\s*[:=]\s*['\"]?)"
         r"[^&#'\"\s`]+"
     ),
-    re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*['\"]?[^'\"\s`]+"),
+    re.compile(
+        r"(?i)(?P<prefix>\b(?:api[_-]?key|token|password|secret)\b\s*[:=]\s*['\"]?)"
+        r"(?![A-Za-z_$][\w$]*(?:\.|\())"
+        r"[^'\"\s`]+"
+    ),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s+(?:is|是|为)\s*['\"]?[^'\"\s`]+"),
 ]
 
@@ -47,11 +51,24 @@ def contains_sensitive_text(content: str) -> bool:
 def _redact_match(match: re.Match[str]) -> str:
     prefix = match.groupdict().get("prefix")
     if prefix is not None:
+        value = match.group(0)[len(prefix) :]
+        if _is_generic_secret_prefix(prefix) and _looks_like_code_expression(value):
+            return match.group(0)
         return f"{prefix}[REDACTED]"
     if match.lastindex:
         key = match.group(1)
         return f"{key}=[REDACTED]"
     return "[REDACTED]"
+
+
+def _looks_like_code_expression(value: str) -> bool:
+    stripped = value.lstrip("\"'")
+    return "." in stripped or "(" in stripped or ")" in stripped
+
+
+def _is_generic_secret_prefix(prefix: str) -> bool:
+    normalized = prefix.strip().lower()
+    return normalized.startswith(("api_key", "api-key", "token", "password", "secret"))
 
 
 def _redact_sensitive_key_value(value: Any) -> Any:

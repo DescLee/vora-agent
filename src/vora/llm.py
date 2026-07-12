@@ -14,6 +14,8 @@ from vora.models import ToolCall
 
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRY_AFTER_SECONDS = 30.0
+MAX_COMPACT_TOOL_SCHEMA_BYTES = 5_000
+MAX_COMPACT_TOOL_SCHEMA_DEPTH = 3
 
 
 class LLMResult(BaseModel):
@@ -93,7 +95,30 @@ def extract_usage(payload: dict[str, Any]) -> dict[str, int] | None:
         value = usage.get(key)
         if isinstance(value, int):
             extracted[key] = value
+    cached_prompt_tokens = _extract_cached_prompt_tokens(usage)
+    if cached_prompt_tokens is not None:
+        prompt_tokens = extracted.get("prompt_tokens", 0)
+        cached_prompt_tokens = min(cached_prompt_tokens, prompt_tokens) if prompt_tokens > 0 else cached_prompt_tokens
+        extracted["cached_prompt_tokens"] = cached_prompt_tokens
+        if prompt_tokens > 0:
+            extracted["non_cached_prompt_tokens"] = max(0, prompt_tokens - cached_prompt_tokens)
     return extracted or None
+
+
+def _extract_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:
+    for detail_key in ("prompt_tokens_details", "input_tokens_details", "input_token_details"):
+        details = usage.get(detail_key)
+        if not isinstance(details, dict):
+            continue
+        for cached_key in ("cached_tokens", "cached_input_tokens", "cache_read_input_tokens"):
+            value = details.get(cached_key)
+            if isinstance(value, int) and value >= 0:
+                return value
+    for key in ("cached_prompt_tokens", "cached_input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+    return None
 
 
 # 已知模型的上下文窗口映射（前缀匹配，更具体的排前面）
@@ -164,9 +189,126 @@ def tool_schema(name: str) -> dict[str, Any]:
     from vora.tools.registry import ToolRegistry
 
     try:
-        return ToolRegistry().get(name).parameters_schema()
+        return compact_tool_schema(ToolRegistry().get(name).parameters_schema())
     except KeyError:
         return {"type": "object", "properties": {}, "additionalProperties": True}
+
+
+def compact_tool_schema(
+    schema: dict[str, Any],
+    *,
+    max_bytes: int = MAX_COMPACT_TOOL_SCHEMA_BYTES,
+    max_depth: int = MAX_COMPACT_TOOL_SCHEMA_DEPTH,
+) -> dict[str, Any]:
+    compacted = _strip_schema_noise(schema)
+    compacted = _prune_unreachable_definitions(compacted)
+    if _json_size(compacted) <= max_bytes:
+        return compacted
+    compacted = _collapse_deep_schema_objects(compacted, max_depth=max_depth)
+    if _json_size(compacted) <= max_bytes:
+        return compacted
+    compacted = _drop_definition_blocks(compacted)
+    if _json_size(compacted) <= max_bytes:
+        return compacted
+    return _fit_schema_to_byte_budget(compacted, max_bytes=max_bytes)
+
+
+def _strip_schema_noise(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_schema_noise(item)
+            for key, item in value.items()
+            if key not in {"description", "examples", "example", "title", "$comment"}
+        }
+    if isinstance(value, list):
+        return [_strip_schema_noise(item) for item in value]
+    return value
+
+
+def _prune_unreachable_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    refs = _collect_schema_refs(schema)
+    if not refs:
+        return _drop_definition_blocks(schema)
+    compacted = dict(schema)
+    for defs_key in ("$defs", "definitions"):
+        definitions = compacted.get(defs_key)
+        if not isinstance(definitions, dict):
+            continue
+        retained = {name: value for name, value in definitions.items() if name in refs}
+        if retained:
+            compacted[defs_key] = retained
+        else:
+            compacted.pop(defs_key, None)
+    return compacted
+
+
+def _collect_schema_refs(value: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        if isinstance(ref, str):
+            refs.add(ref.rsplit("/", 1)[-1])
+        for key, item in value.items():
+            if key in {"$defs", "definitions"}:
+                continue
+            refs.update(_collect_schema_refs(item))
+    elif isinstance(value, list):
+        for item in value:
+            refs.update(_collect_schema_refs(item))
+    return refs
+
+
+def _collapse_deep_schema_objects(value: Any, *, max_depth: int, depth: int = 0) -> Any:
+    if isinstance(value, list):
+        return [_collapse_deep_schema_objects(item, max_depth=max_depth, depth=depth) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if depth >= max_depth and isinstance(value.get("properties"), dict):
+        collapsed: dict[str, Any] = {"type": value.get("type", "object"), "additionalProperties": True}
+        if "required" in value:
+            collapsed["required"] = value["required"]
+        return collapsed
+    return {
+        key: _collapse_deep_schema_objects(item, max_depth=max_depth, depth=depth + 1)
+        for key, item in value.items()
+    }
+
+
+def _drop_definition_blocks(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _drop_definition_blocks(item)
+            for key, item in value.items()
+            if key not in {"$defs", "definitions"}
+        }
+    if isinstance(value, list):
+        return [_drop_definition_blocks(item) for item in value]
+    return value
+
+
+def _fit_schema_to_byte_budget(schema: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
+    fitted = dict(schema)
+    properties = fitted.get("properties")
+    if not isinstance(properties, dict):
+        return fitted
+    retained: dict[str, Any] = {}
+    required = set(fitted.get("required") or [])
+    for name, value in properties.items():
+        candidate = dict(fitted)
+        candidate_properties = {**retained, name: value}
+        candidate["properties"] = candidate_properties
+        if _json_size(candidate) > max_bytes and name not in required:
+            continue
+        retained[name] = value
+    fitted["properties"] = retained
+    omitted = len(properties) - len(retained)
+    if omitted > 0:
+        fitted["x-vora-schema-omitted-properties"] = omitted
+    return fitted
+
+
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 # API 响应中可能包含上下文窗口信息的常见字段名

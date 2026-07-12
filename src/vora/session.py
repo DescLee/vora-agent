@@ -314,13 +314,25 @@ def format_session_status_text(session: SessionState) -> str:
             f"- Base URL：{config.llm_base_url or '[未配置]'}",
             f"- 当前目录：{session.cwd}",
             f"- Session ID：{session.session_id}",
-            "- Token usage："
-            f"input {_format_token_k(session.total_prompt_tokens)} / "
-            f"output {_format_token_k(session.total_completion_tokens)} / "
-            f"total {_format_token_k(session.total_tokens)}",
+            "- Token usage：" + _format_session_token_usage(session),
             f"- Context window：{_format_token_k(context_window or 0)}",
         ]
     )
+
+
+def _format_session_token_usage(session: SessionState) -> str:
+    prompt = _format_token_k(session.total_prompt_tokens)
+    output = _format_token_k(session.total_completion_tokens)
+    total = _format_token_k(session.total_tokens)
+    cached = session.total_cached_prompt_tokens
+    non_cached = session.total_non_cached_prompt_tokens
+    if cached > 0 or non_cached > 0:
+        billable = non_cached if non_cached > 0 else max(0, session.total_prompt_tokens - cached)
+        return (
+            f"input {prompt} (cached {_format_token_k(cached)}, billable {_format_token_k(billable)}) / "
+            f"output {output} / total {total}"
+        )
+    return f"input {prompt} / output {output} / total {total}"
 
 
 def _format_token_k(tokens: int) -> str:

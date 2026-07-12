@@ -36,6 +36,14 @@ def test_redacts_common_environment_secret_names() -> None:
     assert "GH_TOKEN=[REDACTED]" in redacted
 
 
+def test_keeps_code_property_access_for_token_headers() -> None:
+    content = "token: localStorage.getItem('console_token') || '',"
+
+    redacted = redact_sensitive_text(content)
+
+    assert redacted == content
+
+
 def test_redacts_values_under_sensitive_dict_keys() -> None:
     payload = {
         "api_key": "plain-secret-value",

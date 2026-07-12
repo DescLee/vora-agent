@@ -4,7 +4,7 @@ import urllib.error
 import pytest
 
 from vora.config import AppConfig
-from vora.llm import LLMRequestError, OpenAICompatibleLLMClient, extract_usage, infer_model_context_limit, openai_messages, tool_schema
+from vora.llm import LLMRequestError, OpenAICompatibleLLMClient, compact_tool_schema, extract_usage, infer_model_context_limit, openai_messages, tool_schema
 from vora.tools import ToolRegistry
 from vora.models import Message
 
@@ -232,6 +232,74 @@ def test_openai_compatible_client_keeps_usage_from_response(monkeypatch) -> None
     }
 
 
+def test_extract_usage_keeps_cached_prompt_tokens() -> None:
+    payload = {
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 70},
+        }
+    }
+
+    assert extract_usage(payload) == {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cached_prompt_tokens": 70,
+        "non_cached_prompt_tokens": 30,
+    }
+
+
+def test_compact_tool_schema_strips_descriptions_and_prunes_defs() -> None:
+    schema = {
+        "type": "object",
+        "description": "large top-level description",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "verbose field description",
+            }
+        },
+        "$defs": {
+            "Unused": {
+                "type": "object",
+                "description": "unreachable definition",
+                "properties": {"value": {"type": "string"}},
+            }
+        },
+        "required": ["path"],
+    }
+
+    compacted = compact_tool_schema(schema, max_bytes=5000)
+
+    assert "description" not in compacted
+    assert "description" not in compacted["properties"]["path"]
+    assert "$defs" not in compacted
+    assert compacted["required"] == ["path"]
+
+
+def test_compact_tool_schema_collapses_large_deep_schema() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "payload": {
+                "type": "object",
+                "properties": {
+                    f"field_{index}": {"type": "string", "description": "x" * 200}
+                    for index in range(80)
+                },
+            }
+        },
+    }
+
+    compacted = compact_tool_schema(schema, max_bytes=800, max_depth=2)
+
+    encoded = str(compacted)
+    assert len(encoded.encode("utf-8")) <= 800
+    assert compacted["properties"]["payload"]["additionalProperties"] is True
+
+
 def test_openai_messages_maps_agent_role_to_assistant() -> None:
     assistant_message = Message.agent("tool executed", tool_call_ids=["call-1"])
     assistant_message.metadata["tool_call_names"] = {"call-1": "read_file"}
@@ -294,7 +362,7 @@ def test_tool_schema_exposes_shell_tools() -> None:
 def test_tool_schema_is_loaded_from_registered_tool() -> None:
     registry_schema = ToolRegistry().get("replace_in_file").parameters_schema()
 
-    assert tool_schema("replace_in_file") == registry_schema
+    assert tool_schema("replace_in_file") == compact_tool_schema(registry_schema)
 
 
 def test_infer_model_context_limit_supports_deepseek_family() -> None:

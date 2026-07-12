@@ -299,7 +299,7 @@ def test_output_fragments_styles_wrapped_reasoning_continuation_lines() -> None:
     tool_fragment = next(fragment for fragment in fragments if "Ran" in fragment[1])
 
     assert continuation_fragment[0] == "class:process.reasoning"
-    assert tool_fragment[0] == "class:process"
+    assert tool_fragment[0] == "class:process.tool"
 
 
 def test_output_fragments_color_diff_additions_and_removals_in_process_section() -> None:
@@ -357,8 +357,7 @@ def test_format_process_renders_trace_events(tmp_path: Path) -> None:
 
     assert "工具活动" in process
     assert "read_file(unknown)" in process
-    assert "参数: -" in process
-    assert "工具结果: 已返回" in process
+    assert "  └ Tool read_file finished: failed" in process
     assert "Tool read_file finished: failed" in process
     assert "最近过程（折叠）" not in process
 
@@ -488,9 +487,8 @@ def test_format_process_groups_current_step_tool_calls_and_observations(tmp_path
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "● Ran 1.1 read_file(call-read)" in process
-    assert "参数: path: README.md" in process
-    assert "工具结果: 已返回，read README.md" in process
+    assert "● Ran 1.1 read_file README.md" in process
+    assert "  └ read README.md" in process
     assert "# demo project" not in process
     assert "最近过程（折叠）" not in process
 
@@ -534,9 +532,8 @@ def test_format_process_orders_llm_content_before_matching_tool_call_and_result(
     assert "我需要先确认 README 内容。" not in process
     assert "LLM 返回" not in process
     assert "- 已返回" not in process
-    assert "● Ran 1.1 read_file(call-read)" in process
-    assert "参数: path: README.md" in process
-    assert "工具结果: 成功，read README.md" in process
+    assert "● Ran 1.1 read_file README.md" in process
+    assert "  └ read README.md" in process
 
 
 def test_format_process_groups_tool_call_args_and_result(tmp_path: Path) -> None:
@@ -571,11 +568,59 @@ def test_format_process_groups_tool_call_args_and_result(tmp_path: Path) -> None
 
     process = format_process(session)
 
-    assert "● Ran 1.1 read_file(call-read)" in process
-    assert "参数: path: README.md | query: Vora" in process
-    assert "工具结果: 成功，found 2 match(es)" in process
+    assert "● Ran 1.1 read_file README.md" in process
+    assert "  └ found 2 match(es)" in process
     assert "调用 read_file(call-read)" not in process
     assert "read_file(call-read) 成功:" not in process
+
+
+def test_format_process_uses_compact_tool_activity_layout(tmp_path: Path) -> None:
+    session = SessionState.create(cwd=tmp_path)
+    task = TaskState.create(goal="检查构建产物", cwd=tmp_path)
+    task.trace_events.append(
+        TraceEvent(
+            phase="llm",
+            message="LLM requested 2 tool call(s)",
+            data={
+                "iteration": 10,
+                "tool_calls": [
+                    {
+                        "id": "call-build",
+                        "name": "run_bash",
+                        "args": {"command": "pnpm run build:UAT 2>&1 | grep -E 'chunk|Chunk'"},
+                    },
+                    {
+                        "id": "call-read",
+                        "name": "read_file",
+                        "args": {"path": "vite.config.ts"},
+                    },
+                ],
+            },
+        )
+    )
+    task.trace_events.append(
+        TraceEvent(
+            phase="tool",
+            message="Tool run_bash finished: ok",
+            data={
+                "iteration": 10,
+                "tool_call_id": "call-build",
+                "tool_name": "run_bash",
+                "ok": True,
+                "summary": "(no output)",
+            },
+        )
+    )
+    session.active_task = task
+
+    process = format_process(session)
+
+    assert "● Ran 10.1 pnpm run build:UAT 2>&1 | grep -E 'chunk|Chunk'" in process
+    assert "  └ (no output)" in process
+    assert "● Ran 10.2 read_file vite.config.ts" in process
+    assert "  └ waiting" in process
+    assert "参数:" not in process
+    assert "工具结果:" not in process
 
 
 def test_format_process_keeps_diff_preview_under_tool_result(tmp_path: Path) -> None:
@@ -611,9 +656,8 @@ def test_format_process_keeps_diff_preview_under_tool_result(tmp_path: Path) -> 
 
     process = format_process(session)
 
-    assert "● Ran 1.1 write_file(call-write)" in process
-    assert "参数: path: src/app.py" in process
-    assert "工具结果: 失败，waiting for confirmation" in process
+    assert "● Ran 1.1 write_file src/app.py" in process
+    assert "  └ failed，waiting for confirmation" in process
     assert "变更预览:" in process
     assert "--- a/src/app.py" in process
     assert "+new" in process
@@ -643,9 +687,8 @@ def test_format_process_renders_llm_reasoning_content(tmp_path: Path) -> None:
     assert "• 推理内容" not in process
     assert "────────────────────────────────────────" in process
     assert "需要先读取 README 和 package.json 判断项目类型。" in process
-    assert "● Ran 1.1 read_file(call-read)" in process
-    assert "参数: path: README.md" in process
-    assert "工具结果: 等待" in process
+    assert "● Ran 1.1 read_file README.md" in process
+    assert "  └ waiting" in process
 
 
 def test_format_process_keeps_reasoning_content_visible_without_placeholder(tmp_path: Path) -> None:
@@ -712,12 +755,10 @@ def test_format_process_summarizes_trace_without_raw_nested_json(tmp_path: Path)
     assert "工具调度" not in process
     assert "共 1 个批次" not in process
     assert "第 1 批" not in process
-    assert "● Ran 10.1 list_files(call-list)" in process
-    assert "参数: path: ." in process
-    assert "工具结果: 等待" in process
-    assert "● Ran 10.2 read_file(call-read)" in process
-    assert "参数: path: README.md" in process
-    assert "工具结果: 成功，read README.md" in process
+    assert "● Ran 10.1 list_files ." in process
+    assert "  └ waiting" in process
+    assert "● Ran 10.2 read_file README.md" in process
+    assert "  └ read README.md" in process
     assert '"tool_calls"' not in process
     assert "{'tool_calls'" not in process
     assert "[{" not in process
@@ -780,15 +821,12 @@ def test_format_process_groups_tool_returns_by_planned_batch(tmp_path: Path) -> 
     assert "共 2 个批次" not in process
     assert "第 1 批" not in process
     assert "第 2 批" not in process
-    assert "● Ran 10.1 list_files(call-list)" in process
-    assert "参数: path: ." in process
-    assert "工具结果: 成功，found 3 files" in process
-    assert "● Ran 10.2 read_file(call-read)" in process
-    assert "参数: path: README.md" in process
-    assert "工具结果: 成功，read README.md" in process
-    assert "● Ran 10.3 read_file(call-docs)" in process
-    assert "参数: path: docs/design.md" in process
-    assert "工具结果: 成功，read docs/design.md" in process
+    assert "● Ran 10.1 list_files ." in process
+    assert "  └ found 3 files" in process
+    assert "● Ran 10.2 read_file README.md" in process
+    assert "  └ read README.md" in process
+    assert "● Ran 10.3 read_file docs/design.md" in process
+    assert "  └ read docs/design.md" in process
 
 
 def test_format_process_shows_llm_returned_content(tmp_path: Path) -> None:
@@ -838,8 +876,7 @@ def test_format_tool_return_without_ok_flag_uses_neutral_status(tmp_path: Path) 
     process = format_process(session)
 
     assert "● Ran read_file(call-read)" in process
-    assert "参数: -" in process
-    assert "工具结果: 已返回" in process
+    assert "  └ read README.md" in process
     assert "read_file(call-read) 失败" not in process
     assert "x" * 260 not in process
     assert "返回预览" not in process
@@ -969,7 +1006,7 @@ def test_format_process_highlights_phase_and_current_action(tmp_path: Path) -> N
 
     assert "阶段：调用工具" not in process
     assert "动作：准备调用工具 read_file(call-read)" not in process
-    assert "● Ran 1 read_file(call-read)" in process
+    assert "● Ran 1 read_file README.md" in process
 
 
 def test_format_process_hides_internal_plan_details(tmp_path: Path) -> None:
@@ -1007,8 +1044,7 @@ def test_format_process_shows_observations_when_trace_tool_return_is_missing(tmp
     process = format_process(session)
 
     assert "● Ran unknown(call-read)" in process
-    assert "参数: -" in process
-    assert "工具结果: 成功，read README.md" in process
+    assert "  └ read README.md" in process
     assert "call-read" in process
     assert "read README.md" in process
     assert "# demo project" not in process
@@ -1716,6 +1752,37 @@ def test_send_current_input_outputs_command_directly_without_background_turn(mon
     assert tui.status.text.startswith("就绪")
 
 
+def test_status_command_preserves_current_transcript_without_replaying_tool_output(monkeypatch, tmp_path: Path) -> None:
+    tui = PromptTui(cwd=tmp_path)
+    monkeypatch.setattr(tui, "start_agent_turn", lambda content: None)
+    task = TaskState.create(goal="请你看看当前项目还有哪些问题", cwd=tmp_path)
+    task.status = "done"
+    task.result = "问题清单：暂无阻塞问题。"
+    tui.manager.current.active_task = task
+    tui.manager.current.messages.extend(
+        [
+            Message.user("请你看看当前项目还有哪些问题"),
+            Message.agent("好的，我先从项目结构开始。"),
+            Message.tool("found 46 files", tool_call_id="call-list"),
+            Message.agent("继续读取页面。"),
+            Message.tool("found 28 files", tool_call_id="call-list-pages"),
+        ]
+    )
+    tui.input.text = "/status"
+
+    tui.send_current_input()
+
+    assert "会话状态" in tui.output.text
+    assert "Token usage" in tui.output.text
+    assert "用户问题" in tui.output.text
+    assert "请你看看当前项目还有哪些问题" in tui.output.text
+    assert "最终产物" in tui.output.text
+    assert "问题清单：暂无阻塞问题。" in tui.output.text
+    assert "当前会话" not in tui.output.text
+    assert "found 46 files" not in tui.output.text
+    assert "found 28 files" not in tui.output.text
+
+
 def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_path: Path) -> None:
     tui = PromptTui(cwd=tmp_path)
     previous_session = SessionState.create(cwd=tmp_path)
@@ -1739,6 +1806,7 @@ def test_send_current_input_preserves_previous_turn_display(monkeypatch, tmp_pat
 
 def test_send_current_input_carries_previous_result_into_context_usage(monkeypatch, tmp_path: Path) -> None:
     tui = PromptTui(cwd=tmp_path)
+    tui.manager.current.model_context_limit = 128_000
     previous_task = TaskState.create(goal="第一轮", cwd=tmp_path)
     previous_task.status = "done"
     previous_task.result = "上一轮结果" + ("x" * 1000)
@@ -1945,9 +2013,8 @@ def test_render_progress_prints_trace_while_running(tmp_path: Path) -> None:
 
     assert "LLM 回合" not in tui.output.text
     assert "工具调度" not in tui.output.text
-    assert "● Ran 1 read_file(unknown)" in tui.output.text
-    assert "参数: path: README.md" in tui.output.text
-    assert "工具结果: 等待" in tui.output.text
+    assert "● Ran 1 read_file README.md" in tui.output.text
+    assert "  └ waiting" in tui.output.text
     assert "最近过程（折叠）" not in tui.output.text
     assert "返回预览" not in tui.output.text
 

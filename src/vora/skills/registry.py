@@ -69,7 +69,9 @@ class SkillRegistry:
 
     @classmethod
     def default(cls, cwd: Path) -> "SkillRegistry":
-        roots = [cwd / "skills", Path.home() / ".vora" / "skills"]
+        from vora.plugins.manager import plugin_skill_roots
+
+        roots = [cwd / "skills", Path.home() / ".vora" / "skills", *plugin_skill_roots()]
         return cls([*BUILTIN_SKILLS, *load_skills_from_roots(roots)])
 
     @classmethod

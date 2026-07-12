@@ -132,6 +132,72 @@ def test_cli_skills_add_list_remove_project_skill(tmp_path: Path, capsys, monkey
     assert not (tmp_path / "skills" / "project-analysis").exists()
 
 
+def test_cli_skills_add_github_url(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+    def fake_run(command, check, stdout, stderr, text):  # noqa: ANN001, ANN202, ARG001
+        clone_target = Path(command[-1])
+        clone_target.mkdir(parents=True)
+        (clone_target / "SKILL.md").write_text(
+            """---
+name: github-skill
+description: installed from GitHub
+---
+
+Follow the remote skill instructions.
+""",
+            encoding="utf-8",
+        )
+        return None
+
+    monkeypatch.setattr("vora.skills.manager.subprocess.run", fake_run)
+
+    main(["skills", "add", "https://github.com/example/skills.git", "--cwd", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert "Skill 'github-skill' added" in out
+    assert (tmp_path / "skills" / "github-skill" / "SKILL.md").is_file()
+
+
+def test_cli_plugins_install_list_remove_github_repo(tmp_path: Path, capsys, monkeypatch) -> None:
+    plugin_home = tmp_path / "home" / ".vora"
+    monkeypatch.setattr("vora.plugins.manager.default_vora_home", lambda: plugin_home)
+
+    def fake_run(command, check, stdout, stderr, text):  # noqa: ANN001, ANN202, ARG001
+        clone_target = Path(command[-1])
+        skill_dir = clone_target / "skills" / "debugging"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """---
+name: systematic-debugging
+description: Debug systematically
+---
+
+Find root cause before fixing.
+""",
+            encoding="utf-8",
+        )
+        return None
+
+    monkeypatch.setattr("vora.plugins.manager.subprocess.run", fake_run)
+
+    main(["plugins", "install", "https://github.com/example/superpowers.git", "--name", "superpowers"])
+    install_out = capsys.readouterr().out
+    assert "Plugin 'superpowers' installed" in install_out
+    assert "Skills: 1" in install_out
+    assert (plugin_home / "plugins" / "superpowers" / "repo" / "skills" / "debugging" / "SKILL.md").is_file()
+
+    main(["plugins", "list"])
+    list_out = capsys.readouterr().out
+    assert "superpowers" in list_out
+    assert "systematic-debugging" in list_out
+
+    main(["plugins", "remove", "superpowers"])
+    remove_out = capsys.readouterr().out
+    assert "Plugin 'superpowers' removed" in remove_out
+    assert not (plugin_home / "plugins" / "superpowers").exists()
+
+
 def test_cli_run_creates_session_prints_result_and_resume_command(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     seen = {}
@@ -376,7 +442,7 @@ def test_cli_rejects_removed_tui_subcommand(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert error.value.code == 2
     assert "invalid choice" in err
-    assert "{list,doctor,mcp,skills,run,resume,remove,clear}" in err
+    assert "choose from list, doctor, mcp, skills, plugins, run, resume, remove, clear" in err
 
 
 def test_cli_without_command_opens_tui(tmp_path: Path, monkeypatch) -> None:

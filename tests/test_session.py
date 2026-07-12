@@ -87,6 +87,8 @@ def test_session_manager_status_command_reports_session_info(monkeypatch, tmp_pa
     manager = SessionManager(cwd=tmp_path, runtime=runtime)
     manager.current.model_context_limit = 64_000
     manager.current.total_prompt_tokens = 1_536
+    manager.current.total_cached_prompt_tokens = 1_000
+    manager.current.total_non_cached_prompt_tokens = 536
     manager.current.total_completion_tokens = 512
     manager.current.total_tokens = 2_048
 
@@ -98,7 +100,7 @@ def test_session_manager_status_command_reports_session_info(monkeypatch, tmp_pa
     assert "Base URL：http://localhost:1234/v1" in status
     assert f"当前目录：{tmp_path}" in status
     assert f"Session ID：{session.session_id}" in status
-    assert "Token usage：input 1.5K / output 0.5K / total 2.0K" in status
+    assert "Token usage：input 1.5K (cached 1.0K, billable 0.5K) / output 0.5K / total 2.0K" in status
     assert "Context window：64.0K" in status
 
 
@@ -106,12 +108,16 @@ def test_format_session_status_uses_k_units(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     session.model_context_limit = 128_000
     session.total_prompt_tokens = 12_345
+    session.total_cached_prompt_tokens = 10_000
+    session.total_non_cached_prompt_tokens = 2_345
     session.total_completion_tokens = 6_789
     session.total_tokens = 19_134
 
     status = format_session_status_text(session)
 
     assert "input 12.3K" in status
+    assert "cached 10.0K" in status
+    assert "billable 2.3K" in status
     assert "output 6.8K" in status
     assert "total 19.1K" in status
     assert "Context window：128.0K" in status

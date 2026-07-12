@@ -9,6 +9,7 @@ from vora.config import AppConfig
 from vora.logging import project_logs_dir, project_memory_path, project_outputs_dir, project_storage_dir
 from vora.mcp import add_mcp_server, format_mcp_command, load_mcp_config, mcp_config_path, parse_env_pairs, remove_mcp_server
 from vora.models import LoopLimits, SessionState
+from vora.plugins.manager import install_plugin, list_plugins, plugins_root, remove_plugin
 from vora.prompt_tui import PromptTui, PromptTuiOptions
 from vora.redaction import redact_sensitive_text
 from vora.runtime import AgentRuntime
@@ -60,7 +61,16 @@ SKILLS_HELP_EPILOG = "\n".join(
         "Examples:",
         "  vora skills list --cwd .",
         "  vora skills add ./skills/project-analysis --cwd .",
+        "  vora skills add https://github.com/owner/repo.git --global",
         "  vora skills remove project-analysis --cwd .",
+    ]
+)
+PLUGINS_HELP_EPILOG = "\n".join(
+    [
+        "Examples:",
+        "  vora plugins install https://github.com/owner/plugin.git",
+        "  vora plugins list",
+        "  vora plugins remove superpowers",
     ]
 )
 
@@ -116,6 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_HelpFormatter,
     )
     _add_skills_subcommands(skills_parser)
+
+    plugins_parser = subparsers.add_parser(
+        "plugins",
+        help="manage installed plugins",
+        description="manage installed plugins",
+        epilog=PLUGINS_HELP_EPILOG,
+        formatter_class=_HelpFormatter,
+    )
+    _add_plugins_subcommands(plugins_parser)
 
     run_parser = subparsers.add_parser(
         "run",
@@ -186,8 +205,8 @@ def _add_skills_subcommands(parser: argparse.ArgumentParser) -> None:
     _add_cwd_option(list_parser, dest="subcommand_cwd", default=None)
     list_parser.add_argument("--global", dest="global_scope", action="store_true", help="show only user-level Skills")
 
-    add_parser = subparsers.add_parser("add", help="copy a Skill directory into this project")
-    add_parser.add_argument("source", type=Path, help="source Skill directory containing skill.json")
+    add_parser = subparsers.add_parser("add", help="copy a Skill directory or Git URL into this project")
+    add_parser.add_argument("source", help="source Skill directory or Git URL containing skill.json or SKILL.md")
     add_parser.add_argument("--name", help="override target Skill directory name")
     _add_cwd_option(add_parser, dest="subcommand_cwd", default=None)
     add_parser.add_argument("--global", dest="global_scope", action="store_true", help="copy into user-level Skills")
@@ -196,6 +215,19 @@ def _add_skills_subcommands(parser: argparse.ArgumentParser) -> None:
     remove_parser.add_argument("name", help="Skill name")
     _add_cwd_option(remove_parser, dest="subcommand_cwd", default=None)
     remove_parser.add_argument("--global", dest="global_scope", action="store_true", help="remove from user-level Skills")
+
+
+def _add_plugins_subcommands(parser: argparse.ArgumentParser) -> None:
+    subparsers = parser.add_subparsers(dest="plugins_command")
+
+    subparsers.add_parser("list", help="list installed plugins")
+
+    install_parser = subparsers.add_parser("install", help="install or update a plugin from a Git URL")
+    install_parser.add_argument("source", help="plugin Git URL")
+    install_parser.add_argument("--name", help="override installed plugin name")
+
+    remove_parser = subparsers.add_parser("remove", help="remove an installed plugin")
+    remove_parser.add_argument("name", help="plugin name")
 
 
 def _add_runtime_options(parser: argparse.ArgumentParser, *, include_defaults: bool, cwd_dest: str) -> None:
@@ -270,6 +302,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "skills":
         _run_skills(args, cwd)
+        return
+    if args.command == "plugins":
+        _run_plugins(args)
         return
     if args.command == "run":
         _run_once(
@@ -497,6 +532,56 @@ def _run_skills_list(cwd: Path, *, global_scope: bool) -> None:
     print(f"{'-' * 24} {'-' * 10} {'-' * 40}")
     for name, scope, description in sorted(rows, key=lambda item: (item[1], item[0])):
         print(f"{name:<24} {scope:<10} {description}")
+
+
+def _run_plugins(args: argparse.Namespace) -> None:
+    command = getattr(args, "plugins_command", None)
+    if command == "list":
+        _run_plugins_list()
+        return
+    if command == "install":
+        try:
+            plugin = install_plugin(args.source, name=getattr(args, "name", None))
+        except (ValueError, OSError) as error:
+            print(f"Error: {error}")
+            raise SystemExit(1) from None
+        print(f"Plugin '{plugin.name}' installed.")
+        print(f"Plugin directory: {plugin.path}")
+        print(f"Skills: {len(plugin.skills)}")
+        for skill in plugin.skills:
+            print(f"- {skill.name}: {skill.description}")
+        return
+    if command == "remove":
+        try:
+            target = remove_plugin(args.name)
+        except FileNotFoundError:
+            print(f"Error: Plugin '{args.name}' not found.")
+            raise SystemExit(1) from None
+        except ValueError as error:
+            print(f"Error: {error}")
+            raise SystemExit(1) from None
+        print(f"Plugin '{args.name}' removed.")
+        print(f"Plugin directory: {target}")
+        return
+    print("Error: missing Plugins subcommand. Use 'vora plugins --help'.")
+    raise SystemExit(1)
+
+
+def _run_plugins_list() -> None:
+    plugins = list_plugins()
+    print("Plugins:")
+    print(f"- User directory: {plugins_root()}")
+    if not plugins:
+        print("No plugins installed.")
+        print("Install one with: vora plugins install https://github.com/owner/plugin.git")
+        return
+    print()
+    print(f"{'NAME':<24} {'SKILLS':<8} SOURCE")
+    print(f"{'-' * 24} {'-' * 8} {'-' * 40}")
+    for plugin in plugins:
+        skill_names = ", ".join(skill.name for skill in plugin.skills) or "-"
+        print(f"{plugin.name:<24} {len(plugin.skills):<8} {plugin.source}")
+        print(f"{'':<24} {'':<8} {skill_names}")
 
 
 def _run_once(

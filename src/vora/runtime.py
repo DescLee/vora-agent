@@ -30,11 +30,15 @@ from vora.reflection import ReflectionLoop
 from vora.reporter import Reporter
 from vora.react import ReActLoop
 from vora.skills import SkillRegistry, SkillSpec
+from vora.task_strategy import select_task_strategy
 
 
 def format_runtime_exception(error: Exception) -> str:
     message = str(error).strip() or error.__class__.__name__
     return f"执行失败：{message}"
+
+
+CODE_REVIEW_MAX_REACT_ITERATIONS = 999
 
 
 class AgentRuntime:
@@ -106,11 +110,12 @@ class AgentRuntime:
             )
         relevant_memories = self._inject_relevant_memories(session, content)
 
-        task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits)
+        task = TaskState.create(goal=content, cwd=session.cwd, limits=self.default_limits.model_copy(deep=True))
         task.session_id = session.session_id
         active_skill = self.skill_registry.match(content)
         if active_skill is not None:
             task.metadata["active_skill"] = active_skill.model_dump()
+            self._record_active_skill(session, task, active_skill)
         task.metadata["compression_snapshot_start_index"] = len(session.compression_snapshots)
         self.logger.record(
             session.session_id,
@@ -133,6 +138,8 @@ class AgentRuntime:
         plan_steps, plan_reasoning = self._build_plan(content, session, task.run_id, active_skill=active_skill)
         task.plan = plan_steps
         task.plan_reasoning_content = plan_reasoning
+        _apply_task_strategy(task)
+        _apply_read_efficiency_limits(task)
         task.trace_events.append(
             TraceEvent(
                 phase="runtime",
@@ -263,6 +270,8 @@ class AgentRuntime:
                         )
                         task.plan = plan_steps
                         task.plan_reasoning_content = plan_reasoning
+                        _apply_task_strategy(task)
+                        _apply_read_efficiency_limits(task)
                         self._mark_plan_running(task)
                         task.trace_events.append(
                             TraceEvent(
@@ -436,6 +445,8 @@ class AgentRuntime:
                         )
                         task.plan = plan_steps
                         task.plan_reasoning_content = plan_reasoning
+                        _apply_task_strategy(task)
+                        _apply_read_efficiency_limits(task)
                         self._mark_plan_running(task)
                         task.trace_events.append(
                             TraceEvent(
@@ -537,6 +548,33 @@ class AgentRuntime:
             if step.status != "skipped":
                 step.status = "done"
 
+    def _record_active_skill(self, session: SessionState, task: TaskState, skill: SkillSpec) -> None:
+        data = {
+            "message_type": "skill_activated",
+            "skill_name": skill.name,
+            "description": skill.description,
+            "tool_allowlist": list(skill.tool_allowlist),
+            "acceptance": list(skill.acceptance),
+        }
+        task.trace_events.append(
+            TraceEvent(
+                phase="runtime",
+                message=f"启用 Skill：{skill.name}",
+                data=data,
+            )
+        )
+        self.logger.record(
+            session.session_id,
+            task.run_id,
+            {
+                "type": "active_skill",
+                "skill_name": skill.name,
+                "description": skill.description,
+                "tool_allowlist": list(skill.tool_allowlist),
+                "acceptance": list(skill.acceptance),
+            },
+        )
+
     def _build_plan(
         self,
         content: str,
@@ -610,11 +648,11 @@ class AgentRuntime:
         current_user_message = Message.user(content)
         bundle = build_context_bundle(
             current_user_message=current_user_message,
-            recent_messages=session.messages[-20:],
+            recent_messages=session.messages[-40:],
             relevant_memories=relevant_memories,
             compression_summaries=session.compression_snapshots[-5:],
             active_artifacts=session.artifacts[-5:],
-            recent_observations=session.active_task.observations[-10:] if session.active_task is not None else [],
+            recent_observations=session.active_task.observations[-16:] if session.active_task is not None else [],
         )
         self.logger.record(
             session.session_id,
@@ -687,6 +725,47 @@ def _active_skill_from_task(task: TaskState) -> SkillSpec | None:
         return SkillSpec.model_validate(raw_skill)
     except ValueError:
         return None
+
+
+def _apply_task_strategy(task: TaskState) -> None:
+    strategy = select_task_strategy(task)
+    if strategy is None:
+        task.metadata.pop("strategy", None)
+        return
+    metadata = strategy.to_metadata()
+    task.metadata["strategy"] = metadata
+    task.trace_events.append(
+        TraceEvent(
+            phase="runtime",
+            message="Task strategy selected",
+            data={
+                "strategy": metadata["name"],
+                "description": metadata["description"],
+                "risk_order": metadata["risk_order"],
+            },
+        )
+    )
+
+
+def _apply_read_efficiency_limits(task: TaskState) -> None:
+    if not _looks_like_broad_code_review_task(task):
+        return
+    task.limits.max_react_iterations = min(task.limits.max_react_iterations, CODE_REVIEW_MAX_REACT_ITERATIONS)
+    task.metadata["read_efficiency_limits"] = {
+        "max_react_iterations": task.limits.max_react_iterations,
+        "reason": "broad_code_review",
+    }
+
+
+def _looks_like_broad_code_review_task(task: TaskState) -> bool:
+    if task.plan and any(step.intent == "code_review" for step in task.plan):
+        return True
+    normalized = task.goal.lower()
+    if any(keyword in normalized for keyword in ["修改", "修复", "新增", "删除", "生成代码", "重构", "测试", "验证"]):
+        return False
+    return any(keyword in normalized for keyword in ["代码", "源码", "项目", "工程"]) and any(
+        keyword in normalized for keyword in ["审查", "问题", "风险", "清单", "质量", "看看", "分析"]
+    )
 
 
 def _normalize_plan_result(result, planner=None) -> tuple[list[PlanStep], str]:

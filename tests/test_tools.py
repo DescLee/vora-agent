@@ -2,10 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from vora.tools.base import resolve_workspace_path
+from vora.tools.base import ToolResult, resolve_workspace_path
+from vora.react import format_tool_result_message
 from vora.tools import (
     AppendFileTool,
     FetchWebpageTool,
+    GlobTool,
     ListFilesTool,
     MakeDirectoryTool,
     ReadFileTool,
@@ -27,6 +29,21 @@ def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
     assert "workspace" in result.summary
 
 
+def test_format_tool_result_message_truncates_content_in_the_middle() -> None:
+    result = ToolResult(
+        tool_name="run_bash",
+        ok=True,
+        summary="command exited 0",
+        content="HEAD-" + ("x" * 5000) + "-TAIL",
+    )
+
+    message = format_tool_result_message(result)
+
+    assert "HEAD-" in message
+    assert "-TAIL" in message
+    assert "omitted" in message
+
+
 def test_file_write_tools_return_structured_error_for_workspace_escape(tmp_path: Path) -> None:
     results = [
         WriteFileTool().run(workspace=tmp_path, path="../outside.txt", content="x", confirmed=True),
@@ -37,6 +54,18 @@ def test_file_write_tools_return_structured_error_for_workspace_escape(tmp_path:
 
     assert [result.error_code for result in results] == ["PATH_OUT_OF_WORKSPACE"] * 4
     assert all(result.ok is False for result in results)
+
+
+def test_glob_tool_finds_matching_workspace_files(tmp_path: Path) -> None:
+    (tmp_path / "src" / "api").mkdir(parents=True)
+    (tmp_path / "src" / "api" / "http.ts").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "api" / "user.ts").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "view.txt").write_text("", encoding="utf-8")
+
+    result = GlobTool().run(workspace=tmp_path, pattern="src/**/*.ts")
+
+    assert result.ok is True
+    assert result.paths == ["src/api/http.ts", "src/api/user.ts"]
 
 
 def test_file_write_tools_reject_directory_targets_with_structured_error(tmp_path: Path) -> None:
@@ -268,6 +297,21 @@ def test_read_file_summarizes_large_files_by_default(tmp_path: Path) -> None:
     assert result.data["file_size"] == target.stat().st_size
 
 
+def test_read_file_summarizes_generated_data_files_even_with_large_max_bytes(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    target = data_dir / "questions.js"
+    target.write_text("module.exports=[" + ("x" * 180_000) + "]", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="data/questions.js", max_bytes=1_000_000)
+
+    assert result.ok is True
+    assert result.summary == "file too large; returned summary for data/questions.js"
+    assert result.data["large_file_policy"] is True
+    assert result.data["truncated"] is True
+    assert len(result.content) < 2_000
+
+
 def test_read_file_reads_line_window(tmp_path: Path) -> None:
     (tmp_path / "module.py").write_text("\n".join(f"line {index}" for index in range(1, 8)) + "\n", encoding="utf-8")
 
@@ -491,6 +535,37 @@ def test_replace_in_file_replaces_unique_text_without_confirmation(tmp_path: Pat
     assert result.data["replacements"] == 1
 
 
+def test_replace_in_file_accepts_old_string_new_string_aliases(tmp_path: Path) -> None:
+    target = tmp_path / "app.txt"
+    target.write_text("hello old\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.txt",
+        old_string="old",
+        new_string="new",
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "hello new\n"
+
+
+def test_replace_in_file_rejects_line_range_without_text(tmp_path: Path) -> None:
+    target = tmp_path / "app.txt"
+    target.write_text("hello\n", encoding="utf-8")
+
+    result = ReplaceInFileTool().run(
+        workspace=tmp_path,
+        path="app.txt",
+        start_line=1,
+        end_line=1,
+    )
+
+    assert result.ok is False
+    assert result.error_code == "INVALID_TOOL_PARAMS"
+    assert "old_text/new_text" in result.summary
+
+
 def test_replace_in_file_rejects_missing_old_text(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
 
@@ -652,6 +727,7 @@ def test_tool_registry_exposes_default_file_tools() -> None:
     registry = ToolRegistry()
 
     assert isinstance(registry.get("list_files"), ListFilesTool)
+    assert isinstance(registry.get("glob"), GlobTool)
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
     assert isinstance(registry.get("replace_in_file"), ReplaceInFileTool)

@@ -19,6 +19,8 @@ DEFAULT_READ_CONTEXT_LINES = 40
 DEFAULT_READ_MAX_MATCHES = 3
 DEFAULT_LARGE_FILE_PREVIEW_LINES = 2
 DEFAULT_LARGE_FILE_PREVIEW_CHARS = 1_200
+GENERATED_DATA_FILE_SUMMARY_BYTES = 100_000
+HARD_LARGE_FILE_SUMMARY_BYTES = 500_000
 FULL_REWRITE_WARNING_BYTES = 4_096
 NOISE_DIR_NAMES = {
     ".cache",
@@ -153,6 +155,91 @@ class ListFilesTool(BaseTool):
         return [_display_path(root, workspace.expanduser().resolve())]
 
 
+class GlobTool(BaseTool):
+    name = "glob"
+    description = "Find workspace files matching a glob pattern. Prefer this over repeated list_files calls when locating files."
+    risk_level = "safe"
+    is_read_only = True
+
+    def describe_preview(self, **kwargs: Any) -> str:
+        pattern = kwargs.get("pattern", "*")
+        return f"Find files matching {pattern}"
+
+    def preview(self, **kwargs) -> ToolPreview:
+        return super().preview(**kwargs)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern relative to the workspace, e.g. 'src/**/*.ts'.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional relative directory to search from. Defaults to project root.",
+                    "default": ".",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of matching paths to return.",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 2000,
+                },
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        }
+
+    def run(self, **kwargs) -> ToolResult:
+        workspace = Path(kwargs["workspace"])
+        pattern = str(kwargs.get("pattern") or "").strip()
+        search_path = kwargs.get("path", ".")
+        limit = _positive_int(kwargs.get("limit"), DEFAULT_LIST_LIMIT)
+        if not pattern:
+            return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: pattern", error_code="INVALID_TOOL_PARAMS")
+        if Path(pattern).is_absolute():
+            return ToolResult(tool_name=self.name, ok=False, summary="pattern must be relative to workspace", error_code="INVALID_TOOL_PARAMS")
+        try:
+            root = _resolve_tool_path(self.name, workspace, search_path)
+        except _ToolPathError as error:
+            return error.result
+        if not root.exists():
+            return ToolResult(tool_name=self.name, ok=False, summary="workspace not found", error_code="FILE_NOT_FOUND")
+        if not root.is_dir():
+            return ToolResult(tool_name=self.name, ok=False, summary="path is not a directory", error_code="INVALID_TOOL_PARAMS")
+
+        workspace_root = workspace.expanduser().resolve()
+        gitignore_rules = load_gitignore_rules(workspace_root)
+        files = [
+            item
+            for item in sorted(root.glob(pattern))
+            if item.is_file()
+            and _is_path_within(item, workspace_root)
+            and not _is_noise_path(item, root)
+            and not is_gitignored(item, workspace_root, gitignore_rules)
+            and not _is_sensitive_file_path(_display_path(item, workspace_root))
+        ]
+        paths = [_display_path(item, workspace_root) for item in files]
+        truncated = len(paths) > limit
+        visible_paths = paths[:limit]
+        return ToolResult(
+            tool_name=self.name,
+            ok=True,
+            summary=f"matched {len(paths)} files for {pattern}" + (" (truncated)" if truncated else ""),
+            paths=visible_paths,
+            data={"pattern": pattern, "path": _display_path(root, workspace_root), "total": len(paths), "limit": limit, "truncated": truncated},
+        )
+
+    def resource_keys(self, **kwargs: Any) -> list[str]:
+        workspace = Path(kwargs["workspace"])
+        path = kwargs.get("path", ".")
+        root = resolve_workspace_path(workspace, path)
+        return [_display_path(root, workspace.expanduser().resolve())]
+
+
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = "Read a file inside the workspace."
@@ -263,6 +350,19 @@ class ReadFileTool(BaseTool):
                 encoding=str(kwargs.get("encoding", "utf-8")),
             )
         has_start_index = "start_index" in kwargs
+        if not has_start_index and _should_summarize_large_file_by_policy(relative_path, size):
+            result = _read_large_file_summary(
+                target,
+                path=str(path),
+                max_bytes=max_bytes,
+                encoding=str(kwargs.get("encoding", "utf-8")),
+            )
+            if result.ok:
+                result.data["large_file_policy"] = True
+                result.data["suggestion"] = (
+                    "Use query or start_line with limit_lines for generated/data files; avoid reading the whole file."
+                )
+            return result
         start_index = _non_negative_int(kwargs.get("start_index"), 0)
         if has_start_index and start_index > size:
             return ToolResult(
@@ -484,6 +584,20 @@ def _truncate_large_file_preview(content: str) -> str:
         return content
     omitted = len(content) - DEFAULT_LARGE_FILE_PREVIEW_CHARS
     return content[:DEFAULT_LARGE_FILE_PREVIEW_CHARS].rstrip() + f"\n... [omitted {omitted} preview char(s)]\n"
+
+
+def _should_summarize_large_file_by_policy(relative_path: str, size: int) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    if size >= HARD_LARGE_FILE_SUMMARY_BYTES:
+        return True
+    generated_or_data_file = (
+        normalized.startswith("data/")
+        or "/data/" in normalized
+        or ".generated." in normalized
+        or normalized.endswith(".generated.js")
+        or normalized.endswith(".generated.ts")
+    )
+    return generated_or_data_file and size >= GENERATED_DATA_FILE_SUMMARY_BYTES
 
 
 def _count_text_lines(target: Path) -> int:
@@ -807,10 +921,17 @@ class ReplaceInFileTool(BaseTool):
     def run(self, **kwargs) -> ToolResult:
         workspace = Path(kwargs["workspace"])
         path = kwargs.get("path")
-        old_text = kwargs.get("old_text")
-        new_text = kwargs.get("new_text")
+        old_text = kwargs.get("old_text", kwargs.get("old_string"))
+        new_text = kwargs.get("new_text", kwargs.get("new_string"))
         if not path:
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: path", error_code="INVALID_TOOL_PARAMS")
+        if old_text is None and new_text is None and ("start_line" in kwargs or "end_line" in kwargs):
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="replace_in_file requires old_text/new_text; read the target line range first, then pass exact text",
+                error_code="INVALID_TOOL_PARAMS",
+            )
         if old_text is None:
             return ToolResult(tool_name=self.name, ok=False, summary="missing required argument: old_text", error_code="INVALID_TOOL_PARAMS")
         if new_text is None:

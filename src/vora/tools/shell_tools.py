@@ -213,9 +213,10 @@ class RunTempScriptTool(BaseTool):
                 script_path = Path(directory) / filename
                 script_path.write_text(str(content), encoding=kwargs.get("encoding", "utf-8"))
                 script_path.chmod(0o700)
+                command = [str(script_path)] if str(content).startswith("#!") else ["bash", str(script_path)]
                 result = _run_command(
                     tool_name=self.name,
-                    command=["bash", str(script_path)],
+                    command=command,
                     cwd=workspace,
                     timeout_seconds=timeout_seconds,
                     output_limit=output_limit,
@@ -425,10 +426,10 @@ def analyze_command_risk(
 
 
 def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
-    if _reads_sensitive_workspace_file(command_text):
+    if _transfers_sensitive_workspace_file(command_text):
         return CommandRisk(
             True,
-            summary="command reads sensitive workspace files",
+            summary="command transfers sensitive workspace files",
             source="local_heuristic",
         )
     if _touches_workspace_file(command_text):
@@ -447,33 +448,27 @@ def _analyze_local_command_mutation_risk(command_text: str) -> CommandRisk:
     return CommandRisk(False, source="local_heuristic")
 
 
-def _reads_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> bool:
+def _transfers_sensitive_workspace_file(command_text: str, *, depth: int = 0) -> bool:
     if depth > 2:
         return False
-    if _python_reads_sensitive_file(command_text):
+    if _python_transfers_sensitive_file(command_text):
         return True
-    if _command_substitutions_read_sensitive_file(command_text, depth=depth):
+    if _command_substitutions_transfer_sensitive_file(command_text, depth=depth):
         return True
     for tokens in _shell_command_segments(command_text):
         if not tokens:
             continue
         command_name = "." if tokens[0] == "." else Path(tokens[0]).name
-        if command_name in NESTED_SHELL_COMMANDS and _nested_shell_reads_sensitive_file(tokens, depth=depth):
-            return True
-        if _has_sensitive_input_redirection(tokens):
+        if command_name in NESTED_SHELL_COMMANDS and _nested_shell_transfers_sensitive_file(tokens, depth=depth):
             return True
         if _copies_sensitive_file(tokens):
-            return True
-        if command_name not in SENSITIVE_READ_COMMANDS:
-            continue
-        if any(_is_sensitive_shell_path(token) for token in tokens[1:]):
             return True
     return False
 
 
-def _command_substitutions_read_sensitive_file(command_text: str, *, depth: int) -> bool:
+def _command_substitutions_transfer_sensitive_file(command_text: str, *, depth: int) -> bool:
     for nested_command in _command_substitution_contents(command_text):
-        if _reads_sensitive_workspace_file(nested_command, depth=depth + 1):
+        if _transfers_sensitive_workspace_file(nested_command, depth=depth + 1):
             return True
     return False
 
@@ -549,23 +544,21 @@ def _copies_sensitive_file(tokens: list[str]) -> bool:
     return any(_is_sensitive_shell_path(token) for token in tokens[1:])
 
 
-def _nested_shell_reads_sensitive_file(tokens: list[str], *, depth: int) -> bool:
+def _nested_shell_transfers_sensitive_file(tokens: list[str], *, depth: int) -> bool:
     for index, token in enumerate(tokens[1:], start=1):
         if token.startswith("-") and "c" in token:
             script_index = index + 1
             if script_index >= len(tokens):
                 return False
-            return _reads_sensitive_workspace_file(tokens[script_index], depth=depth + 1)
+            return _transfers_sensitive_workspace_file(tokens[script_index], depth=depth + 1)
     return False
 
 
-def _python_reads_sensitive_file(command_text: str) -> bool:
+def _python_transfers_sensitive_file(command_text: str) -> bool:
     if not re.search(r"\bpython(?:3)?\b", command_text):
         return False
     sensitive_vars = _python_sensitive_path_vars(command_text)
     patterns = (
-        r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]",
-        r"\bPath\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:read_text|read_bytes|open)\s*\(",
         r"\bshutil\.(?:copy|copy2|copyfile|move)\s*\(\s*['\"]([^'\"]+)['\"]",
     )
     for pattern in patterns:
@@ -574,9 +567,6 @@ def _python_reads_sensitive_file(command_text: str) -> bool:
     for variable in sensitive_vars:
         escaped = re.escape(variable)
         variable_patterns = (
-            rf"\bopen\s*\(\s*{escaped}\b",
-            rf"\bPath\s*\(\s*{escaped}\b\s*\)\.(?:read_text|read_bytes|open)\s*\(",
-            rf"\b{escaped}\.(?:read_text|read_bytes|open)\s*\(",
             rf"\bshutil\.(?:copy|copy2|copyfile|move)\s*\(\s*{escaped}\b",
         )
         if any(re.search(pattern, command_text) for pattern in variable_patterns):
