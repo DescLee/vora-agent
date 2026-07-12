@@ -143,7 +143,7 @@ class RunBashTool(BaseTool):
 
 class RunTempScriptTool(BaseTool):
     name = "run_temp_script"
-    description = "Write a temporary bash script, run it in the workspace, then delete the script."
+    description = "Write a temporary script, run it in the workspace, then delete the script."
     risk_level = "command"
     is_read_only = False
 
@@ -213,7 +213,7 @@ class RunTempScriptTool(BaseTool):
                 script_path = Path(directory) / filename
                 script_path.write_text(str(content), encoding=kwargs.get("encoding", "utf-8"))
                 script_path.chmod(0o700)
-                command = [str(script_path)] if str(content).startswith("#!") else ["bash", str(script_path)]
+                command = _temp_script_command(script_path, str(content))
                 result = _run_command(
                     tool_name=self.name,
                     command=command,
@@ -227,6 +227,17 @@ class RunTempScriptTool(BaseTool):
         finally:
             if script_path is not None:
                 script_path.unlink(missing_ok=True)
+
+
+def _temp_script_command(script_path: Path, content: str) -> list[str]:
+    if content.startswith("#!"):
+        return [str(script_path)]
+    suffix = script_path.suffix.lower()
+    if suffix == ".py":
+        return ["python3", str(script_path)]
+    if suffix in {".js", ".cjs", ".mjs"}:
+        return ["node", str(script_path)]
+    return ["bash", str(script_path)]
 
 
 def _run_command(
@@ -296,21 +307,46 @@ def _run_command(
     stderr = stderr or ""
     stdout = redact_sensitive_text(stdout)
     stderr = redact_sensitive_text(stderr)
-    ok = process.returncode == 0
+    negative_probe = _is_empty_negative_probe(command, process.returncode, stdout, stderr)
+    ok = process.returncode == 0 or negative_probe
+    summary = "command produced no matches" if negative_probe else f"command exited {process.returncode}"
+    data = {
+        "exit_code": process.returncode,
+        "stdout": _truncate(stdout, output_limit),
+        "stderr": _truncate(stderr, output_limit),
+        "timed_out": False,
+        "cancelled": False,
+    }
+    if negative_probe:
+        data["negative_probe"] = True
     return ToolResult(
         tool_name=tool_name,
         ok=ok,
-        summary=f"command exited {process.returncode}",
+        summary=summary,
         content=_combined_output(stdout, stderr, output_limit),
-        data={
-            "exit_code": process.returncode,
-            "stdout": _truncate(stdout, output_limit),
-            "stderr": _truncate(stderr, output_limit),
-            "timed_out": False,
-            "cancelled": False,
-        },
+        data=data,
         error_code=None if ok else "COMMAND_FAILED",
     )
+
+
+def _is_empty_negative_probe(command: list[str], exit_code: int | None, stdout: str, stderr: str) -> bool:
+    if exit_code != 1 or stdout or stderr:
+        return False
+    if len(command) >= 3 and command[:2] == ["bash", "-lc"]:
+        command_text = command[2].strip()
+    else:
+        return False
+    try:
+        first_segment = re.split(r"\s*(?:&&|\|\||;|\|)\s*", command_text, maxsplit=1)[0]
+        tokens = shlex.split(first_segment)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    command_name = Path(tokens[0]).name
+    if command_name in {"grep", "egrep", "fgrep", "rg"}:
+        return True
+    return command_name in {"cat", "ls"} and "2>/dev/null" in command_text.replace(" ", "")
 
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:

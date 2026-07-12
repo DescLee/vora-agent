@@ -358,6 +358,24 @@ def test_read_file_searches_query_and_returns_context_windows(tmp_path: Path) ->
     ]
 
 
+def test_read_file_query_supports_regex_alternatives(tmp_path: Path) -> None:
+    (tmp_path / "module.ts").write_text(
+        "import { request } from './request'\n"
+        "const value = 1\n"
+        "export const getData = () => request('/data')\n",
+        encoding="utf-8",
+    )
+
+    result = ReadFileTool().run(workspace=tmp_path, path="module.ts", query="import|export|getData", context_lines=0)
+
+    assert result.ok is True
+    assert result.summary == "found 2 match(es) for query in module.ts"
+    assert "import { request }" in result.content
+    assert "export const getData" in result.content
+    assert result.data["query_mode"] == "regex"
+    assert result.data["matches"] == [1, 3]
+
+
 def test_read_file_query_reports_no_matches(tmp_path: Path) -> None:
     (tmp_path / "module.py").write_text("def alpha():\n    pass\n", encoding="utf-8")
 

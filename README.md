@@ -55,6 +55,8 @@
 
 验证命令识别包含常见前端构建链路，例如 `npx vite build --mode uat`，代码写入后的成功构建会被 Reflection 识别为有效验证证据。
 
+临时脚本工具会按 shebang 或 `.py/.js/.cjs/.mjs` 文件后缀选择解释器，避免把 Python/Node 校验脚本误当成 bash。`run_bash` 对空输出的 `grep/rg` 未命中和显式静默的可选文件探测做负向探测处理，不再把这类“未找到”计入工具调用错误。
+
 ## 安装
 
 ```bash

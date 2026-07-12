@@ -52,6 +52,26 @@ def test_run_bash_reports_non_zero_exit_code(tmp_path: Path) -> None:
     assert "bad" in result.data["stderr"]
 
 
+def test_run_bash_treats_empty_grep_miss_as_negative_probe(tmp_path: Path) -> None:
+    (tmp_path / "module.ts").write_text("export const value = 1\n", encoding="utf-8")
+
+    result = RunBashTool().run(workspace=tmp_path, command="grep -n 'missingSymbol' module.ts")
+
+    assert result.ok is True
+    assert result.error_code is None
+    assert result.data["exit_code"] == 1
+    assert result.data["negative_probe"] is True
+
+
+def test_run_bash_treats_suppressed_optional_cat_miss_as_negative_probe(tmp_path: Path) -> None:
+    result = RunBashTool().run(workspace=tmp_path, command="cat optional-file.txt 2>/dev/null")
+
+    assert result.ok is True
+    assert result.error_code is None
+    assert result.data["exit_code"] == 1
+    assert result.data["negative_probe"] is True
+
+
 def test_run_bash_timeout_terminates_child_process_group(tmp_path: Path) -> None:
     marker = tmp_path / "child-finished.txt"
 
@@ -582,6 +602,32 @@ def test_run_temp_script_respects_shebang_interpreter(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.data["exit_code"] == 0
     assert "node-ok" in result.content
+
+
+def test_run_temp_script_uses_python_for_py_filename_without_shebang(tmp_path: Path) -> None:
+    result = RunTempScriptTool().run(
+        workspace=tmp_path,
+        content="from pathlib import Path\nprint(Path.cwd().name)\n",
+        filename="agent-check.py",
+        is_test=True,
+    )
+
+    assert result.ok is True
+    assert result.data["exit_code"] == 0
+    assert tmp_path.name in result.content
+
+
+def test_run_temp_script_uses_node_for_cjs_filename_without_shebang(tmp_path: Path) -> None:
+    result = RunTempScriptTool().run(
+        workspace=tmp_path,
+        content="const path = require('path')\nconsole.log(path.basename(process.cwd()))\n",
+        filename="agent-check.cjs",
+        is_test=True,
+    )
+
+    assert result.ok is True
+    assert result.data["exit_code"] == 0
+    assert tmp_path.name in result.content
 
 
 def test_run_temp_script_deletes_script_after_failure(tmp_path: Path) -> None:

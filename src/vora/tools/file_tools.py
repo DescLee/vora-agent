@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from collections import deque
 from dataclasses import dataclass
@@ -483,6 +484,7 @@ def _read_file_line_window(target: Path, *, path: str, start_line: int, limit_li
 
 
 def _read_file_query_window(target: Path, *, path: str, query: str, encoding: str, context_lines: int, max_matches: int) -> ToolResult:
+    matcher, query_mode = _query_matcher(query)
     match_lines: list[int] = []
     captured_lines: dict[int, str] = {}
     previous_lines: deque[tuple[int, str]] = deque(maxlen=context_lines)
@@ -492,7 +494,7 @@ def _read_file_query_window(target: Path, *, path: str, query: str, encoding: st
     try:
         with target.open("r", encoding=encoding) as handle:
             for total_lines, line in enumerate(handle, start=1):
-                if query in line:
+                if matcher(line):
                     total_matches += 1
                     if len(match_lines) < max_matches:
                         match_lines.append(total_lines)
@@ -537,6 +539,7 @@ def _read_file_query_window(target: Path, *, path: str, query: str, encoding: st
         data={
             "path": path,
             "query": query,
+            "query_mode": query_mode,
             "matches": selected_matches,
             "total_matches": total_matches,
             "total_lines": total_lines,
@@ -544,6 +547,20 @@ def _read_file_query_window(target: Path, *, path: str, query: str, encoding: st
             "windows": [{"start_line": start_line, "end_line": end_line} for start_line, end_line in windows],
         },
     )
+
+
+def _query_matcher(query: str):
+    if not _looks_like_regex_query(query):
+        return lambda line: query in line, "literal"
+    try:
+        pattern = re.compile(query)
+    except re.error:
+        return lambda line: query in line, "literal"
+    return lambda line: pattern.search(line) is not None, "regex"
+
+
+def _looks_like_regex_query(query: str) -> bool:
+    return any(char in query for char in ("|", ".*", "\\b", "^", "$", "[", "]", "(", ")", "+", "?"))
 
 
 def _read_large_file_summary(target: Path, *, path: str, max_bytes: int, encoding: str) -> ToolResult:
