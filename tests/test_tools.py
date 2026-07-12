@@ -29,6 +29,27 @@ def test_read_file_rejects_escape_from_workspace(tmp_path: Path) -> None:
     assert "workspace" in result.summary
 
 
+def test_list_files_treats_leading_slash_project_path_as_workspace_relative(tmp_path: Path) -> None:
+    (tmp_path / "src" / "api").mkdir(parents=True)
+    (tmp_path / "src" / "api" / "http.ts").write_text("export const ok = true\n", encoding="utf-8")
+
+    result = ListFilesTool().run(workspace=tmp_path, path="/src/api")
+
+    assert result.ok is True
+    assert result.paths == ["src/api/http.ts"]
+
+
+def test_read_file_treats_leading_slash_project_path_as_workspace_relative(tmp_path: Path) -> None:
+    (tmp_path / "src" / "api").mkdir(parents=True)
+    (tmp_path / "src" / "api" / "http.ts").write_text("export const ok = true\n", encoding="utf-8")
+
+    result = ReadFileTool().run(workspace=tmp_path, path="/src/api/http.ts")
+
+    assert result.ok is True
+    assert "export const ok" in result.content
+    assert result.data["path"] == "/src/api/http.ts"
+
+
 def test_format_tool_result_message_truncates_content_in_the_middle() -> None:
     result = ToolResult(
         tool_name="run_bash",
@@ -381,9 +402,11 @@ def test_read_file_query_reports_no_matches(tmp_path: Path) -> None:
 
     result = ReadFileTool().run(workspace=tmp_path, path="module.py", query="missing_symbol")
 
-    assert result.ok is False
-    assert result.error_code == "QUERY_NOT_FOUND"
+    assert result.ok is True
+    assert result.error_code is None
+    assert result.summary == "no matches for query in module.py"
     assert result.data["query"] == "missing_symbol"
+    assert result.data["negative_probe"] is True
     assert result.data["total_lines"] == 2
 
 

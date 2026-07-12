@@ -347,6 +347,9 @@ CODE_CHANGE_TOOLS = {"write_file", "replace_in_file", "append_file", "make_direc
 CODE_CHANGE_KEYWORDS = (
     "修改",
     "修复",
+    "优化",
+    "增强",
+    "完善",
     "新增",
     "实现",
     "删除",
@@ -362,6 +365,7 @@ CODE_CHANGE_KEYWORDS = (
     "refactor",
 )
 CODE_TARGET_KEYWORDS = (
+    "api",
     "代码",
     "bug",
     ".py",
@@ -373,9 +377,12 @@ CODE_TARGET_KEYWORDS = (
     ".rs",
     ".sh",
     "函数",
+    "模块",
     "方法",
     "类",
     "接口",
+    "封装",
+    "错误处理",
     "测试",
 )
 REFLECTION_PYTEST_TIMEOUT_SECONDS = 30
@@ -505,7 +512,7 @@ def _is_code_modification_task(task: TaskState) -> bool:
     normalized = task.goal.lower()
     has_change = any(keyword in normalized for keyword in CODE_CHANGE_KEYWORDS)
     has_code_target = any(keyword in normalized for keyword in CODE_TARGET_KEYWORDS)
-    if any(step.intent == "code" for step in task.plan) and has_code_target:
+    if any(step.intent in {"code", "code_edit"} for step in task.plan) and has_code_target:
         return True
     return has_change and has_code_target
 

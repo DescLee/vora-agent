@@ -72,6 +72,15 @@ def test_run_bash_treats_suppressed_optional_cat_miss_as_negative_probe(tmp_path
     assert result.data["negative_probe"] is True
 
 
+def test_run_bash_normalizes_head_count_in_pipeline(tmp_path: Path) -> None:
+    result = RunBashTool().run(workspace=tmp_path, command="printf 'a\\nb\\n' | head 1")
+
+    assert result.ok is True
+    assert result.data["exit_code"] == 0
+    assert result.data["normalized_command"] == "printf 'a\\nb\\n' | head -n 1"
+    assert result.content == "stdout:\na\n"
+
+
 def test_run_bash_timeout_terminates_child_process_group(tmp_path: Path) -> None:
     marker = tmp_path / "child-finished.txt"
 

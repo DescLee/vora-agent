@@ -58,9 +58,15 @@ class Planner:
         llm_steps, reasoning = self._build_llm_plan(goal, session, run_id=run_id, active_skill=active_skill)
         self.last_reasoning_content = reasoning
         if llm_steps:
-            return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_steps))
+            return _ensure_code_edit_for_modification_goal(
+                goal,
+                _deduplicate_plan(_rewrite_delegated_choice_plan(goal, llm_steps)),
+            )
 
-        return _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized)))
+        return _ensure_code_edit_for_modification_goal(
+            goal,
+            _deduplicate_plan(_rewrite_delegated_choice_plan(goal, self._build_rule_plan(goal, normalized))),
+        )
 
     def _build_llm_plan(
         self,
@@ -121,7 +127,7 @@ class Planner:
         steps: list[PlanStep] = []
         for raw_line in content.splitlines():
             line = raw_line.strip()
-            if not line:
+            if not line or line.startswith("```"):
                 continue
             line = re.sub(r"^[\-\*\d\.\)\(、\s]+", "", line).strip()
             if not line:
@@ -364,6 +370,23 @@ def _deduplicate_plan(steps: list[PlanStep]) -> list[PlanStep]:
         seen.add(key)
         deduplicated.append(step)
     return deduplicated
+
+
+def _ensure_code_edit_for_modification_goal(goal: str, steps: list[PlanStep]) -> list[PlanStep]:
+    if not steps or any(step.intent in {"code", "code_edit"} for step in steps):
+        return steps
+    normalized = goal.lower()
+    if "建议" in normalized and not any(keyword in normalized for keyword in ("修改", "修复", "实现", "改代码")):
+        return steps
+    modification_keywords = ("修改", "修复", "优化", "增强", "完善", "重构", "改造", "调整", "实现")
+    code_keywords = ("api", "接口", "封装", "错误处理", "代码", "函数", "模块", "组件", "页面", "文件")
+    if not any(keyword in normalized for keyword in modification_keywords):
+        return steps
+    if not any(keyword in normalized for keyword in code_keywords):
+        return steps
+    edit_step = PlanStep(description="按目标修改相关代码并保持调用兼容", intent="code_edit")
+    insert_at = next((index for index, step in enumerate(steps) if step.intent == "code_validate"), len(steps))
+    return [*steps[:insert_at], edit_step, *steps[insert_at:]]
 
 
 def _rewrite_delegated_choice_plan(goal: str, steps: list[PlanStep]) -> list[PlanStep]:

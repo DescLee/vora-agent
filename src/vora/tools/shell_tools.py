@@ -114,14 +114,15 @@ class RunBashTool(BaseTool):
         }
 
     def run(self, **kwargs: Any) -> ToolResult:
-        command = str(kwargs.get("command", "")).strip()
-        if not command:
+        raw_command = str(kwargs.get("command", "")).strip()
+        if not raw_command:
             return ToolResult(
                 tool_name=self.name,
                 ok=False,
                 summary="missing required argument: command",
                 error_code="INVALID_TOOL_PARAMS",
             )
+        command = _normalize_read_only_shell_command(raw_command)
         rejection = _command_rejection(command, tool_name=self.name)
         if rejection is not None:
             return rejection
@@ -131,7 +132,7 @@ class RunBashTool(BaseTool):
             return _confirmation_required_result(self.name, risk)
         timeout_seconds = _optional_positive_int(kwargs.get("timeout_seconds"))
         output_limit = _positive_int(kwargs.get("output_limit"), DEFAULT_OUTPUT_LIMIT)
-        return _run_command(
+        result = _run_command(
             tool_name=self.name,
             command=["bash", "-lc", command],
             cwd=workspace,
@@ -139,6 +140,9 @@ class RunBashTool(BaseTool):
             output_limit=output_limit,
             cancel_event=kwargs.get("_cancel_event"),
         )
+        if command != raw_command:
+            result.data["normalized_command"] = command
+        return result
 
 
 class RunTempScriptTool(BaseTool):
@@ -244,6 +248,14 @@ def _temp_script_command(script_path: Path, content: str) -> list[str]:
     if suffix in {".js", ".cjs", ".mjs"}:
         return ["node", str(script_path)]
     return ["bash", str(script_path)]
+
+
+def _normalize_read_only_shell_command(command: str) -> str:
+    return re.sub(
+        r"(^|[|;&]\s*)(head|tail)\s+([1-9]\d*)(?=\s*(?:[|;&]|$))",
+        lambda match: f"{match.group(1)}{match.group(2)} -n {match.group(3)}",
+        command,
+    )
 
 
 def _run_command(

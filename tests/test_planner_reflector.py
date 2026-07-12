@@ -186,6 +186,40 @@ def test_planner_corrects_chat_intent_for_file_reading_steps(tmp_path: Path) -> 
     assert steps[0].intent == "research"
 
 
+def test_planner_forces_code_edit_for_code_optimization_goal(tmp_path: Path) -> None:
+    class ReviewOnlyLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(
+                content=(
+                    "1. 定位 API 封装与错误处理入口 | code_review\n"
+                    "2. 验证现有错误处理行为 | code_validate\n"
+                    "3. 输出优化结论 | report"
+                )
+            )
+
+    planner = Planner(llm=ReviewOnlyLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("你优化下API 封装错误处理偏弱的问题", session=session)
+
+    assert any(step.intent == "code_edit" for step in steps)
+    assert any("优化" in step.description or "修改" in step.description for step in steps if step.intent == "code_edit")
+
+
+def test_planner_ignores_markdown_code_fences_in_llm_plan(tmp_path: Path) -> None:
+    class FencedLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content="```\n1. 读取 API 封装文件 | code_review\n2. 修改错误处理实现 | code_edit\n```")
+
+    planner = Planner(llm=FencedLLM())
+    session = SessionState.create(cwd=tmp_path)
+
+    steps = planner.build_plan("你优化下API 封装错误处理偏弱的问题", session=session)
+
+    assert [step.description for step in steps] == ["读取 API 封装文件", "修改错误处理实现"]
+    assert [step.intent for step in steps] == ["code_review", "code_edit"]
+
+
 def test_planner_system_prompt_includes_identity_project_overview_and_tool_constraints(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
     (tmp_path / "src").mkdir()
@@ -388,6 +422,28 @@ def test_reflection_run_rejects_code_task_without_validation(tmp_path: Path) -> 
     assert result.decision == "local_update"
     assert "修改代码修复 bug" in result.reason
     assert "pytest" in result.reason
+
+
+def test_reflection_run_rejects_code_edit_task_without_validation(tmp_path: Path) -> None:
+    class FakeReactLoop:
+        def run(self, task, session):  # noqa: ANN001, ANN201, ARG002
+            return ""
+
+    class AcceptingLLM:
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            return LLMResult(content='{"decision":"accept","reason":"non-code task accepted"}')
+
+    task = TaskState.create(goal="优化 API 封装错误处理", cwd=tmp_path)
+    task.plan = [PlanStep(description="修改错误处理实现", intent="code_edit")]
+    session = SessionState.create(cwd=tmp_path)
+    loop = ReflectionLoop(react_loop=FakeReactLoop(), llm=AcceptingLLM())
+
+    result = loop.run(task, session)
+
+    assert result.accepted is False
+    assert result.decision == "local_update"
+    assert "Reflection pytest gate failed" in result.reason
+    assert "优化 API 封装错误处理" in result.reason
 
 
 def test_reflection_run_executes_pytest_case_for_code_task(tmp_path: Path) -> None:

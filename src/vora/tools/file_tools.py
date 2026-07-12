@@ -510,10 +510,9 @@ def _read_file_query_window(target: Path, *, path: str, query: str, encoding: st
     if not match_lines:
         return ToolResult(
             tool_name="read_file",
-            ok=False,
-            summary=f"query not found in {path}",
-            error_code="QUERY_NOT_FOUND",
-            data={"query": query, "total_lines": total_lines},
+            ok=True,
+            summary=f"no matches for query in {path}",
+            data={"query": query, "query_mode": query_mode, "total_lines": total_lines, "negative_probe": True},
         )
     selected_matches = match_lines
     windows: list[tuple[int, int]] = []
@@ -763,9 +762,28 @@ def _resolve_tool_path(tool_name: str, workspace: Path, path: str | Path) -> Pat
     try:
         return resolve_workspace_path(workspace, path)
     except PermissionError as error:
+        remapped = _remap_leading_slash_project_path(workspace, path)
+        if remapped is not None:
+            return remapped
         code = str(error) or "PERMISSION_DENIED"
         summary = "path outside workspace" if code == "PATH_OUT_OF_WORKSPACE" else code
         raise _ToolPathError(ToolResult(tool_name=tool_name, ok=False, summary=summary, error_code=code)) from error
+
+
+def _remap_leading_slash_project_path(workspace: Path, path: str | Path) -> Path | None:
+    raw_path = str(path)
+    if not raw_path.startswith("/") or raw_path.startswith("//"):
+        return None
+    stripped = raw_path.lstrip("/")
+    if not stripped:
+        return None
+    first_part = stripped.split("/", 1)[0]
+    if first_part not in {"src", "app", "tests", "test", "lib", "components", "pages", "packages", "docs"}:
+        return None
+    try:
+        return resolve_workspace_path(workspace, stripped)
+    except PermissionError:
+        return None
 
 
 class WriteFileTool(BaseTool):
