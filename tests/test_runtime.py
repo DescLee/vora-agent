@@ -1972,6 +1972,8 @@ def test_code_edit_prompt_requires_batching_related_file_reads(tmp_path: Path) -
             system_text = "\n".join(message.content for message in messages if message.role == "system")
             assert "同一阶段需要多个文件时，一次性并行请求多个 read_file" in system_text
             assert "不要一轮只读取一个相关文件" in system_text
+            assert "整文件替换不要使用 replace_in_file" in system_text
+            assert "写入生产代码前必须先运行一次 is_test=true" in system_text
             return LLMResult(content="完成")
 
     session = SessionState.create(cwd=tmp_path)
