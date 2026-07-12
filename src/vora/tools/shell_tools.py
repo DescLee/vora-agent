@@ -170,7 +170,13 @@ class RunTempScriptTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "Bash script content. The script is deleted after execution."},
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "Temporary script content. The script is deleted after execution. "
+                        "Use a shebang or a filename ending in .sh/.py/.js/.cjs/.mjs so vora can choose the interpreter."
+                    ),
+                },
                 "filename": {"type": "string", "default": "agent-check.sh"},
                 "is_test": {
                     "type": "boolean",

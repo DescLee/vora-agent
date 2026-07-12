@@ -357,6 +357,9 @@ def test_tool_schema_exposes_shell_tools() -> None:
     assert "content" in script_schema["properties"]
     assert "is_test" in script_schema["properties"]
     assert "timeout_seconds" in script_schema["properties"]
+    raw_script_schema = ToolRegistry().get("run_temp_script").parameters_schema()
+    assert ".py" in raw_script_schema["properties"]["content"]["description"]
+    assert ".cjs" in raw_script_schema["properties"]["content"]["description"]
 
 
 def test_tool_schema_is_loaded_from_registered_tool() -> None:
