@@ -27,6 +27,8 @@
 | ReAct 工具循环 | 已实现 | 模型请求工具、执行工具、回填 observation，直到生成结果。 |
 | Reflection 质量门禁 | 已实现 | 非代码任务先直接放过；代码任务会运行临时 pytest gate。 |
 | 工具调度 | 已实现 | 只读工具可批量并行，敏感/写入/命令工具串行。 |
+| 查询驱动检索 | 已实现 | 轻量 Repo Map 配合 `search_code`、`glob` 和定向 `read_file`，避免问答前预扫描全部源码。 |
+| 结构化代码搜索 | 已实现 | `search_code` 支持单次最多 3 个查询词，返回文件、行号、片段和查询归属；优先使用 `rg --json`。 |
 | Skills 能力包 | 已实现 | 支持内置、本地项目和用户全局 Skill；命中后注入 Planner/ReAct，并限制工具候选范围。 |
 | MCP 配置管理 | 已实现 | `vora mcp list/add/remove` 可管理 MCP server 配置；当前版本先保存配置，尚未动态注入 MCP 工具。 |
 | 文件工具 | 已实现 | list/glob/read/write/replace/append/mkdir；`read_file`、`write_file`、`replace_in_file` 按用户要求直接执行，写入保留路径限制、diff 记录和 dry-run 不落盘。 |
@@ -34,6 +36,7 @@
 | 长期记忆 | 已实现 | SQLite 存储，敏感信息过滤，关键词检索。 |
 | 会话持久化 | 已实现 | list/resume/delete/clear，支持中断后修复 tool message。 |
 | 上下文压缩 | 已实现 | 用户消息后和 LLM 返回后同步压缩；按 50/70/90 阈值压缩工具输出、摘要历史、强制截断；压缩时保持 assistant/tool exchange 成组完整。 |
+| 上下文占用展示 | 已实现 | 请求前估算完整 Prompt 和工具 schema，响应后使用真实 `prompt_tokens` 校准。 |
 | 启动自检 | 已实现 | `vora doctor` 可检查本地存储路径、会话数量和 LLM 配置完整性。 |
 | eval 雏形 | 已实现 | `evals/run_evals.py` 可验证关键 Agent 行为。 |
 
@@ -54,6 +57,36 @@
 定位文件时优先使用 `search_code` 返回结构化的文件、行号和片段，或使用 `glob` 批量匹配路径；同一阶段需要多个文件时，提示词要求一次性并行读取，减少一轮只读一个文件造成的工具轮次膨胀。`read_file` 会直接把不超过 4 KB 的小文件正文放入模型上下文；更大的文件、生成文件和重复覆盖范围继续使用摘要、`content_ref` 或 `query/start_line/limit_lines` 精读目标窗口。
 
 Planner 和项目相关 ReAct 提示词只注入轻量 Repo Map，包含项目类型、根 manifest、顶层目录和固定入口候选，不遍历全仓、不读取源码正文。后续由 `search_code` 一次提交最多 3 个查询词并返回相关性排序结果，再按证据定向读取少量文件；研究和审查任务默认最多搜索 2 次、读取 6 个不同文件，第二次搜索只扩展一层，无新证据时停止。
+
+### 项目检索策略
+
+项目相关问题采用“先定位、再读取”的查询驱动流程：
+
+```text
+用户问题
+  -> 轻量 Repo Map 判断项目类型和大致范围
+  -> search_code 批量搜索符号、错误信息或业务关键词
+  -> glob 补充定位文件名和测试文件
+  -> 按相关性选择少量候选
+  -> read_file 读取小文件或目标代码区间
+  -> 证据足够后停止检索并输出结论
+```
+
+`search_code` 底层优先调用 ripgrep（`rg --json`）。`rg` 在磁盘层搜索符合条件的文本文件，但只有命中的路径、行号和片段会进入模型上下文；它不会把所有源码依次发送给模型。系统会遵守 `.gitignore`，并排除依赖目录、构建产物、敏感文件和超过限制的大文件；没有安装 `rg` 时自动回退到 Python 搜索。
+
+例如分析 Token 校验流程时，可以在一次调用中搜索：
+
+```json
+{
+  "queries": ["verify_token", "token expired", "Authorization"],
+  "path": "src",
+  "max_results": 30
+}
+```
+
+返回结果包含 `path`、`line`、`snippet` 和 `query`，模型据此只读取定义、直接调用方和对应测试。相比先 `list_files` 再逐个 `read_file`，这种方式能减少无效文件读取、工具轮次和上下文噪声。
+
+TUI 的“当前上下文”也按真实请求口径展示：Planner、ReAct 和 Reflection 发起请求前会估算系统提示词、历史消息、Repo Map、工具结果及工具 schema；接口返回后再使用真实 `prompt_tokens` 更新，避免新任务只按聊天消息估算而错误显示接近 `0%`。
 
 验证命令识别包含常见前端构建链路，例如 `npx vite build --mode uat`，代码写入后的成功构建会被 Reflection 识别为有效验证证据。
 
@@ -145,7 +178,7 @@ vora skills remove project-analysis --cwd .
   "name": "project-analysis",
   "description": "分析本地项目结构、工程质量、测试体系和面试讲解点。",
   "triggers": ["项目分析", "架构", "面试", "工程质量"],
-  "tool_allowlist": ["list_files", "read_file", "run_bash"],
+  "tool_allowlist": ["search_code", "glob", "read_file", "run_bash"],
   "acceptance": ["引用具体文件", "说明设计取舍", "指出边界和风险"]
 }
 ```
@@ -153,7 +186,7 @@ vora skills remove project-analysis --cwd .
 `skills/project-analysis/instructions.md`：
 
 ```md
-先看 README、pyproject、src、tests、docs。
+先根据 Repo Map 判断范围，使用 search_code/glob 定位证据，再读取少量关键文件。
 输出时按架构、Agent 能力、工程质量、测试保障、风险和下一步分类。
 面试场景下要强调设计取舍和工程边界，不要把项目说成完整生产平台。
 ```
@@ -185,7 +218,7 @@ python evals/run_evals.py
 
 推荐展示三条路径：
 
-1. 项目分析：让 Agent 扫描当前项目并生成结构化总结。
+1. 项目分析：让 Agent 通过 Repo Map、结构化搜索和定向读取生成项目总结，并观察它如何避免全仓预扫描。
 2. 文件修改审计：让 Agent 修改一个文件，展示 diff preview；`read_file`、`write_file`、`replace_in_file` 按用户要求直接执行。
 3. 代码门禁：让 Agent 做代码修改，说明 Reflection 会生成 pytest 验收 case，不通过则回流继续执行。
 
