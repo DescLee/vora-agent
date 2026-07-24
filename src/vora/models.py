@@ -193,6 +193,7 @@ class SessionState(BaseModel):
     pending_confirmation: PendingConfirmation | None = None
     run_ids: list[str] = Field(default_factory=list)
     model_context_limit: int | None = None
+    current_context_tokens: int | None = None
     total_prompt_tokens: int = 0
     total_cached_prompt_tokens: int = 0
     total_non_cached_prompt_tokens: int = 0
@@ -221,6 +222,8 @@ class SessionState(BaseModel):
             if isinstance(non_cached_prompt_tokens, int) and non_cached_prompt_tokens > 0
             else max(0, prompt - cached)
         )
+        if prompt > 0:
+            self.current_context_tokens = prompt
         self.total_prompt_tokens += prompt
         self.total_cached_prompt_tokens += cached
         self.total_non_cached_prompt_tokens += non_cached

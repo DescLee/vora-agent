@@ -251,9 +251,9 @@ def test_planner_system_prompt_includes_identity_project_overview_and_tool_const
     assert "避免重复 list_files/read_file" in prompt
     assert "当前项目基本信息" in prompt
     assert f"项目名：{tmp_path.name}" in prompt
-    assert "项目代码目录结构" in prompt
-    assert "src/：核心实现代码" in prompt
-    assert "docs/：设计文档、问题记录和优化说明" in prompt
+    assert "项目轻量地图" in prompt
+    assert "顶层目录：docs/, src/, tests/" in prompt
+    assert "src/：核心实现代码" not in prompt
 
 
 def test_planner_sends_identity_and_project_overview_to_llm(tmp_path: Path) -> None:
@@ -277,10 +277,12 @@ def test_planner_sends_identity_and_project_overview_to_llm(tmp_path: Path) -> N
     system_prompt = llm.messages[0][0].content
     assert llm.messages[0][0].role == "system"
     assert "你叫 vora" in system_prompt
-    assert "项目代码目录结构" in system_prompt
+    assert "项目轻量地图" in system_prompt
     assert "工具使用要克制" in system_prompt
     assert "先定位目标模块，再决定是否读取文件" in system_prompt
-    assert "src/：核心实现代码" in system_prompt
+    assert "顶层目录：src/" in system_prompt
+    assert session.current_context_tokens is not None
+    assert session.current_context_tokens > 0
 
 
 def test_planner_falls_back_to_rules_when_llm_plan_is_empty(tmp_path: Path) -> None:

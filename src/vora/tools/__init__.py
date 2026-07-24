@@ -1,7 +1,7 @@
 from vora.tools.base import BaseTool, Tool, ToolPreview, ToolProtocol, ToolResult
 from vora.tools.automation_tools import extract_todos, generate_checklist, organize_notes
 from vora.tools.code_tools import apply_text_edit, propose_patch, read_code_file, scan_project
-from vora.tools.file_tools import AppendFileTool, GlobTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, WriteFileTool
+from vora.tools.file_tools import AppendFileTool, GlobTool, ListFilesTool, MakeDirectoryTool, ReadFileTool, ReplaceInFileTool, SearchCodeTool, WriteFileTool
 from vora.tools.research_tools import collect_local_docs, generate_markdown_report, summarize_text
 from vora.tools.registry import ToolRegistry
 from vora.tools.search_tools import FetchWebpageTool, WebSearchTool
@@ -27,6 +27,7 @@ __all__ = [
     "ReplaceInFileTool",
     "RunBashTool",
     "RunTempScriptTool",
+    "SearchCodeTool",
     "summarize_text",
     "Tool",
     "ToolPreview",

@@ -102,6 +102,68 @@ def test_glob_tool_finds_matching_workspace_files(tmp_path: Path) -> None:
     assert result.paths == ["src/api/http.ts", "src/api/user.ts"]
 
 
+def test_search_code_returns_structured_matches_and_respects_gitignore(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text(
+        "def target_symbol():\n    return 'ok'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "ignored.py").write_text("def target_symbol(): pass\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+
+    tool = ToolRegistry().get("search_code")
+    result = tool.run(workspace=tmp_path, query="target_symbol", path=".", max_results=10)
+
+    assert result.ok is True
+    assert result.summary == "found 1 code match for target_symbol"
+    assert result.data["matches"] == [
+        {
+            "path": "src/app.py",
+            "line": 1,
+            "snippet": "def target_symbol():",
+        }
+    ]
+    assert "src/app.py:1: def target_symbol():" in result.content
+    assert "ignored.py" not in result.content
+
+
+def test_search_code_limits_results(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text(
+        "\n".join(f"target_symbol_{index}" for index in range(5)),
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("search_code").run(
+        workspace=tmp_path,
+        query="target_symbol",
+        max_results=2,
+    )
+
+    assert result.ok is True
+    assert len(result.data["matches"]) == 2
+    assert result.data["truncated"] is True
+
+
+def test_search_code_supports_multiple_queries_with_query_attribution(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "service.py").write_text(
+        "class ReflectionLoop:\n    pass\n\ndef run_gate():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("search_code").run(
+        workspace=tmp_path,
+        queries=["ReflectionLoop", "run_gate"],
+        max_results=10,
+    )
+
+    assert result.ok is True
+    assert [match["query"] for match in result.data["matches"]] == ["ReflectionLoop", "run_gate"]
+    assert "src/service.py:1: class ReflectionLoop:" in result.content
+    assert "src/service.py:4: def run_gate():" in result.content
+
+
 def test_file_write_tools_reject_directory_targets_with_structured_error(tmp_path: Path) -> None:
     (tmp_path / "notes").mkdir()
 
@@ -782,6 +844,7 @@ def test_tool_registry_exposes_default_file_tools() -> None:
 
     assert isinstance(registry.get("list_files"), ListFilesTool)
     assert isinstance(registry.get("glob"), GlobTool)
+    assert registry.get("search_code").name == "search_code"
     assert isinstance(registry.get("read_file"), ReadFileTool)
     assert isinstance(registry.get("write_file"), WriteFileTool)
     assert isinstance(registry.get("replace_in_file"), ReplaceInFileTool)

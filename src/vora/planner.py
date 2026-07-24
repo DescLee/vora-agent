@@ -3,12 +3,12 @@ from __future__ import annotations
 import re
 from typing import cast
 
-from vora.context import build_cached_project_code_overview
 from vora.llm import LLMClient, LLMRequestError, extract_usage, get_default_llm_client, openai_messages
 from vora.logging import EventLogger
 from vora.models import Message, PlanIntent, PlanStep, SessionState
+from vora.project_index import build_cached_project_index
 from vora.skills import SkillSpec
-from vora.token_breakdown import record_llm_token_breakdown
+from vora.token_breakdown import estimate_llm_token_breakdown, record_llm_token_breakdown
 
 
 PLAN_INSTRUCTIONS = (
@@ -17,10 +17,10 @@ PLAN_INSTRUCTIONS = (
     "也具备代码能力，可以对项目代码进行查看、总结、修改、删除和生成。"
     "除此以外，你还可以进行文档写作、文档总结，以及深度行业研究报告撰写。"
     "\n\n"
-    "你现在处于 Planner 阶段，职责是根据用户目标、最近对话和当前项目结构，制定简洁可执行的计划。"
+    "你现在处于 Planner 阶段，职责是根据用户目标、最近对话和当前项目轻量地图，制定简洁可执行的计划。"
     "所有对用户可见或会进入 trace/TUI 的内容都必须使用中文，包括 reasoning_content、计划描述、原因说明和最终文本；"
     "不要输出英文思考句。"
-    "涉及项目或代码时，先基于下方目录结构判断需要查看的范围；只有信息不足时才计划调用工具。"
+    "涉及项目或代码时，先基于下方轻量地图判断需要查看的范围；只有信息不足时才计划调用工具。"
     "先定位目标模块，再决定是否读取文件；不要把“查看项目”默认扩成全仓库扫描。"
     "工具使用要克制：优先复用已有上下文，优先少量关键文件，避免重复 list_files/read_file，避免无目的地全量扫描。"
     "代码审查、问题清单、项目诊断类任务应先规划用只读 shell 命令批量定位线索，再按证据读取少量文件。"
@@ -177,6 +177,7 @@ class Planner:
         messages: list[Message],
         tool_names: list[str],
     ) -> None:
+        session.current_context_tokens = estimate_llm_token_breakdown(messages, tool_names)["estimated_total_tokens"]
         if self.logger is None:
             return
         record_llm_token_breakdown(
@@ -249,7 +250,7 @@ def build_planner_system_prompt(session: SessionState, active_skill: SkillSpec |
         f"- 项目名：{workspace.name}",
         f"- 工作目录：{workspace}",
         "",
-        build_cached_project_code_overview(workspace),
+        build_cached_project_index(workspace),
     ]
     if active_skill is not None:
         parts.extend(["", format_skill_for_planner(active_skill)])

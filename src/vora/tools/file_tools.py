@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import tempfile
 from collections import deque
 from dataclasses import dataclass
@@ -18,6 +20,8 @@ DEFAULT_MAX_WRITE_BYTES = 1_000_000
 DEFAULT_READ_LIMIT_LINES = 200
 DEFAULT_READ_CONTEXT_LINES = 40
 DEFAULT_READ_MAX_MATCHES = 3
+DEFAULT_SEARCH_CODE_MAX_RESULTS = 50
+DEFAULT_SEARCH_CODE_MAX_FILE_BYTES = 256_000
 DEFAULT_LARGE_FILE_PREVIEW_LINES = 2
 DEFAULT_LARGE_FILE_PREVIEW_CHARS = 1_200
 GENERATED_DATA_FILE_SUMMARY_BYTES = 100_000
@@ -239,6 +243,320 @@ class GlobTool(BaseTool):
         path = kwargs.get("path", ".")
         root = resolve_workspace_path(workspace, path)
         return [_display_path(root, workspace.expanduser().resolve())]
+
+
+class SearchCodeTool(BaseTool):
+    name = "search_code"
+    description = "Search workspace text files and return structured path, line, and snippet matches."
+    risk_level = "safe"
+    is_read_only = True
+
+    def describe_preview(self, **kwargs: Any) -> str:
+        query = kwargs.get("query", "")
+        return f"Search workspace code for {query}"
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Single text or regular expression to search for.",
+                },
+                "queries": {
+                    "type": "array",
+                    "description": "One to three texts or regular expressions to search in one batch.",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 3,
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional relative directory or file to search. Defaults to project root.",
+                    "default": ".",
+                },
+                "regex": {
+                    "type": "boolean",
+                    "description": "Treat query as a regular expression.",
+                    "default": False,
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Use case-sensitive matching.",
+                    "default": False,
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return.",
+                    "default": DEFAULT_SEARCH_CODE_MAX_RESULTS,
+                    "minimum": 1,
+                    "maximum": 500,
+                },
+                "max_file_bytes": {
+                    "type": "integer",
+                    "description": "Skip files larger than this size.",
+                    "default": DEFAULT_SEARCH_CODE_MAX_FILE_BYTES,
+                    "minimum": 1,
+                    "maximum": 2_000_000,
+                },
+            },
+            "anyOf": [{"required": ["query"]}, {"required": ["queries"]}],
+            "additionalProperties": False,
+        }
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        workspace = Path(kwargs["workspace"])
+        queries = _normalize_search_queries(kwargs)
+        if not queries:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary="missing required argument: query or queries",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+        try:
+            root = _resolve_tool_path(self.name, workspace, kwargs.get("path", "."))
+        except _ToolPathError as error:
+            return error.result
+        if not root.exists():
+            return ToolResult(tool_name=self.name, ok=False, summary="workspace not found", error_code="FILE_NOT_FOUND")
+
+        try:
+            patterns = _compile_search_patterns(
+                queries,
+                regex=bool(kwargs.get("regex", False)),
+                case_sensitive=bool(kwargs.get("case_sensitive", False)),
+            )
+        except re.error as error:
+            return ToolResult(
+                tool_name=self.name,
+                ok=False,
+                summary=f"invalid search pattern: {error}",
+                error_code="INVALID_TOOL_PARAMS",
+            )
+
+        workspace_root = workspace.expanduser().resolve()
+        gitignore_rules = load_gitignore_rules(workspace_root)
+        max_results = _positive_int(kwargs.get("max_results"), DEFAULT_SEARCH_CODE_MAX_RESULTS)
+        max_file_bytes = _positive_int(kwargs.get("max_file_bytes"), DEFAULT_SEARCH_CODE_MAX_FILE_BYTES)
+        matches = _search_code_with_rg(
+            workspace_root,
+            root,
+            queries,
+            patterns,
+            regex=bool(kwargs.get("regex", False)),
+            case_sensitive=bool(kwargs.get("case_sensitive", False)),
+            max_results=max_results,
+            max_file_bytes=max_file_bytes,
+        )
+        if matches is None:
+            matches = _search_code_with_python(
+                workspace_root,
+                root,
+                queries,
+                patterns,
+                gitignore_rules=gitignore_rules,
+                max_results=max_results,
+                max_file_bytes=max_file_bytes,
+            )
+
+        truncated = len(matches) > max_results
+        visible_matches = sorted(matches, key=lambda match: _search_match_sort_key(match, queries))[:max_results]
+        public_matches = (
+            [{key: value for key, value in match.items() if key != "query"} for match in visible_matches]
+            if len(queries) == 1
+            else visible_matches
+        )
+        count = len(visible_matches)
+        noun = "match" if count == 1 else "matches"
+        content = "\n".join(
+            f"{match['path']}:{match['line']}: {match['snippet']}"
+            for match in visible_matches
+        )
+        query_label = queries[0] if len(queries) == 1 else f"{len(queries)} queries"
+        return ToolResult(
+            tool_name=self.name,
+            ok=True,
+            summary=f"found {count} code {noun} for {query_label}" + (" (truncated)" if truncated else ""),
+            content=content,
+            paths=list(dict.fromkeys(str(match["path"]) for match in visible_matches)),
+            data={
+                "query": queries[0] if len(queries) == 1 else "",
+                "queries": queries,
+                "path": _display_path(root, workspace_root),
+                "matches": public_matches,
+                "limit": max_results,
+                "truncated": truncated,
+            },
+        )
+
+    def resource_keys(self, **kwargs: Any) -> list[str]:
+        workspace = Path(kwargs["workspace"])
+        root = resolve_workspace_path(workspace, kwargs.get("path", "."))
+        return [_display_path(root, workspace.expanduser().resolve())]
+
+
+def _normalize_search_queries(kwargs: dict[str, Any]) -> list[str]:
+    raw_queries = kwargs.get("queries")
+    values = list(raw_queries) if isinstance(raw_queries, list) else []
+    single = kwargs.get("query")
+    if single is not None:
+        values.insert(0, single)
+    queries = [str(value).strip() for value in values if str(value).strip()]
+    return list(dict.fromkeys(queries))[:3]
+
+
+def _compile_search_patterns(queries: list[str], *, regex: bool, case_sensitive: bool) -> list[re.Pattern[str]]:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return [re.compile(query if regex else re.escape(query), flags) for query in queries]
+
+
+def _search_code_with_rg(
+    workspace_root: Path,
+    root: Path,
+    queries: list[str],
+    patterns: list[re.Pattern[str]],
+    *,
+    regex: bool,
+    case_sensitive: bool,
+    max_results: int,
+    max_file_bytes: int,
+) -> list[dict[str, Any]] | None:
+    command = [
+        "rg",
+        "--json",
+        "--line-number",
+        "--color",
+        "never",
+        "--no-require-git",
+        "--max-filesize",
+        str(max_file_bytes),
+        "--max-count",
+        str(max_results + 1),
+    ]
+    if not regex:
+        command.append("--fixed-strings")
+    if not case_sensitive:
+        command.append("--ignore-case")
+    for name in sorted(NOISE_DIR_NAMES):
+        command.extend(["--glob", f"!**/{name}/**"])
+    for pattern in ("!**/.env*", "!**/*.pem", "!**/*.key", "!**/*.p12", "!**/*.pfx"):
+        command.extend(["--glob", pattern])
+    for query in queries:
+        command.extend(["-e", query])
+    command.append(_display_path(root, workspace_root))
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=workspace_root,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode not in {0, 1}:
+        return None
+
+    matches: list[dict[str, Any]] = []
+    for raw_line in completed.stdout.splitlines():
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "match":
+            continue
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        path_data = data.get("path") if isinstance(data.get("path"), dict) else {}
+        lines_data = data.get("lines") if isinstance(data.get("lines"), dict) else {}
+        path_text = str(path_data.get("text") or "")
+        snippet = str(lines_data.get("text") or "").rstrip("\r\n")
+        line_number = data.get("line_number")
+        if not path_text or not isinstance(line_number, int):
+            continue
+        candidate = (workspace_root / path_text).resolve() if not Path(path_text).is_absolute() else Path(path_text).resolve()
+        if not _is_path_within(candidate, workspace_root):
+            continue
+        relative_path = _display_path(candidate, workspace_root)
+        if _is_sensitive_file_path(relative_path):
+            continue
+        for query, pattern in zip(queries, patterns, strict=True):
+            if pattern.search(snippet) is None:
+                continue
+            matches.append(
+                {
+                    "path": relative_path,
+                    "line": line_number,
+                    "snippet": snippet.strip()[:300],
+                    "query": query,
+                }
+            )
+            if len(matches) > max_results:
+                return matches
+    return matches
+
+
+def _search_code_with_python(
+    workspace_root: Path,
+    root: Path,
+    queries: list[str],
+    patterns: list[re.Pattern[str]],
+    *,
+    gitignore_rules: list[GitignoreRule],
+    max_results: int,
+    max_file_bytes: int,
+) -> list[dict[str, Any]]:
+    candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+    matches: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not candidate.is_file() or not _is_path_within(candidate, workspace_root):
+            continue
+        relative_path = _display_path(candidate, workspace_root)
+        if (
+            _is_noise_path(candidate, workspace_root)
+            or is_gitignored(candidate, workspace_root, gitignore_rules)
+            or _is_sensitive_file_path(relative_path)
+        ):
+            continue
+        try:
+            if candidate.stat().st_size > max_file_bytes:
+                continue
+            raw = candidate.read_bytes()
+        except OSError:
+            continue
+        if _looks_binary(raw):
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for query, pattern in zip(queries, patterns, strict=True):
+                if pattern.search(line) is None:
+                    continue
+                matches.append(
+                    {
+                        "path": relative_path,
+                        "line": line_number,
+                        "snippet": line.strip()[:300],
+                        "query": query,
+                    }
+                )
+                if len(matches) > max_results:
+                    return matches
+    return matches
+
+
+def _search_match_sort_key(match: dict[str, Any], queries: list[str]) -> tuple[int, str, int, int]:
+    query = str(match["query"])
+    snippet = str(match["snippet"])
+    path = str(match["path"])
+    score = 0
+    if re.search(rf"\b{re.escape(query)}\b", snippet, re.IGNORECASE):
+        score += 100
+    if query.lower() in Path(path).name.lower():
+        score += 60
+    if snippet.strip().lower() == query.lower():
+        score += 40
+    return (-score, path, int(match["line"]), queries.index(query))
 
 
 class ReadFileTool(BaseTool):

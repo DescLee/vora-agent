@@ -13,6 +13,7 @@ from vora.context import (
     compact_messages_with_snapshot,
     estimate_message_tokens,
     run_context_compression_pipeline,
+    should_include_project_code_overview,
     validate_tool_call_pairs,
 )
 from vora.llm import (
@@ -28,9 +29,10 @@ from vora.executor import Executor, sanitize_tool_args
 from vora.logging import EventLogger
 from vora.models import Message, SessionState, TaskState, TraceEvent
 from vora.observer import Observer
+from vora.project_index import build_cached_project_index
 from vora.scheduler import ToolScheduler
 from vora.skills import SkillSpec
-from vora.token_breakdown import record_llm_token_breakdown
+from vora.token_breakdown import estimate_llm_token_breakdown, record_llm_token_breakdown
 from vora.tools.base import ToolResult
 from vora.tools.registry import ToolRegistry
 from vora.tools.shell_tools import LLMCommandRiskJudge, RunBashTool, RunTempScriptTool
@@ -40,6 +42,7 @@ from vora.validation import looks_like_inline_test_script, looks_like_validation
 MAX_TOOL_RESULT_PATHS = 20
 MAX_TOOL_RESULT_CONTENT_CHARS = 4000
 MAX_INLINE_TOOL_RESULT_CONTENT_CHARS = 1200
+MAX_INLINE_READ_FILE_CONTENT_CHARS = 4000
 TOOL_RESULT_PREVIEW_EDGE_CHARS = 500
 REACT_PROMPT_RECENT_SEGMENTS = 16
 CODE_REVIEW_RECENT_TOOL_EXCHANGES = 8
@@ -47,14 +50,16 @@ CODE_REVIEW_FINDINGS_LIMIT = 8
 READ_FILE_DEFAULT_LIMIT_LINES = 200
 CODE_REVIEW_MAX_READ_FILE_CALLS = 200
 CODE_REVIEW_MAX_READ_FILE_CALLS_PER_PATH = 3
+PROJECT_RETRIEVAL_MAX_SEARCH_CALLS = 2
+PROJECT_RETRIEVAL_MAX_READ_FILES = 6
 RUNTIME_ARG_KEYS = {"workspace", "confirmed"}
 REPEAT_CACHEABLE_TOOLS = {"list_files", "read_file"}
 REPEAT_BLOCKED_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "run_bash", "run_temp_script"}
 CODE_WRITE_TOOLS = {"write_file", "replace_in_file", "append_file"}
 SHELL_CODE_WRITE_TOOLS = {"run_bash", "run_temp_script"}
-READ_ONLY_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "web_search", "fetch_webpage"}
-CODE_REVIEW_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "run_bash"}
-FILE_OUTPUT_TOOL_SCHEMA_NAMES = {"list_files", "read_file", "write_file", "append_file", "make_directory"}
+READ_ONLY_TOOL_SCHEMA_NAMES = {"list_files", "glob", "search_code", "read_file", "web_search", "fetch_webpage"}
+CODE_REVIEW_TOOL_SCHEMA_NAMES = {"list_files", "glob", "search_code", "read_file", "run_bash"}
+FILE_OUTPUT_TOOL_SCHEMA_NAMES = {"list_files", "glob", "search_code", "read_file", "write_file", "append_file", "make_directory"}
 CODE_FILE_SUFFIXES = {
     ".c",
     ".cc",
@@ -164,17 +169,12 @@ def format_tool_result_message(tool_result, content_ref: str | None = None) -> s
         parts.append(_format_paths(tool_result.paths))
     if tool_result.written_path:
         parts.append(f"written_path: {tool_result.written_path}")
-    if (
-        tool_result.tool_name == "read_file"
-        and tool_result.ok
-        and tool_result.content
-        and content_ref
-        and not _is_targeted_read_file_result(tool_result)
-    ):
+    if tool_result.tool_name == "read_file" and tool_result.ok and tool_result.content and content_ref:
+        if len(tool_result.content) <= MAX_INLINE_READ_FILE_CONTENT_CHARS:
+            parts.append(_format_content(tool_result.content))
+            return "\n\n".join(parts)
         parts.append(_format_read_file_content_ref(tool_result, content_ref))
         return "\n\n".join(parts)
-    if tool_result.tool_name == "read_file" and tool_result.ok and tool_result.content and content_ref:
-        parts.append(_format_read_file_content_ref(tool_result, content_ref))
     if (
         tool_result.content
         and content_ref
@@ -198,9 +198,7 @@ def _is_targeted_read_file_result(tool_result) -> bool:
 def _read_file_model_content_inlined(tool_result) -> bool:
     if not tool_result.content:
         return False
-    if not _is_targeted_read_file_result(tool_result):
-        return False
-    return len(tool_result.content) <= MAX_INLINE_TOOL_RESULT_CONTENT_CHARS
+    return len(tool_result.content) <= MAX_INLINE_READ_FILE_CONTENT_CHARS
 
 
 def _format_read_file_content_ref(tool_result, content_ref: str) -> str:
@@ -475,9 +473,13 @@ def _default_tool_names_for_task(task: TaskState, available_names: list[str]) ->
     if _task_plan_needs_code_tools(task):
         return list(available_names)
     if _task_is_code_review(task):
-        return [name for name in ("run_bash", "read_file", "list_files") if name in available_names]
+        return [name for name in ("search_code", "glob", "run_bash", "read_file", "list_files") if name in available_names]
     if _task_is_code_validate(task):
-        return [name for name in available_names if name in {"list_files", "read_file", "run_bash", "run_temp_script"}]
+        return [
+            name
+            for name in available_names
+            if name in {"list_files", "glob", "search_code", "read_file", "run_bash", "run_temp_script"}
+        ]
     if _task_needs_code_tools(task):
         return list(available_names)
     if _task_needs_file_output_tools(task):
@@ -534,6 +536,12 @@ def _task_is_code_validate(task: TaskState) -> bool:
     return any(step.intent == "code_validate" for step in task.plan)
 
 
+def _task_uses_bounded_project_retrieval(task: TaskState) -> bool:
+    if _task_plan_needs_code_tools(task):
+        return False
+    return any(step.intent in {"research", "code_review"} for step in task.plan)
+
+
 def _task_needs_file_output_tools(task: TaskState) -> bool:
     return any(keyword in task.goal for keyword in EXPLICIT_WRITE_INTENT_KEYWORDS)
 
@@ -585,7 +593,7 @@ class ReActLoop:
                 )
             )
             validate_tool_call_pairs(messages)
-            llm_result = self._complete_with_rule_fallback(messages, task, session.session_id, tool_names=tool_names)
+            llm_result = self._complete_with_rule_fallback(messages, task, session, tool_names=tool_names)
             llm_result = self._normalize_tool_call_ids(llm_result, iteration_index)
             task.trace_events.append(
                 TraceEvent(
@@ -951,7 +959,7 @@ class ReActLoop:
             *messages,
             Message.system(system_instruction),
         ]
-        llm_result = self._complete_with_rule_fallback(final_messages, task, session.session_id, tool_names=[])
+        llm_result = self._complete_with_rule_fallback(final_messages, task, session, tool_names=[])
         llm_result = self._normalize_tool_call_ids(llm_result, task.limits.max_react_iterations + 1)
         task.trace_events.append(
             TraceEvent(
@@ -988,17 +996,20 @@ class ReActLoop:
         self,
         messages: list[Message],
         task: TaskState,
-        session_id: str,
+        session: SessionState,
         tool_names: list[str] | None = None,
     ) -> LLMResult:
         try:
             resolved_tool_names = tool_names if tool_names is not None else self.registry.names()
+            session.current_context_tokens = estimate_llm_token_breakdown(messages, resolved_tool_names)[
+                "estimated_total_tokens"
+            ]
             request_payload = {"messages": self._loggable_messages(messages), "tool_names": resolved_tool_names}
             if self.logger is not None:
                 iteration = len([event for event in task.trace_events if event.phase == "react"])
                 record_llm_token_breakdown(
                     self.logger,
-                    session_id,
+                    session.session_id,
                     task.run_id,
                     stage="react",
                     iteration=iteration,
@@ -1006,7 +1017,7 @@ class ReActLoop:
                     tool_names=list(resolved_tool_names),
                 )
                 self.logger.record(
-                    session_id,
+                    session.session_id,
                     task.run_id,
                     {
                         "type": "llm_request",
@@ -1021,7 +1032,7 @@ class ReActLoop:
             api_response_raw = result.source_response or result.model_dump(mode="json")
             if self.logger is not None:
                 self.logger.record(
-                    session_id,
+                    session.session_id,
                     task.run_id,
                     {
                         "type": "llm_response",
@@ -1037,7 +1048,7 @@ class ReActLoop:
         except (LLMRequestError, ValueError, TypeError, KeyError, IndexError) as error:
             if self.logger is not None:
                 self.logger.record(
-                    session_id,
+                    session.session_id,
                     task.run_id,
                     {
                         "type": "llm_response",
@@ -1096,8 +1107,10 @@ class ReActLoop:
             "涉及项目或代码时，先利用已有项目结构摘要、当前执行计划和最近工具结果判断；只有信息不足时才调用工具。",
             "开始执行前先定位目标模块和最小相关文件；已有上下文足够时直接推进，不要为了确认而重复读取。",
             "工具调用要尽量少，优先读取少量关键文件，避免重复 list_files/read_file 或无目的全量扫描。",
-            "同一阶段需要多个文件时，一次性并行请求多个 read_file/list_files/glob；不要一轮只读取一个相关文件再等待下一轮。",
-            "未带 query/start_line/start_index 的 read_file 只会把原文保存在本地工具观察里，并向模型上下文返回 content_ref；如果需要引用原文或修改代码，请继续用 query 或 start_line/limit_lines 获取目标上下文窗口。",
+            "定位代码时优先使用 search_code 或 glob；同一阶段需要多个文件时，一次性并行请求多个 read_file，并优先使用定向参数，不要一轮只读取一个相关文件再等待下一轮。",
+            "首次定位优先在一个 search_code 调用中提交不超过 3 个明确符号、路径或错误关键词；按相关性选择最多 6 个文件读取。",
+            "证据不足时最多再搜索一次，只扩展直接调用方、被调用方或对应测试；没有新增高相关证据时立即基于已有事实收口。",
+            "read_file 会直接返回小文件正文；大文件只返回 content_ref，此时请用 query 或 start_line/limit_lines 获取目标上下文窗口。",
             "如果用户表达“没想好、你来定、你看着办、反正换个”等授权你代为选择的意思，不要只给选项并等待用户选择；请自行选择保守方案并继续执行。",
             "如果计划要求读取 README、pyproject 或 docs 中的关键文档，请直接使用 read_file 读取对应文件。",
             "没有读取原文件前，不要凭空改写已有文件；需要修改时先确认当前内容和精确替换位置。",
@@ -1114,8 +1127,8 @@ class ReActLoop:
                 [
                     "当前是代码审查任务：只读取最小必要文件、沉淀问题证据并输出清单，不要修改文件。",
                     "代码审查阶段采用验证优先、证据优先、风险优先：先运行可用的状态/验证/风险搜索命令，再精读能支撑结论的文件。",
-                    "代码审查阶段工具优先级是 run_bash > read_file > list_files：run_bash 用于批量定位和验证，read_file 用于精读证据文件，只有 bash 不足或被拒绝时才用 list_files 补充。",
-                    "代码审查阶段不要请求写入工具或临时脚本；优先使用 run_bash 执行只读搜索、文件统计、lint/build 验证命令，例如 rg --files、rg、find、ls、sed、nl、wc、head、tail、pnpm run lint、pnpm run build。",
+                    "代码审查阶段工具优先级是 search_code > glob > run_bash > read_file > list_files：search_code/glob 用于结构化定位，run_bash 用于验证，read_file 用于精读证据文件。",
+                    "代码审查阶段不要请求写入工具或临时脚本；优先使用 search_code/glob 定位线索，run_bash 只执行文件统计、lint/build/test 等只读验证命令。",
                     "run_bash 只用于只读审查和验证；不要用它修改文件、安装依赖、删除文件、切换分支或执行网络/部署类命令。",
                     "run_bash 输出必须主动限量，例如使用 --max-count、--max-filesize、head/tail、find -maxdepth 或定向路径；不要 cat 大文件或输出全仓库长结果。",
                     "先批量定位关键文件，再一次读取较大的连续区间；同一文件不要反复读取重叠区间，已读过的范围要基于现有观察总结。",
@@ -1134,6 +1147,8 @@ class ReActLoop:
         skill_prompt = _format_active_skill_for_react(task)
         if skill_prompt:
             parts.extend(["", skill_prompt])
+        if should_include_project_code_overview(task.goal):
+            parts.extend(["", build_cached_project_index(task.cwd)])
         parts.extend(["", "当前执行计划", plan_text])
         return "\n".join(parts)
 
@@ -1499,6 +1514,22 @@ class ReActLoop:
         planned_read_file_keys: set[tuple[str, str, int | None, int | None, str | None, int | None, int | None]] = set()
         planned_read_fragment_counts: dict[tuple[str, str], int] = {}
         planned_fingerprints: dict[str, str] = {}
+        retrieval_search_calls = sum(
+            1
+            for event in task.trace_events
+            if event.phase == "tool"
+            and event.data.get("tool_name") == "search_code"
+            and isinstance(event.data.get("args"), dict)
+        )
+        retrieval_read_paths = {
+            _normalize_relative_path(str(event.data.get("args", {}).get("path") or ""))
+            for event in task.trace_events
+            if event.phase == "tool"
+            and event.data.get("tool_name") == "read_file"
+            and event.data.get("ok") is True
+            and isinstance(event.data.get("args"), dict)
+            and event.data.get("args", {}).get("path")
+        }
         for call in tool_calls:
             fragmented_read = self._fragmented_read_file_result(call, planned_read_fragment_counts)
             if fragmented_read is not None:
@@ -1536,6 +1567,16 @@ class ReActLoop:
             if repeat_result is not None:
                 tool_results[call.id] = repeat_result
                 continue
+            retrieval_budget_error = self._project_retrieval_budget_error(
+                call,
+                task,
+                search_calls=retrieval_search_calls,
+                read_paths=retrieval_read_paths,
+            )
+            if retrieval_budget_error is not None:
+                tool_results[call.id] = retrieval_budget_error
+                self._record_tool_rejection(task, call, retrieval_budget_error)
+                continue
             audit_budget_error = self._code_review_read_budget_error(call, task)
             if audit_budget_error is not None:
                 tool_results[call.id] = audit_budget_error
@@ -1552,6 +1593,12 @@ class ReActLoop:
                 fingerprint = _tool_call_fingerprint(call)
                 if fingerprint is not None:
                     planned_fingerprints[fingerprint] = call.id
+                if call.name == "search_code":
+                    retrieval_search_calls += 1
+                elif call.name == "read_file":
+                    path = _normalize_relative_path(str(call.args.get("path") or ""))
+                    if path:
+                        retrieval_read_paths.add(path)
                 known_tool_calls.append(self._with_runtime_tool_args(call, session))
                 continue
             tool_results[call.id] = ToolResult(
@@ -1578,6 +1625,37 @@ class ReActLoop:
                 data={"limit": task.limits.max_tool_calls_per_iteration},
         )
         return None
+
+    def _project_retrieval_budget_error(
+        self,
+        call,
+        task: TaskState,
+        *,
+        search_calls: int,
+        read_paths: set[str],
+    ) -> ToolResult | None:
+        if not _task_uses_bounded_project_retrieval(task):
+            return None
+        if call.name == "search_code" and search_calls >= PROJECT_RETRIEVAL_MAX_SEARCH_CALLS:
+            return ToolResult(
+                tool_name=call.name,
+                ok=False,
+                summary="project retrieval search budget exhausted; answer from current evidence",
+                error_code="PROJECT_RETRIEVAL_SEARCH_BUDGET_EXCEEDED",
+                data={"limit": PROJECT_RETRIEVAL_MAX_SEARCH_CALLS},
+            )
+        if call.name != "read_file":
+            return None
+        path = _normalize_relative_path(str(call.args.get("path") or ""))
+        if not path or path in read_paths or len(read_paths) < PROJECT_RETRIEVAL_MAX_READ_FILES:
+            return None
+        return ToolResult(
+            tool_name=call.name,
+            ok=False,
+            summary="project retrieval file budget exhausted; answer from the highest-value files already read",
+            error_code="PROJECT_RETRIEVAL_READ_BUDGET_EXCEEDED",
+            data={"limit": PROJECT_RETRIEVAL_MAX_READ_FILES, "path": path},
+        )
 
     def _code_change_precondition_error(self, call, task: TaskState, session: SessionState) -> ToolResult | None:
         paths: Sequence[str | None]

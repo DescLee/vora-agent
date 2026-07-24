@@ -70,8 +70,8 @@ def test_runtime_persists_tool_history_into_session_messages(tmp_path: Path) -> 
     assert "tool" in roles
     tool_messages = [message for message in result.messages if message.role == "tool" and message.tool_call_id == "call-read-readme"]
     assert len(tool_messages) == 1
-    assert "hello world" not in tool_messages[0].content
-    assert "content_ref:" in tool_messages[0].content
+    assert "content:\nhello world" in tool_messages[0].content
+    assert "content_ref:" not in tool_messages[0].content
     assert any(
         observation.tool_call_id == "call-read-readme" and observation.content == "hello world"
         for observation in result.active_task.observations
@@ -266,7 +266,7 @@ def test_runtime_project_question_does_not_become_chat_only_when_planner_mislabe
     assert "当前工作目录里的项目" in result.messages[-1].content
 
 
-def test_runtime_sends_project_code_overview_to_planner_before_project_requests(tmp_path: Path) -> None:
+def test_runtime_sends_lightweight_project_map_to_planner_before_project_requests(tmp_path: Path) -> None:
     class OverviewAwareLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -277,8 +277,10 @@ def test_runtime_sends_project_code_overview_to_planner_before_project_requests(
                 assert tool_names == []
                 system_messages = [message for message in messages if message.role == "system"]
                 assert any("你叫 vora" in message.content for message in system_messages)
-                assert any("项目代码目录结构" in message.content for message in system_messages)
-                assert any("src/：核心实现代码" in message.content for message in system_messages)
+                assert any("项目轻量地图" in message.content for message in system_messages)
+                assert any("顶层目录：docs/, src/, tests/" in message.content for message in system_messages)
+                assert all("项目代码目录结构" not in message.content for message in system_messages)
+                assert all("src/：核心实现代码" not in message.content for message in system_messages)
                 assert any("工具使用要克制" in message.content for message in system_messages)
                 return LLMResult(content="1. 基于目录结构判断关键文件 | research")
             return LLMResult(content="已了解目录结构，先看 README。")
@@ -1186,6 +1188,94 @@ def test_react_loop_allows_five_read_files_in_one_iteration(tmp_path: Path) -> N
     assert all(observation.ok for observation in task.observations)
 
 
+def test_react_loop_exposes_glob_and_search_code_for_project_read_tasks(tmp_path: Path) -> None:
+    loop = ReActLoop(registry=ToolRegistry())
+    generic_task = TaskState.create(goal="理解当前项目的入口", cwd=tmp_path)
+    generic_task.plan = [PlanStep(description="定位项目入口", intent="research")]
+    review_task = TaskState.create(goal="审查当前项目代码", cwd=tmp_path)
+    review_task.plan = [PlanStep(description="定位风险代码", intent="code_review")]
+    validate_task = TaskState.create(goal="验证当前项目", cwd=tmp_path)
+    validate_task.plan = [PlanStep(description="定位测试文件", intent="code_validate")]
+
+    for task in (generic_task, review_task, validate_task):
+        tool_names = loop._tool_names_for_task(task)
+        assert "glob" in tool_names
+        assert "search_code" in tool_names
+
+
+def test_react_loop_limits_project_retrieval_to_two_searches(tmp_path: Path) -> None:
+    class RepeatedSearchLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls <= 3:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call-search-{self.calls}",
+                            name="search_code",
+                            args={"query": f"symbol_{self.calls}"},
+                        )
+                    ]
+                )
+            tool_messages = [message.content for message in messages if message.role == "tool"]
+            assert "PROJECT_RETRIEVAL_SEARCH_BUDGET_EXCEEDED" in tool_messages[-1]
+            return LLMResult(content="基于已有证据收口")
+
+    task = TaskState.create(goal="分析当前项目入口", cwd=tmp_path)
+    task.plan = [PlanStep(description="定位入口", intent="research")]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(RepeatedSearchLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "基于已有证据收口"
+
+
+def test_react_loop_limits_project_retrieval_to_six_distinct_files(tmp_path: Path) -> None:
+    class SevenReadsLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResult(
+                    tool_calls=[
+                        ToolCall(id=f"call-read-{index}", name="read_file", args={"path": f"src/file_{index}.py"})
+                        for index in range(7)
+                    ]
+                )
+            tool_messages = [message.content for message in messages if message.role == "tool"]
+            assert sum("content:\n" in message for message in tool_messages) == 6
+            assert "PROJECT_RETRIEVAL_READ_BUDGET_EXCEEDED" in tool_messages[-1]
+            return LLMResult(content="读取高相关文件后收口")
+
+    (tmp_path / "src").mkdir()
+    for index in range(7):
+        (tmp_path / "src" / f"file_{index}.py").write_text(f"VALUE = {index}\n", encoding="utf-8")
+    task = TaskState.create(goal="分析当前项目入口", cwd=tmp_path)
+    task.plan = [PlanStep(description="读取候选入口", intent="research")]
+    session = SessionState.create(cwd=tmp_path)
+
+    result = ReActLoop(SevenReadsLLM(), ToolRegistry()).run(task, session)
+
+    assert result == "读取高相关文件后收口"
+
+
+def test_react_project_prompt_includes_project_index(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("def main(): pass\n", encoding="utf-8")
+    task = TaskState.create(goal="理解当前项目入口", cwd=tmp_path)
+    task.plan = [PlanStep(description="定位入口", intent="research")]
+
+    prompt = ReActLoop(registry=ToolRegistry())._system_prompt_for_task(task)
+
+    assert "项目轻量地图" in prompt
+    assert "入口候选：src/main.py" in prompt
+
+
 def test_react_loop_allows_overview_task_to_read_targeted_source_files(tmp_path: Path) -> None:
     class OverviewLLM:
         def __init__(self) -> None:
@@ -1201,10 +1291,10 @@ def test_react_loop_allows_overview_task_to_read_targeted_source_files(tmp_path:
                     ]
                 )
             tool_messages = {message.tool_call_id: message.content for message in messages if message.role == "tool"}
-            assert "# demo" not in tool_messages["call-read-readme"]
-            assert "SECRET = 'can be read when targeted'" not in tool_messages["call-read-deep"]
-            assert "content_ref:" in tool_messages["call-read-readme"]
-            assert "content_ref:" in tool_messages["call-read-deep"]
+            assert "content:\n# demo" in tool_messages["call-read-readme"]
+            assert "content:\nSECRET = 'can be read when targeted'" in tool_messages["call-read-deep"]
+            assert "content_ref:" not in tool_messages["call-read-readme"]
+            assert "content_ref:" not in tool_messages["call-read-deep"]
             return LLMResult(content="overview handled")
 
     (tmp_path / "README.md").write_text("# demo", encoding="utf-8")
@@ -1267,7 +1357,14 @@ def test_react_loop_trims_old_conversation_context_before_llm_request(tmp_path: 
 def test_react_loop_limits_tool_schema_for_research_task(tmp_path: Path) -> None:
     class InspectingToolNamesLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
-            assert set(tool_names) == {"list_files", "read_file", "web_search", "fetch_webpage"}
+            assert set(tool_names) == {
+                "list_files",
+                "glob",
+                "search_code",
+                "read_file",
+                "web_search",
+                "fetch_webpage",
+            }
             return LLMResult(content="分析完成")
 
     task = TaskState.create(goal="分析当前项目并给优化建议", cwd=tmp_path)
@@ -1285,7 +1382,7 @@ def test_react_loop_limits_tool_schema_for_research_task(tmp_path: Path) -> None
 def test_react_loop_allows_read_only_bash_for_code_review_task(tmp_path: Path) -> None:
     class InspectingToolNamesLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
-            assert set(tool_names) == {"list_files", "read_file", "run_bash"}
+            assert set(tool_names) == {"list_files", "glob", "search_code", "read_file", "run_bash"}
             return LLMResult(content="审查完成")
 
     task = TaskState.create(goal="看看当前项目代码还有哪些问题，列清单", cwd=tmp_path)
@@ -1304,7 +1401,8 @@ def test_react_loop_code_review_prompt_guides_read_only_bash(tmp_path: Path) -> 
     class InspectingPromptLLM:
         def complete_with_tools(self, messages, tool_names):  # noqa: ANN001, ANN201, ARG002
             system_text = "\n".join(message.content for message in messages if message.role == "system")
-            assert "run_bash 执行只读搜索" in system_text
+            assert "优先使用 search_code/glob 定位线索" in system_text
+            assert "run_bash 只执行文件统计、lint/build/test 等只读验证命令" in system_text
             assert "不要用它修改文件、安装依赖、删除文件" in system_text
             return LLMResult(content="审查完成")
 
@@ -1447,6 +1545,8 @@ def test_react_loop_skips_duplicate_successful_read_file_calls(tmp_path: Path) -
             if self.calls == 1:
                 return LLMResult(tool_calls=[ToolCall(id="call-read-1", name="read_file", args={"path": "README.md"})])
             if self.calls == 2:
+                first_read = next(message for message in messages if message.tool_call_id == "call-read-1")
+                assert "content:\n# demo" in first_read.content
                 return LLMResult(tool_calls=[ToolCall(id="call-read-2", name="read_file", args={"path": "README.md"})])
             return LLMResult(content="ok")
 
@@ -1463,10 +1563,12 @@ def test_react_loop_skips_duplicate_successful_read_file_calls(tmp_path: Path) -
     ]
     assert [event.data.get("summary") for event in read_events] == [
         "read README.md",
-        "read_file skipped: already read README.md; previous result was content_ref-only, use query or start_line/limit_lines for exact content",
+        "read_file skipped: already read README.md",
     ]
+    assert read_events[0].data.get("model_content_inlined") is True
     assert read_events[1].data.get("deduplicated") is True
-    assert read_events[1].data.get("requires_targeted_read") is True
+    assert read_events[1].data.get("content_reused") is True
+    assert read_events[1].data.get("requires_targeted_read") is not True
     assert task.observations[-1].content == ""
 
 
@@ -1586,7 +1688,10 @@ def test_react_loop_does_not_skip_covered_read_file_range_when_prior_content_was
 
     target = tmp_path / "pages" / "practice"
     target.mkdir(parents=True)
-    (target / "practice.js").write_text("\n".join(f"line {index}" for index in range(1, 260)) + "\n", encoding="utf-8")
+    (target / "practice.js").write_text(
+        "\n".join(f"line {index}: " + ("x" * 40) for index in range(1, 260)) + "\n",
+        encoding="utf-8",
+    )
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="读取代码片段", cwd=tmp_path)
 
@@ -1934,12 +2039,12 @@ def test_code_review_prompt_prefers_bash_before_file_tools(tmp_path: Path) -> No
     assert result == "完成"
     system_prompt = llm.messages[0][0].content
     assert "验证优先、证据优先、风险优先" in system_prompt
-    assert "工具优先级是 run_bash > read_file > list_files" in system_prompt
-    assert "run_bash 用于批量定位和验证" in system_prompt
+    assert "工具优先级是 search_code > glob > run_bash > read_file > list_files" in system_prompt
+    assert "search_code/glob 用于结构化定位" in system_prompt
+    assert "run_bash 用于验证" in system_prompt
     assert "read_file 用于精读证据文件" in system_prompt
-    assert "只有 bash 不足或被拒绝时才用 list_files 补充" in system_prompt
     assert "run_bash 输出必须主动限量" in system_prompt
-    assert llm.tool_names[0] == ["run_bash", "read_file", "list_files"]
+    assert llm.tool_names[0] == ["search_code", "glob", "run_bash", "read_file", "list_files"]
 
 
 def test_mixed_review_and_edit_plan_exposes_code_write_tools(tmp_path: Path) -> None:
@@ -3961,23 +4066,40 @@ def test_format_tool_result_message_truncates_large_content_and_paths() -> None:
     assert "truncated" in message
 
 
-def test_format_tool_result_message_summarizes_read_file_content_by_ref() -> None:
+def test_format_tool_result_message_inlines_small_read_file_content() -> None:
     from vora.tools.base import ToolResult
 
     result = ToolResult(
         tool_name="read_file",
         ok=True,
         summary="read README.md",
-        content="full file content should stay outside model context",
+        content="small file content should enter model context",
         data={"path": "README.md", "file_size": 47},
     )
 
     message = format_tool_result_message(result, content_ref="obs-123")
 
     assert "read README.md" in message
-    assert "content_ref: obs-123" in message
-    assert "path: README.md" in message
-    assert "full file content" not in message
+    assert "content:\nsmall file content should enter model context" in message
+    assert "content_ref: obs-123" not in message
+
+
+def test_format_tool_result_message_summarizes_large_read_file_content_by_ref() -> None:
+    from vora.tools.base import ToolResult
+
+    result = ToolResult(
+        tool_name="read_file",
+        ok=True,
+        summary="read large.md",
+        content="x" * 4001,
+        data={"path": "large.md", "file_size": 4001},
+    )
+
+    message = format_tool_result_message(result, content_ref="obs-large")
+
+    assert "content_ref: obs-large" in message
+    assert "path: large.md" in message
+    assert "x" * 4001 not in message
 
 
 def test_format_tool_result_message_summarizes_large_generic_content_by_ref() -> None:
@@ -4120,8 +4242,7 @@ def test_runtime_logs_full_llm_request_payload_including_tool_messages(tmp_path:
     assert any(message["role"] == "tool" for message in payload_messages)
     assert any(message["role"] == "assistant" and message.get("tool_calls") for message in payload_messages)
     read_tool_messages = [message for message in payload_messages if message["role"] == "tool"]
-    assert any("content_ref:" in message.get("content", "") for message in read_tool_messages)
-    assert not any("hello world" in message.get("content", "") for message in read_tool_messages)
+    assert any("content:\nhello world" in message.get("content", "") for message in read_tool_messages)
 
 
 def test_runtime_handles_keyboard_interrupt_and_logs_interrupt(tmp_path: Path) -> None:

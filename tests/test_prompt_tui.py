@@ -393,18 +393,18 @@ def test_format_context_usage_counts_current_session_messages(tmp_path: Path) ->
     assert usage == "当前上下文 5.0%"
 
 
-def test_format_context_usage_does_not_use_latest_llm_prompt_tokens(tmp_path: Path) -> None:
+def test_format_context_usage_prefers_latest_llm_prompt_tokens(tmp_path: Path) -> None:
     session = SessionState.create(cwd=tmp_path)
     task = TaskState.create(goal="统计上下文", cwd=tmp_path)
     task.model_context_limit = 1_000
-    task.last_prompt_tokens = 250
+    session.current_context_tokens = 250
     task.limits.max_estimated_tokens = 100
     session.messages.append(Message.user("x" * 10))
     session.active_task = task
 
     usage = format_context_usage(session)
 
-    assert usage == "当前上下文 0.5%"
+    assert usage == "当前上下文 25.0%"
 
 
 def test_latest_activity_formats_latest_event_for_status_bar(tmp_path: Path) -> None:

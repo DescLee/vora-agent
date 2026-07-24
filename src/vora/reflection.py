@@ -15,7 +15,7 @@ from vora.logging import EventLogger
 from vora.models import Message, SessionState, TaskState, TraceEvent
 from vora.react import ReActLoop, _format_execution_event_summary
 from vora.reflector import ReflectionDecision, Reflector
-from vora.token_breakdown import record_llm_token_breakdown
+from vora.token_breakdown import estimate_llm_token_breakdown, record_llm_token_breakdown
 from vora.validation import looks_like_inline_test_script, looks_like_validation_command
 
 
@@ -144,6 +144,7 @@ class ReflectionLoop:
         draft: str,
     ) -> LLMResult:
         messages = self._build_reflection_messages(task, session, draft)
+        session.current_context_tokens = estimate_llm_token_breakdown(messages, [])["estimated_total_tokens"]
         request_payload = {"messages": openai_messages(messages), "tool_names": []}
         if self.logger is not None:
             record_llm_token_breakdown(

@@ -851,10 +851,11 @@ def format_context_usage(session: SessionState) -> str:
     limit = session.model_context_limit or task.model_context_limit or task.limits.max_estimated_tokens
     if limit <= 0:
         return "当前上下文 --"
-    _, usage = estimate_context_usage(session.messages, limit)
-    if usage is None:
-        return "当前上下文 --"
-    percent = min(999.9, usage * 100)
+    estimated_tokens, _ = estimate_context_usage(session.messages, limit)
+    current_tokens = session.current_context_tokens
+    if isinstance(current_tokens, int) and current_tokens > 0:
+        estimated_tokens = max(estimated_tokens, current_tokens)
+    percent = min(999.9, estimated_tokens / limit * 100)
     return f"当前上下文 {percent:.1f}%"
 
 
